@@ -38,8 +38,43 @@ tasks:
     toolchain: [{cmd: [go, version]}]
     env: [GOFLAGS]
     reuse: { allowed: true, max_age: 72h }
-  build-cross:                    # build.yaml build (other 18 legs; cross-compiles are host-independent but the toolchain is linux here)
-    argv: [bash, -o, pipefail, -c, "set -e; for t in darwin/amd64/ darwin/arm64/ freebsd/amd64/ freebsd/arm64/ linux/arm64/ openbsd/amd64/ openbsd/arm64/ windows/amd64/ windows/arm64/ freebsd/386/ linux/386/ linux/arm/6 linux/arm/7 linux/ppc64le/ linux/riscv64/ linux/s390x/ openbsd/386/ windows/386/; do IFS=/ read -r os arch arm <<< \"$t\"; CGO_ENABLED=0 GOOS=$os GOARCH=$arch GOARM=$arm go build -ldflags '-s -w' -installsuffix nocgo -o /dev/null ./cmd/traefik; done"]
+  build-cross-1:                  # build.yaml build (other 18 legs, 3 per task so the no-evidence gate fans out like upstream's matrix)
+    argv: [bash, -o, pipefail, -c, "set -e; for t in darwin/amd64/ darwin/arm64/ freebsd/amd64/; do IFS=/ read -r os arch arm <<< \"$t\"; CGO_ENABLED=0 GOOS=$os GOARCH=$arch GOARM=$arm go build -ldflags '-s -w' -installsuffix nocgo -o /dev/null ./cmd/traefik; done"]
+    platform: linux/amd64
+    runtime: { go: 1.26.10 }
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  build-cross-2:
+    argv: [bash, -o, pipefail, -c, "set -e; for t in freebsd/arm64/ linux/arm64/ openbsd/amd64/; do IFS=/ read -r os arch arm <<< \"$t\"; CGO_ENABLED=0 GOOS=$os GOARCH=$arch GOARM=$arm go build -ldflags '-s -w' -installsuffix nocgo -o /dev/null ./cmd/traefik; done"]
+    platform: linux/amd64
+    runtime: { go: 1.26.10 }
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  build-cross-3:
+    argv: [bash, -o, pipefail, -c, "set -e; for t in openbsd/arm64/ windows/amd64/ windows/arm64/; do IFS=/ read -r os arch arm <<< \"$t\"; CGO_ENABLED=0 GOOS=$os GOARCH=$arch GOARM=$arm go build -ldflags '-s -w' -installsuffix nocgo -o /dev/null ./cmd/traefik; done"]
+    platform: linux/amd64
+    runtime: { go: 1.26.10 }
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  build-cross-4:
+    argv: [bash, -o, pipefail, -c, "set -e; for t in freebsd/386/ linux/386/ linux/arm/6; do IFS=/ read -r os arch arm <<< \"$t\"; CGO_ENABLED=0 GOOS=$os GOARCH=$arch GOARM=$arm go build -ldflags '-s -w' -installsuffix nocgo -o /dev/null ./cmd/traefik; done"]
+    platform: linux/amd64
+    runtime: { go: 1.26.10 }
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  build-cross-5:
+    argv: [bash, -o, pipefail, -c, "set -e; for t in linux/arm/7 linux/ppc64le/ linux/riscv64/; do IFS=/ read -r os arch arm <<< \"$t\"; CGO_ENABLED=0 GOOS=$os GOARCH=$arch GOARM=$arm go build -ldflags '-s -w' -installsuffix nocgo -o /dev/null ./cmd/traefik; done"]
+    platform: linux/amd64
+    runtime: { go: 1.26.10 }
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  build-cross-6:
+    argv: [bash, -o, pipefail, -c, "set -e; for t in linux/s390x/ openbsd/386/ windows/386/; do IFS=/ read -r os arch arm <<< \"$t\"; CGO_ENABLED=0 GOOS=$os GOARCH=$arch GOARM=$arm go build -ldflags '-s -w' -installsuffix nocgo -o /dev/null ./cmd/traefik; done"]
     platform: linux/amd64
     runtime: { go: 1.26.10 }
     toolchain: [{cmd: [go, version]}]
