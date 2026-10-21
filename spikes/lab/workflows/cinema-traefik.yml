@@ -1,0 +1,34 @@
+# CInema gate for the lab mirrors (plan §11.1): one job; reuse verified receipts,
+# run the rest inline. Binary comes from this repo's "cinema-lab" release.
+name: cinema
+on:
+  pull_request: {}
+  push: { branches: [trunk, main, master] }
+permissions: { contents: read }
+concurrency:
+  group: cinema-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  cinema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: .go-version, check-latest: true, cache: false }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 24.22.0 }   # exactly the evidence machine's Node: node --version is fingerprinted
+      - run: npm i -g corepack@latest && corepack enable   # pnpm/yarn versions come from packageManager
+      - name: install cinema
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release download cinema-lab -R "$GITHUB_REPOSITORY" -p cinema-linux-amd64 -O "$RUNNER_TEMP/cinema"
+          chmod +x "$RUNNER_TEMP/cinema" && sudo mv "$RUNNER_TEMP/cinema" /usr/local/bin/cinema
+      - name: gate
+        env:
+          CINEMA_TRUSTED_KEYS: "${{ vars.CINEMA_TRUSTED_KEYS }}"
+          CINEMA_FETCH_TOKEN: "${{ github.token }}"
+        run: cinema verify --event "$GITHUB_EVENT_PATH" --execute --report gate-report.json
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: cinema-gate-report, path: gate-report.json, retention-days: 7 }

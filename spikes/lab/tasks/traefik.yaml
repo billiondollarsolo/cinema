@@ -1,4 +1,5 @@
-# traefik CI (PR, ubuntu) → CInema tasks. Source: workflow analysis 2026-10-21.
+# traefik CI (PR, ubuntu) → CInema tasks. Go 1.26.x like CI (lab: GOTOOLCHAIN=go1.26.10);
+# yarn's version is pinned by webui/package.json (in the source fingerprint), so it isn't probed.
 schema_version: 1
 tasks:
   test-unit:                      # test-unit.yaml
@@ -41,13 +42,14 @@ tasks:
     argv: [bash, -o, pipefail, -c, "yarn install --immutable && yarn tsc && yarn lint && yarn build"]
     cwd: webui
     platform: linux/amd64
-    toolchain: [{cmd: [node, --version]}, {cmd: [yarn, --version]}, {file: webui/yarn.lock}]
+    outputs: [webui/static]       # vite emptyOutDir deletes a tracked file there (lab finding)
+    toolchain: [{cmd: [node, --version]}]
     env: [NODE_OPTIONS]
     reuse: { allowed: true, max_age: 72h }
   webui-test-unit:                # test-unit.yaml test-ui-unit
     argv: [bash, -o, pipefail, -c, "yarn install --immutable && VITE_APP_BASE_API_URL=/api yarn test:unit:ci"]
     cwd: webui
     platform: linux/amd64
-    toolchain: [{cmd: [node, --version]}, {cmd: [yarn, --version]}, {file: webui/yarn.lock}]
+    toolchain: [{cmd: [node, --version]}]
     env: [NODE_OPTIONS, TZ]
     reuse: { allowed: true, max_age: 72h }

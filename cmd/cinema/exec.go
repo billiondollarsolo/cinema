@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/billiondollarsolo/cinema/internal/record"
 	"github.com/billiondollarsolo/cinema/internal/snapshot"
@@ -96,6 +99,10 @@ func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr err
 		}
 	}
 
+	// tasks.yaml is outside the source fingerprint (ADR 0001), so watch it here:
+	// a command that rewrites the file defining what's required (a repo-wide
+	// formatter, say) must not count as evidence (lab finding: vite's oxfmt).
+	cfgBefore := configHash(r.root)
 	detector := &task.CacheDetector{}
 	opts.Watch = detector
 	res, err := record.Run(ctx, opts)
@@ -133,6 +140,10 @@ func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr err
 		if src.After, err = r.source(extra, outputs); err != nil {
 			warn("fingerprint: %v", err)
 		}
+		if configHash(r.root) != cfgBefore {
+			warn("the command changed %s; this run can't count as evidence", task.ConfigPath)
+			src.After = "" // never equal to Before: not evidence (plan: incomplete record)
+		}
 		if src.Before != "" && src.After != "" && src.Before != src.After {
 			warn("the command changed source files; this run can't certify the tree")
 		}
@@ -168,4 +179,17 @@ func writeJSON(path, runID, state string, src store.Source, m store.Match, res r
 		return err
 	}
 	return os.WriteFile(path, append(b, '\n'), 0o644)
+}
+
+// configHash is the content hash of tasks.yaml ("" if absent or unreadable).
+func configHash(root string) string {
+	if root == "" {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(root, task.ConfigPath))
+	if err != nil {
+		return ""
+	}
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
 }

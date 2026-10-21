@@ -1,0 +1,97 @@
+# prometheus CI (PR) → CInema tasks: the test_go / test_go_more / test_go_386 /
+# golangci / check_generated_parser / test_ui / compliance work. Fuzzing (4 parallel
+# 4-minute jobs, never reusable) and jobs that download floating tools stay in
+# upstream's workflows: inside one gate job they'd only add serial time.
+schema_version: 1
+tasks:
+  style:
+    argv: [bash, -c, "r=$(gofmt -d $(git ls-files '*.go' ':!:vendor/*')); [ -z \"$r\" ] || { echo \"$r\"; exit 1; }"]
+    platform: any
+    toolchain: [{cmd: [go, version]}]
+    reuse: { allowed: true, max_age: 72h }
+  check-license:
+    argv: [bash, -c, "r=$(for f in $(git ls-files '*.go' ':!:vendor/*'); do awk 'NR<=3' \"$f\" | grep -Eq '(Copyright|generated|GENERATED)' || echo \"$f\"; done); [ -z \"$r\" ] || { echo \"$r\"; exit 1; }"]
+    platform: any
+    toolchain: []
+    reuse: { allowed: true, max_age: 72h }
+  go-mod-tidy:
+    argv: [bash, -o, pipefail, -c, "go mod tidy && git diff --exit-code -- go.sum go.mod"]
+    platform: any
+    toolchain: [{cmd: [go, version]}]
+    reuse: { allowed: true, max_age: 72h }
+  test-race:
+    argv: [go, test, -race, -count=1, ./...]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}]
+    env: [CGO_ENABLED, GOFLAGS, GOEXPERIMENT]
+    reuse: { allowed: true, max_age: 72h }
+  tsdb-no-isolation:
+    argv: [go, test, -count=1, ./tsdb/, -test.tsdb-isolation=false]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}]
+    env: [CGO_ENABLED, GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  dedupelabels:
+    argv: [go, test, -count=1, -tags=dedupelabels, ./...]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}]
+    env: [CGO_ENABLED, GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  slicelabels-race:
+    argv: [go, test, -count=1, -tags=slicelabels, -race, ./cmd/prometheus, ./cmd/promtool/..., ./model/textparse, ./prompb/...]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}]
+    env: [CGO_ENABLED, GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  forcedirectio-race:
+    argv: [go, test, -count=1, -tags=forcedirectio, -race, ./tsdb/]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}]
+    env: [CGO_ENABLED, GOFLAGS, TMPDIR]
+    reuse: { allowed: true, max_age: 72h }
+  test-386:
+    argv: [env, GOARCH=386, go, test, -count=1, -parallel=1, ./...]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  golangci-lint:
+    argv: [go, run, github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0, run]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  golangci-lint.slicelabels:
+    argv: [go, run, github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0, run, --build-tags=slicelabels]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  golangci-lint.dedupelabels:
+    argv: [go, run, github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0, run, --build-tags=dedupelabels]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  generated-parser:
+    argv: [bash, -o, pipefail, -c, "set -e; d=$(mktemp -d); GOBIN=$d go install golang.org/x/tools/cmd/goyacc@v0.6.0; $d/goyacc -l -o promql/parser/generated_parser.y.go promql/parser/generated_parser.y; rm -rf $d; git diff --exit-code -- promql/parser/generated_parser.y.go"]
+    platform: any
+    toolchain: [{cmd: [go, version]}]
+    reuse: { allowed: true, max_age: 72h }
+  examples-syntax:
+    argv: [bash, -o, pipefail, -c, "set -e; d=$(mktemp -d); go build -o $d/promtool ./cmd/promtool; cd documentation/examples; for f in prometheus-*.yml; do $d/promtool check config --syntax-only $f; done; rm -rf $d"]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}]
+    reuse: { allowed: true, max_age: 72h }
+  compliance:
+    argv: [go, test, -count=1, -tags=compliance, ./compliance/...]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}]
+    env: [CGO_ENABLED, GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  ui:
+    argv: [env, CI=true, bash, -o, pipefail, -c, "make assets-tarball && make ui-lint && make ui-test"]
+    platform: linux/amd64
+    outputs: [.tarballs]
+    toolchain: [{cmd: [go, version]}, {cmd: [node, --version]}]
+    reuse: { allowed: true, max_age: 72h }

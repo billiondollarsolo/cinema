@@ -498,3 +498,19 @@ tasks:
 		t.Fatalf("b saw a's changes: %d\n%s", code, out)
 	}
 }
+
+func TestRunThatRewritesConfigIsNotEvidence(t *testing.T) { // lab: repo-wide formatter
+	e := newEnv(t)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  fmt-all:
+    argv: [sh, -c, "printf '# reformatted\\n' >> .cinema/tasks.yaml"]
+    platform: any
+    reuse: { allowed: true, max_age: 1h }
+`)
+	e.cinema("trust")
+	out, _ := e.cinema("run", "fmt-all")
+	if !strings.Contains(out, "! fmt-all") {
+		t.Fatalf("config-rewriting run looked like evidence:\n%s", out)
+	}
+}
