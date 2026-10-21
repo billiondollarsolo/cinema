@@ -289,9 +289,7 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		for _, e := range stepEnv {
 			fmt.Fprintf(&b, "  export %s\n", e)
 		}
-		for _, line := range strings.Split(strings.TrimRight(run, "\n"), "\n") {
-			b.WriteString("  " + line + "\n")
-		}
+		b.WriteString(strings.TrimRight(run, "\n") + "\n") // verbatim: indenting would break heredocs and multi-line strings
 		b.WriteString(")")
 		body = append(body, b.String())
 	}

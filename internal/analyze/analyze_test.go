@@ -78,7 +78,7 @@ func TestWorkflow(t *testing.T) {
 	if p == nil || p.Node != "20.19.0" || p.ID != "test-strict-20.19.0-ubuntu-latest" {
 		t.Fatalf("proposal: %+v", p)
 	}
-	for _, s := range []string{"export CI=true", "(\n  npm ci\n)", "cd pkg", "npm test --strict"} {
+	for _, s := range []string{"export CI=true", "(\nnpm ci\n)", "cd pkg", "npm test --strict"} {
 		if !strings.Contains(p.Body, s) {
 			t.Errorf("script lacks %q:\n%s", s, p.Body)
 		}
@@ -237,6 +237,21 @@ func TestGitHubEnvEmulated(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(d, "envfile"))
 	if _, err := os.Stat(strings.TrimSpace(string(b))); !os.IsNotExist(err) {
 		t.Errorf("temp file %s left behind", b)
+	}
+}
+
+// Step scripts are copied verbatim: a heredoc's terminator must stay at column 0.
+func TestHeredocStep(t *testing.T) {
+	src := "on: pull_request\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n" +
+		"      - run: |\n          cat <<EOF > out\n          one\n            two\n          EOF\n          test \"$(cat out)\" = \"$(printf 'one\\n  two')\"\n"
+	jobs, err := Workflow("ci.yml", []byte(src))
+	if err != nil || len(jobs) != 1 || jobs[0].Proposal == nil {
+		t.Fatalf("%v %+v", err, jobs)
+	}
+	cmd := exec.Command("bash", "-eo", "pipefail", "-c", jobs[0].Proposal.Body)
+	cmd.Dir = t.TempDir()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s\n%s", err, out, jobs[0].Proposal.Body)
 	}
 }
 
