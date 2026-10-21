@@ -271,3 +271,26 @@ func gitState(t *testing.T, repo string) string {
 	}
 	return strings.Join(parts, "|")
 }
+
+func TestInit(t *testing.T) {
+	e := newEnv(t)
+	os.Remove(filepath.Join(e.repo, ".cinema/tasks.yaml"))
+	e.write("go.mod", "module x\n")
+	e.write("web/package.json", `{"scripts": {"lint": "eslint .", "dev": "vite", "test": "vitest"}}`)
+	e.write("web/pnpm-lock.yaml", "")
+	if out, code := e.cinema("init"); code != 0 || !strings.Contains(out, "4 task(s)") {
+		t.Fatalf("init: exit %d\n%s", code, out)
+	}
+	cfg := mustRead(t, filepath.Join(e.repo, ".cinema/tasks.yaml"))
+	for _, want := range []string{"go-vet:", "go-test:", "web-lint:", "web-test:", "argv: [pnpm, run, \"lint\"]", "cwd: web", "file: web/pnpm-lock.yaml"} {
+		if !strings.Contains(cfg, want) {
+			t.Errorf("missing %q in:\n%s", want, cfg)
+		}
+	}
+	if strings.Contains(cfg, "platform: any") || strings.Contains(cfg, "web-dev") {
+		t.Errorf("init inferred platform any or added a dev server:\n%s", cfg)
+	}
+	if _, code := e.cinema("init"); code != 2 {
+		t.Error("init overwrote an existing config")
+	}
+}

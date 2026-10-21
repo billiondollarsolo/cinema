@@ -701,7 +701,7 @@ Report hashing and wrapper overhead separately, always.
 - [x] `cinema run [--commit]` with clean-checkout mode (§5.2); `--all` skips tasks already reusable
 - [x] `cinema status/explain --json`, reason codes (§10, §12), `cinema trust` for toolchain commands
 - [ ] `cinema dashboard`: one page, token auth, Host/Origin checks, SSE refresh, `--allow-host` (§10.4, §9.1)
-- [ ] `cinema init`: tasks skeleton from detected `go.mod` / `package.json`
+- [x] `cinema init`: tasks skeleton from detected `go.mod` / `package.json` (npm/pnpm/yarn; never writes `platform: any`; prints the AGENTS.md paragraph)
 - [ ] Tests: ACC-001…021, 047, 048, 051, 066; parser fuzzers
 
 **Exit:** you use it daily on your own repos for a week. `status` is never wrong about stale vs reusable.

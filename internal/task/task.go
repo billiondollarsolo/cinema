@@ -304,11 +304,11 @@ func (t *Task) ContractDigest(root string) (string, error) {
 }
 
 // resolvedScript returns the package.json script body a package-manager run
-// delegates to, or "" for other commands. ponytail: npm/pnpm `run` only; add
-// yarn's bare `yarn X` form when someone needs it.
+// delegates to, or "" for other commands. ponytail: `npm|pnpm|yarn run X` only;
+// yarn's bare `yarn X` form isn't recognized (cinema init writes `yarn run X`).
 func (t *Task) resolvedScript(root string) (string, error) {
 	a := t.Argv
-	if len(a) < 3 || (a[0] != "npm" && a[0] != "pnpm") || (a[1] != "run" && a[1] != "run-script") {
+	if len(a) < 3 || (a[0] != "npm" && a[0] != "pnpm" && a[0] != "yarn") || (a[1] != "run" && a[1] != "run-script") {
 		return "", nil
 	}
 	b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(t.Cwd), "package.json"))

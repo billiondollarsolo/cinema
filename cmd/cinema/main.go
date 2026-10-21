@@ -12,6 +12,7 @@ const exitBadArgs = 2
 const usage = `usage: cinema <command> [args]
 
 commands:
+  init                                                      write a .cinema/tasks.yaml skeleton
   exec [--record-json PATH] [--timeout D] -- CMD [ARGS...]   record an arbitrary command
   run [--commit REV] <task>... | --all [--force]           run tasks by name (clean checkout with --commit)
   status [--json]                                           per task: reusable / stale / missing + reason
@@ -22,7 +23,7 @@ commands:
 func main() {
 	// ponytail: map + flag.FlagSet per verb; Cobra only if this stops being readable.
 	cmds := map[string]func([]string) int{
-		"exec": cmdExec, "run": cmdRun, "status": cmdStatus, "explain": cmdExplain, "trust": cmdTrust,
+		"init": cmdInit, "exec": cmdExec, "run": cmdRun, "status": cmdStatus, "explain": cmdExplain, "trust": cmdTrust,
 	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
