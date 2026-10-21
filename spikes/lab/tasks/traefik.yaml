@@ -9,7 +9,7 @@ tasks:
     env: [CGO_ENABLED, GOFLAGS, GOEXPERIMENT]
     reuse: { allowed: true, max_age: 72h }
   lint:                           # validate.yaml lint (golangci-lint v2.13.2)
-    argv: [go, run, github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2, run]
+    argv: [bash, -o, pipefail, -c, "set -e; v=2.13.2; d=$HOME/.cache/cinema-lab-tools/golangci-lint-$v; if [ ! -x $d/golangci-lint ]; then mkdir -p $d; t=$(mktemp); curl -sSfL -o $t https://github.com/golangci/golangci-lint/releases/download/v$v/golangci-lint-$v-linux-amd64.tar.gz; echo \"2277d43b98ec0054280f2ac26b53268bae97682444678a59a657dd565da021d6  $t\" | sha256sum -c --quiet; tar -xzf $t -C $d --strip-components=1; rm -f $t; fi; GOLANGCI_LINT_CACHE=$d/cache $d/golangci-lint run"]
     platform: linux/amd64
     toolchain: [{cmd: [go, version]}, {file: .golangci.yml}, {file: go.sum}]
     env: [GOFLAGS, CGO_ENABLED]
