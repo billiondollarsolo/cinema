@@ -70,7 +70,7 @@ func cmdDashboard(args []string) int {
 	}()
 
 	url := fmt.Sprintf("http://127.0.0.1:%d/#t=%s", actual, d.token)
-	fmt.Printf("cinema dashboard for %s\n  %s\n(the link carries a one-time token; Ctrl-C to stop)\n", r.root, url)
+	fmt.Printf("cinema dashboard for %s\n  %s\n(the link works once, in one browser; Ctrl-C to stop)\n", r.root, url)
 	if !*noOpen {
 		openBrowser(url)
 	}
@@ -92,14 +92,15 @@ type dashSrv struct {
 	r  *repo
 
 	smu      sync.Mutex
-	sessions map[string]string // session id → CSRF token
-	running  map[string]bool   // task IDs started from the page
+	sessions map[string]session // by session id
+	consumed bool               // the URL token works once
+	running  map[string]bool    // task IDs started from the page
 	wg       sync.WaitGroup
 }
 
 func newDash(ctx context.Context, r *repo, port int, allow []string) *dashSrv {
 	d := &dashSrv{ctx: ctx, token: randHex(32), r: r, port: port,
-		sessions: map[string]string{}, running: map[string]bool{}, hosts: map[string]bool{}}
+		sessions: map[string]session{}, running: map[string]bool{}, hosts: map[string]bool{}}
 	p := strconv.Itoa(port)
 	for _, h := range append([]string{"127.0.0.1", "localhost"}, allow...) {
 		d.hosts[h+":"+p] = true
@@ -150,18 +151,33 @@ func (d *dashSrv) guard(next http.Handler) http.Handler {
 
 func (d *dashSrv) cookieName() string { return "cinema_session_" + strconv.Itoa(d.port) }
 
-// session exchanges the one-time URL token for an HttpOnly cookie.
+type session struct {
+	csrf    string
+	expires time.Time
+}
+
+const sessionTTL = 24 * time.Hour
+
+// session exchanges the one-time URL token for an HttpOnly cookie. The token
+// is consumed on first use: a link seen later (scrollback, screen share) is dead.
 func (d *dashSrv) session(w http.ResponseWriter, req *http.Request) {
 	var body struct{ Token string }
-	if json.NewDecoder(http.MaxBytesReader(w, req.Body, 1024)).Decode(&body) != nil ||
-		subtle.ConstantTimeCompare([]byte(body.Token), []byte(d.token)) != 1 {
+	if json.NewDecoder(http.MaxBytesReader(w, req.Body, 1024)).Decode(&body) != nil {
 		http.Error(w, "bad token", http.StatusUnauthorized)
 		return
 	}
-	id := randHex(32)
 	d.smu.Lock()
-	d.sessions[id] = randHex(32)
+	ok := !d.consumed && subtle.ConstantTimeCompare([]byte(body.Token), []byte(d.token)) == 1
+	id := randHex(32)
+	if ok {
+		d.consumed = true
+		d.sessions[id] = session{randHex(32), time.Now().Add(sessionTTL)}
+	}
 	d.smu.Unlock()
+	if !ok {
+		http.Error(w, "bad or already used token: restart cinema dashboard for a new link", http.StatusUnauthorized)
+		return
+	}
 	http.SetCookie(w, &http.Cookie{Name: d.cookieName(), Value: id, Path: "/", HttpOnly: true,
 		SameSite: http.SameSiteStrictMode, Secure: req.Header.Get("X-Forwarded-Proto") == "https"})
 	w.WriteHeader(http.StatusNoContent)
@@ -173,7 +189,11 @@ func (d *dashSrv) authed(next func(http.ResponseWriter, *http.Request, string)) 
 		var csrf string
 		if err == nil {
 			d.smu.Lock()
-			csrf = d.sessions[c.Value]
+			if s, ok := d.sessions[c.Value]; ok && time.Now().Before(s.expires) {
+				csrf = s.csrf
+			} else {
+				delete(d.sessions, c.Value)
+			}
 			d.smu.Unlock()
 		}
 		if csrf == "" {

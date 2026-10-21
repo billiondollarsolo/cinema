@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newTestDash(t *testing.T) (*dashSrv, http.Handler) {
@@ -78,6 +79,17 @@ func TestDashboardGuards(t *testing.T) { // ACC-047
 	}
 
 	c := login(t, d, h)
+	if w := do(h, "POST", "/api/session", host, origin, `{"token":"`+d.token+`"}`, nil, ""); w.Code != 401 {
+		t.Errorf("URL token reused: %d", w.Code)
+	}
+	d.smu.Lock()
+	expired := d.sessions[c.Value]
+	expired.expires = time.Now().Add(-time.Second)
+	d.sessions["old"] = expired
+	d.smu.Unlock()
+	if w := do(h, "GET", "/api/state", host, "", "", &http.Cookie{Name: d.cookieName(), Value: "old"}, ""); w.Code != 401 {
+		t.Errorf("expired session accepted: %d", w.Code)
+	}
 	if w := do(h, "GET", "/api/state", host, "", "", c, ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"csrf"`) {
 		t.Errorf("state with cookie: %d", w.Code)
 	}
@@ -87,7 +99,7 @@ func TestDashboardGuards(t *testing.T) { // ACC-047
 	if w := do(h, "POST", "/api/run", host, origin, `{"task":"check"}`, c, "wrong"); w.Code != 403 {
 		t.Errorf("run with wrong CSRF token: %d", w.Code)
 	}
-	if w := do(h, "POST", "/api/run", host, "http://evil.example", `{"task":"check"}`, c, d.sessions[c.Value]); w.Code != 403 {
+	if w := do(h, "POST", "/api/run", host, "http://evil.example", `{"task":"check"}`, c, d.sessions[c.Value].csrf); w.Code != 403 {
 		t.Errorf("run from foreign Origin: %d", w.Code)
 	}
 	if w := do(h, "GET", "/api/runs/../../etc/passwd", host, "", "", c, ""); w.Code == 200 {
