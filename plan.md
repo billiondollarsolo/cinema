@@ -492,7 +492,7 @@ jobs:
         run: cinema verify --event "$GITHUB_EVENT_PATH" --plan plan.json --execute --gate
       - if: always()
         uses: actions/upload-artifact@<SHA>
-        with: { name: cinema-gate-report, path: gate-report.json }
+        with: { name: cinema-gate-report, path: gate-report.json, retention-days: 7 }
 ```
 
 - **Branch protection requires the `cinema` job only.** Add the existing workflows' real checks as `cinema` tasks; mark expensive ones reusable and keep never-reusable ones (`reuse.allowed: false`) running inline or in their original workflows.
@@ -585,6 +585,26 @@ Tables: `repos`, `tasks` (by contract digest), `runs`, `snapshots` (digest + man
 - Retention defaults: run metadata 90 days, passing logs 7 days, failing logs 30 days.
 - Nothing lives under the repo except `.cinema/tasks.yaml`.
 
+### 13.1 Cleanup contract
+
+CInema leaves nothing behind that it no longer needs. No daemon, so every rule runs inline.
+
+| Leftover | Rule |
+|---|---|
+| Processes the command left running | When the child exits, SIGTERM its process group, then SIGKILL after the grace period; report it on stderr and in the run record. `setsid` escapees aren't touched, but the pipes they hold are dropped after the grace period. |
+| Clean-checkout dirs (`run --commit`) | `git archive` into `$TMPDIR/cinema-*`, never `git worktree add`, so `.git` is never modified. Remove on exit, including after a signal. On startup, sweep `cinema-*` dirs older than 1 h whose owner PID is gone. |
+| Partial blob/DB writes | Temp file + rename. On startup, sweep `*.tmp` older than 1 h in the data dir. |
+| Old runs and logs | §13 retention. Applied by any command, at most once per 24 h (timestamp in `state.db`); one indexed `DELETE` plus blob unlink, under 50 ms. Blobs no longer referenced by any row are deleted in the same pass. `cinema gc` forces it. |
+| Data dir size | Hard cap (default 2 GiB). Past it, delete oldest passing logs first, then failing logs. Run metadata goes last. |
+| Notes, local | `git notes prune` on our refs during the daily pass (notes for commits that no longer exist). |
+| Notes, remote | Per-key refs only grow by one commit per push. `cinema push` squashes our own ref to a single commit holding only notes for reachable commits newer than `max_age`, and force-pushes it with `--force-with-lease`. Safe because only this key writes this ref. |
+| CI artifacts | `gate-report.json` uploads with `retention-days: 7`. |
+| Everything | `cinema uninstall [--remote]` removes the data dir, keys (keychain + file), local notes refs, remote notes refs (with `--remote`), and prints the workflow / branch-protection lines to remove. It never edits workflows itself. |
+
+Inside the repo, CInema only ever creates `.cinema/tasks.yaml`, and only via `cinema init`.
+
+Tests: CLEAN-001 leftover child stopped (polite + SIGTERM-ignoring). CLEAN-002 `run --commit` interrupted by SIGINT leaves no temp dir. CLEAN-003 crash mid-blob-write: next start sweeps the `.tmp`. CLEAN-004 retention removes expired rows and their blobs, keeps blobs still referenced. CLEAN-005 size cap evicts passing logs first. CLEAN-006 `uninstall` leaves no data dir, key, or local notes ref. CLEAN-007 squashed notes ref still verifies every receipt within `max_age`.
+
 ---
 
 ## 14. Acceptance tests (MVP subset)
@@ -667,7 +687,7 @@ Report hashing and wrapper overhead separately, always.
 ### P1 — Local core + tiny dashboard
 
 - [x] `cinema exec`: argv exec, exit code, signals, process group, bounded tee capture (§4.1) (overhead p95 ≈ 3 ms; DB recording lands with the store)
-- [ ] SQLite store, blob store, run state machine, crash recovery (§13)
+- [ ] SQLite store, blob store, run state machine, crash recovery (§13), cleanup contract (§13.1)
 - [ ] Whole-source fingerprint + metadata cache (§5)
 - [ ] `tasks.yaml` parser (strict), exact matcher, action key, environment fingerprint (§6)
 - [ ] Mutation detection, tool-cache rejection (§4.4–4.5)

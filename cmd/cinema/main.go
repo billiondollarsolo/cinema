@@ -70,6 +70,9 @@ func cmdExec(args []string) int {
 		fmt.Fprintf(os.Stderr, "cinema exec: supervision error, run not recorded: %v\n", err)
 		return res.ExitCode
 	}
+	if res.Leftovers {
+		fmt.Fprintln(os.Stderr, "cinema exec: stopped processes the command left running")
+	}
 	if *recordJSON != "" {
 		if err := writeJSON(*recordJSON, res); err != nil {
 			// Recording failure never changes the child's exit code (plan §4.1).

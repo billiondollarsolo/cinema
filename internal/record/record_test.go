@@ -59,23 +59,48 @@ func TestCancelKillsGrandchildren(t *testing.T) { // ACC-004
 	if d := time.Since(start); d > 3*time.Second {
 		t.Fatalf("took %v", d)
 	}
+	assertDead(t, pidfile)
+}
+
+// A command that exits normally but leaves processes behind gets them stopped,
+// promptly when they honor SIGTERM, after Grace when they don't.
+func TestExitReapsLeftovers(t *testing.T) {
+	for _, tc := range []struct {
+		name, bg string
+		maxWait  time.Duration
+	}{
+		{"polite", "sleep 30", 400 * time.Millisecond},
+		{"stubborn", `sh -c 'trap "" TERM; sleep 30'`, 2 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pidfile := t.TempDir() + "/pid"
+			start := time.Now()
+			r := run(t, t.Context(), Options{Argv: sh(tc.bg + ` & echo $! > ` + pidfile)})
+			if r.ExitCode != 0 || !r.Leftovers {
+				t.Fatalf("exit=%d leftovers=%v", r.ExitCode, r.Leftovers)
+			}
+			if d := time.Since(start); d > tc.maxWait {
+				t.Fatalf("took %v", d)
+			}
+			assertDead(t, pidfile)
+		})
+	}
+	if r := run(t, t.Context(), Options{Argv: sh("true")}); r.Leftovers {
+		t.Fatal("clean exit reported leftovers")
+	}
+}
+
+func assertDead(t *testing.T, pidfile string) {
+	t.Helper()
 	b, err := os.ReadFile(pidfile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond) // let the kernel reap
 	if syscall.Kill(pid, 0) == nil {
 		_ = syscall.Kill(pid, syscall.SIGKILL)
-		t.Fatalf("grandchild %d survived", pid)
-	}
-}
-
-func TestBackgroundedGrandchildDoesNotHang(t *testing.T) {
-	start := time.Now()
-	r := run(t, t.Context(), Options{Argv: sh("sleep 30 & echo started")})
-	if r.ExitCode != 0 || time.Since(start) > 3*time.Second {
-		t.Fatalf("exit %d after %v", r.ExitCode, time.Since(start))
+		t.Fatalf("process %d survived", pid)
 	}
 }
 
@@ -128,5 +153,19 @@ func TestCaptureKeepsHeadAndTail(t *testing.T) {
 func TestNotFound(t *testing.T) {
 	if _, err := Run(t.Context(), Options{Argv: []string{"definitely-not-a-command-xyz"}}); err == nil {
 		t.Fatal("want start error")
+	}
+}
+
+type brokenTerm struct{}
+
+func (brokenTerm) Write([]byte) (int, error) { return 0, syscall.EPIPE }
+
+// A dead terminal must not stop draining: the child would block on a full pipe.
+func TestDeadTerminalDoesNotBlockChild(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	r := run(t, ctx, Options{Argv: sh("head -c 1000000 /dev/zero"), Stdout: brokenTerm{}})
+	if r.Canceled || r.ExitCode != 0 || r.Stdout.Total != 1000000 {
+		t.Fatalf("canceled=%v exit=%d total=%d", r.Canceled, r.ExitCode, r.Stdout.Total)
 	}
 }
