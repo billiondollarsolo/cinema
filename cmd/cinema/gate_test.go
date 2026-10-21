@@ -236,3 +236,38 @@ func TestGateRejectsWorkspaceEvidence(t *testing.T) { // ADR 0002
 		t.Fatalf("workspace receipt under clean policy: %v", got)
 	}
 }
+
+func TestGateParallelModes(t *testing.T) { // plan job → matrix → aggregate
+	g := newGateEnv(t)
+	g.cinema("run", "--commit", "HEAD", "check")
+	g.cinema("push")
+	ci := filepath.Join(t.TempDir(), "ci")
+	mustRun(t, "", "git", "clone", "-q", g.bare, ci)
+	ev := filepath.Join(t.TempDir(), "e.json")
+	os.WriteFile(ev, []byte(`{"repository":{"full_name":"Example/Repo"}}`), 0o644)
+	out := filepath.Join(t.TempDir(), "gh-output")
+	run := func(args ...string) (string, int) {
+		cmd := exec.Command(bin, append([]string{"verify", "--event", ev}, args...)...)
+		cmd.Dir = ci
+		cmd.Env = append(os.Environ(), "GITHUB_REPOSITORY=Example/Repo", "CINEMA_TRUSTED_KEYS="+g.keys,
+			"GITHUB_OUTPUT="+out, "CINEMA_DATA_DIR="+t.TempDir())
+		b, _ := cmd.CombinedOutput()
+		return string(b), cmd.ProcessState.ExitCode()
+	}
+	if _, code := run(); code != 0 {
+		t.Fatal("plan job failed")
+	}
+	b, _ := os.ReadFile(out)
+	if !strings.Contains(string(b), `run_tasks=["always","never-run-locally"]`) || !strings.Contains(string(b), "reused_count=1") {
+		t.Fatalf("outputs: %s", b)
+	}
+	if o, code := run("--execute", "--task", "always"); code != 0 || !strings.Contains(o, "always passed") {
+		t.Fatalf("matrix job: %d\n%s", code, o)
+	}
+	if _, code := run("--execute", "--task", "nope"); code == 0 {
+		t.Fatal("unknown task accepted in matrix job")
+	}
+	if _, code := run("--task", "always"); code != exitBadArgs {
+		t.Fatal("--task without --execute accepted")
+	}
+}

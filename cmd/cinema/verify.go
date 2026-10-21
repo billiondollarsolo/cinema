@@ -69,8 +69,9 @@ func cmdVerify(args []string) int {
 	execute := fs.Bool("execute", false, "run every task that isn't reused, then pass/fail the gate")
 	reportPath := fs.String("report", "", "write gate-report.json to `FILE`")
 	remote := fs.String("remote", "origin", "fetch evidence from `REMOTE`")
-	if err := fs.Parse(args); err != nil || *eventPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: cinema verify --event FILE [--execute] [--report FILE]")
+	only := fs.String("task", "", "with --execute: run just `ID` (one job of a parallel matrix)")
+	if err := fs.Parse(args); err != nil || *eventPath == "" || (*only != "" && !*execute) {
+		fmt.Fprintln(os.Stderr, "usage: cinema verify --event FILE [--execute [--task ID]] [--report FILE]")
 		return exitBadArgs
 	}
 	fail := func(f string, a ...any) int {
@@ -125,6 +126,24 @@ func cmdVerify(args []string) int {
 	}
 	rep.Note = policyNote
 
+	// Matrix job: run one task from the base config, nothing else. Running a task
+	// is always safe; the plan job already decided it isn't reused.
+	if *only != "" {
+		t := cfg.Tasks[*only]
+		if t == nil {
+			return fail("no task %q in the base branch's %s", *only, task.ConfigPath)
+		}
+		tr := gateTaskReport{GateDecision: plan.GateDecision{Task: t.ID, Decision: plan.GateRun}}
+		executeGateTask(root, t, &tr)
+		rep.Tasks = []gateTaskReport{tr}
+		rep.Result = map[bool]string{true: "pass", false: "fail"}[tr.Passed]
+		writeGateReport(*reportPath, rep, start)
+		if !tr.Passed {
+			return exitUnsatisfied
+		}
+		return 0
+	}
+
 	allRun := ""
 	keys, kerr := evidence.ParseTrustedKeys(os.Getenv("CINEMA_TRUSTED_KEYS"))
 	switch {
@@ -172,7 +191,16 @@ func cmdVerify(args []string) int {
 
 	printGatePlan(rep)
 	if !*execute {
+		// Plan job of the parallel gate: hand the RUN list to a matrix (one job per task).
+		var run []string
+		for _, tr := range rep.Tasks {
+			if tr.Decision == plan.GateRun {
+				run = append(run, tr.Task)
+			}
+		}
+		writeGitHubOutputs(run, len(rep.Tasks)-len(run))
 		writeGateReport(*reportPath, rep, start)
+		writeStepSummary(rep)
 		return 0
 	}
 	for i := range rep.Tasks {
@@ -180,20 +208,8 @@ func cmdVerify(args []string) int {
 		if tr.Decision != plan.GateRun {
 			continue
 		}
-		t := cfg.Tasks[tr.Task]
-		fmt.Printf("::group::RUN %s: %s\n", t.ID, strings.Join(t.Argv, " "))
-		res, err := record.Run(context.Background(), record.Options{Argv: t.Argv,
-			Dir: filepath.Join(root, filepath.FromSlash(t.Cwd)), Stdout: os.Stdout, Stderr: os.Stderr})
-		fmt.Println("::endgroup::")
-		tr.Executed = true
-		tr.ExitCode, tr.DurationMS = res.ExitCode, res.Duration.Milliseconds()
-		tr.Passed = err == nil && res.ExitCode == 0 && res.Signal == "" && !res.Canceled
+		executeGateTask(root, cfg.Tasks[tr.Task], tr)
 		executed[tr.Task] = tr.Passed
-		mark := "passed"
-		if !tr.Passed {
-			mark = fmt.Sprintf("FAILED (exit %d)", res.ExitCode)
-		}
-		fmt.Printf("%s %s in %s\n", t.ID, mark, res.Duration.Round(time.Millisecond))
 	}
 	decisions := make([]plan.GateDecision, len(rep.Tasks))
 	for i, tr := range rep.Tasks {
@@ -210,6 +226,42 @@ func cmdVerify(args []string) int {
 		return exitUnsatisfied
 	}
 	return 0
+}
+
+// executeGateTask runs one task's exact argv from its cwd and records the result.
+func executeGateTask(root string, t *task.Task, tr *gateTaskReport) {
+	fmt.Printf("::group::RUN %s: %s\n", t.ID, strings.Join(t.Argv, " "))
+	res, err := record.Run(context.Background(), record.Options{Argv: t.Argv,
+		Dir: filepath.Join(root, filepath.FromSlash(t.Cwd)), Stdout: os.Stdout, Stderr: os.Stderr})
+	fmt.Println("::endgroup::")
+	tr.Executed = true
+	tr.ExitCode, tr.DurationMS = res.ExitCode, res.Duration.Milliseconds()
+	tr.Passed = err == nil && res.ExitCode == 0 && res.Signal == "" && !res.Canceled
+	mark := "passed"
+	if !tr.Passed {
+		mark = fmt.Sprintf("FAILED (exit %d)", res.ExitCode)
+	}
+	fmt.Printf("%s %s in %s\n", t.ID, mark, res.Duration.Round(time.Millisecond))
+}
+
+// writeGitHubOutputs sets run_tasks (a JSON array for a matrix) and counts.
+// Task IDs match ^[a-z0-9._-]+$, so they're safe in workflow expressions.
+func writeGitHubOutputs(run []string, reused int) {
+	path := os.Getenv("GITHUB_OUTPUT")
+	if path == "" {
+		return
+	}
+	if run == nil {
+		run = []string{}
+	}
+	b, _ := json.Marshal(run)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cinema verify: GITHUB_OUTPUT: %v\n", err)
+		return
+	}
+	fmt.Fprintf(f, "run_tasks=%s\nrun_count=%d\nreused_count=%d\n", b, len(run), reused)
+	f.Close()
 }
 
 // baseConfig loads tasks.yaml as of base. Fail closed: a base commit missing
