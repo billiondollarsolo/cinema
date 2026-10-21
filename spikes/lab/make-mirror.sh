@@ -17,6 +17,8 @@ git config core.sshCommand "ssh -i ~/.ssh/cinema_lab_$name -o IdentitiesOnly=yes
 git checkout -q --orphan lab-snapshot
 git commit -q -m "Snapshot of $up $sha"
 git branch -M lab-snapshot "$branch"
+# Bots that act on the repo (dependency PRs) don't belong in a lab mirror.
+git rm -q --ignore-unmatch .github/dependabot.yml .github/dependabot.yaml renovate.json .github/renovate.json .renovaterc.json
 mkdir -p .cinema .github/workflows
 cp "$tasks" .cinema/tasks.yaml
 cp "$wf" .github/workflows/cinema.yml
