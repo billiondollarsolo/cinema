@@ -281,3 +281,39 @@ func TestUniqueIDs(t *testing.T) {
 		t.Errorf("ids: %v", seen)
 	}
 }
+
+func TestObjectMatrixAndForeignCheckout(t *testing.T) {
+	src := `on: pull_request
+jobs:
+  types:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: [{name: a, directory: pkgs/a}]
+    steps:
+      - run: cd ${{ matrix.package.directory }} && echo ${{ matrix.package.name }}
+  neighbour:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with: {repository: other/repo, path: other}
+      - run: npm test
+`
+	jobs, err := Workflow("ci.yml", []byte(src))
+	if err != nil || len(jobs) != 2 {
+		t.Fatalf("%v %+v", err, jobs)
+	}
+	for _, j := range jobs {
+		switch j.ID {
+		case "types":
+			if j.Proposal == nil || !strings.Contains(j.Proposal.Body, "cd pkgs/a && echo a") || j.Proposal.ID != "types-pkgs-a-a" {
+				t.Errorf("object matrix not substituted: %+v %+v", j, j.Proposal)
+			}
+		case "neighbour":
+			if j.Verdict != Skip {
+				t.Errorf("foreign checkout not skipped: %+v", j)
+			}
+		}
+	}
+}

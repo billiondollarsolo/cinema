@@ -236,6 +236,10 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		action, _, _ := strings.Cut(uses, "@")
 		switch {
 		case action == "":
+		case action == "actions/checkout" && !selfRepo(sub(str(s.With["repository"]))):
+			skip("checks out another repository (" + sub(str(s.With["repository"])) + "): tests code outside this commit")
+		case action == "actions/checkout" && str(s.With["path"]) != "":
+			review("checks out into path: " + str(s.With["path"]) + "; cinema runs at the repository root: adjust working directories")
 		case action == "actions/checkout", action == "actions/cache", strings.HasPrefix(action, "actions/cache/"),
 			action == "actions/upload-artifact", strings.HasSuffix(action, "/harden-runner"):
 			// checkout: cinema runs in a clean checkout; caches and uploads don't change results
@@ -400,7 +404,7 @@ func expand(n *yaml.Node) ([]map[string]string, error) {
 			for _, m := range list {
 				s := map[string]string{}
 				for mk, mv := range m {
-					s[mk] = str(mv)
+					flatten(mk, mv, s)
 				}
 				if k == "include" {
 					include = append(include, s)
@@ -415,7 +419,7 @@ func expand(n *yaml.Node) ([]map[string]string, error) {
 					var val any
 					_ = item.Decode(&val)
 					m := clone(c)
-					m[k] = str(val)
+					flatten(k, val, m)
 					next = append(next, m)
 				}
 			}
@@ -448,6 +452,24 @@ func expand(n *yaml.Node) ([]map[string]string, error) {
 		combos = []map[string]string{nil}
 	}
 	return combos, nil
+}
+
+// selfRepo: a checkout of the repository the workflow belongs to.
+func selfRepo(r string) bool {
+	return r == "" || strings.Contains(r, "github.repository")
+}
+
+// flatten stores a matrix value under its key; an object value becomes one
+// key per field (package.directory), as ${{ matrix.package.directory }} reads it.
+func flatten(k string, v any, into map[string]string) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		into[k] = str(v)
+		return
+	}
+	for mk, mv := range m {
+		flatten(k+"."+mk, mv, into)
+	}
 }
 
 // subset: every key of e has the same value in c.
@@ -484,7 +506,7 @@ var (
 
 var cinemaGate = regexp.MustCompile(`(^|[\s/])cinema verify\b`)
 
-var matrixRef = regexp.MustCompile(`\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}`)
+var matrixRef = regexp.MustCompile(`\$\{\{\s*matrix\.([A-Za-z0-9_.-]+)\s*\}\}`)
 
 // substitute replaces ${{ matrix.X }}. Like Actions, a key this combination
 // doesn't define (set only by some include entries) is the empty string.
