@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/billiondollarsolo/cinema/internal/record"
+	"github.com/billiondollarsolo/cinema/internal/store"
 )
 
 // Exit codes for everything except exec, which returns the child's code (plan §10.2).
@@ -61,33 +62,74 @@ func cmdExec(args []string) int {
 		opts.Stdin = os.Stdin // pipes and files pass through; a terminal does not (pipe mode, plan §4.1)
 	}
 
+	// Recording problems are reported, never fatal: the child runs and its exit
+	// code is returned regardless (plan §4.1, ACC-006).
+	st, runID, recErr := beginRecording(argv)
+	if st != nil {
+		defer st.Close()
+	}
+
 	res, err := record.Run(ctx, opts)
 	if err != nil && res.Start.IsZero() {
+		if runID != "" {
+			_ = st.AbortRun(runID)
+		}
 		fmt.Fprintf(os.Stderr, "cinema exec: %v\n", err)
 		return 127 // shell convention for "command not found / not executable"
 	}
 	if err != nil {
+		// The row stays "recording" and becomes "incomplete": never signable.
 		fmt.Fprintf(os.Stderr, "cinema exec: supervision error, run not recorded: %v\n", err)
 		return res.ExitCode
 	}
 	if res.Leftovers {
 		fmt.Fprintln(os.Stderr, "cinema exec: stopped processes the command left running")
 	}
+	state := ""
+	if recErr == nil {
+		state, recErr = st.FinishRun(runID, res)
+	}
+	if recErr != nil {
+		fmt.Fprintf(os.Stderr, "cinema exec: run not recorded: %v\n", recErr)
+	}
 	if *recordJSON != "" {
-		if err := writeJSON(*recordJSON, res); err != nil {
-			// Recording failure never changes the child's exit code (plan §4.1).
-			fmt.Fprintf(os.Stderr, "cinema exec: run not recorded: %v\n", err)
+		if err := writeJSON(*recordJSON, runID, state, res); err != nil {
+			fmt.Fprintf(os.Stderr, "cinema exec: --record-json: %v\n", err)
+		}
+	}
+	if st != nil {
+		if _, err := st.Maintain(false); err != nil {
+			fmt.Fprintf(os.Stderr, "cinema exec: cleanup: %v\n", err)
 		}
 	}
 	return res.ExitCode
 }
 
-func writeJSON(path string, res record.Result) error {
+func beginRecording(argv []string) (*store.Store, string, error) {
+	dir, err := store.DataDir()
+	if err != nil {
+		return nil, "", err
+	}
+	st, err := store.Open(dir)
+	if err != nil {
+		return nil, "", err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return st, "", err
+	}
+	id, err := st.BeginRun(argv, cwd)
+	return st, id, err
+}
+
+func writeJSON(path, runID, state string, res record.Result) error {
 	b, err := json.MarshalIndent(struct {
-		SchemaVersion int `json:"schema_version"`
+		SchemaVersion int    `json:"schema_version"`
+		RunID         string `json:"run_id,omitempty"` // empty when the run wasn't recorded
+		State         string `json:"state,omitempty"`
 		record.Result
 		DurationMS int64 `json:"duration_ms"`
-	}{1, res, res.Duration.Milliseconds()}, "", "  ")
+	}{1, runID, state, res, res.Duration.Milliseconds()}, "", "  ")
 	if err != nil {
 		return err
 	}

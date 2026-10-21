@@ -687,7 +687,7 @@ Report hashing and wrapper overhead separately, always.
 ### P1 — Local core + tiny dashboard
 
 - [x] `cinema exec`: argv exec, exit code, signals, process group, bounded tee capture (§4.1) (overhead p95 ≈ 3 ms; DB recording lands with the store)
-- [ ] SQLite store, blob store, run state machine, crash recovery (§13), cleanup contract (§13.1)
+- [x] SQLite store, blob store, run state machine, crash recovery (§13), cleanup contract (§13.1) for store-owned data (exec overhead p95 ≈ 7 ms with recording)
 - [ ] Whole-source fingerprint + metadata cache (§5)
 - [ ] `tasks.yaml` parser (strict), exact matcher, action key, environment fingerprint (§6)
 - [ ] Mutation detection, tool-cache rejection (§4.4–4.5)
