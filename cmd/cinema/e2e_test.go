@@ -514,3 +514,28 @@ tasks:
 		t.Fatalf("config-rewriting run looked like evidence:\n%s", out)
 	}
 }
+
+func TestRunParallel(t *testing.T) {
+	e := newEnv(t)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  a: {argv: [sh, -c, "sleep 1; rm main.go"], platform: any, reuse: {allowed: true, max_age: 1h}}
+  b: {argv: [sh, -c, "sleep 1; test -f main.go"], platform: any, reuse: {allowed: true, max_age: 1h}}
+  c: {argv: [sh, -c, "sleep 1; test -f main.go"], platform: any, reuse: {allowed: true, max_age: 1h}}
+  d: {argv: [sh, -c, "echo boom; exit 4"], platform: any, reuse: {allowed: true, max_age: 1h}}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	if _, code := e.cinema("run", "-j", "3", "--all"); code != exitBadArgs {
+		t.Fatal("-j without --commit accepted")
+	}
+	start := time.Now()
+	out, code := e.cinema("run", "--commit", "HEAD", "-j", "4", "--all")
+	if code != 1 || !strings.Contains(out, "✓ b") || !strings.Contains(out, "✓ c") || !strings.Contains(out, "✗ d") || !strings.Contains(out, "    boom") {
+		t.Fatalf("parallel run: %d\n%s", code, out)
+	}
+	if d := time.Since(start); d > 4*time.Second {
+		t.Fatalf("not parallel: %v", d)
+	}
+}

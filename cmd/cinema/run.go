@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -26,11 +27,16 @@ func cmdRun(args []string) int {
 	all := fs.Bool("all", false, "run every task this machine can satisfy that isn't already reusable")
 	force := fs.Bool("force", false, "with --all: rerun tasks that are already reusable")
 	commit := fs.String("commit", "", "run in a clean checkout of `REV` instead of the working tree")
+	jobs := fs.Int("j", 1, "with --commit: run up to `N` tasks at once, each in its own clean checkout")
 	if err := fs.Parse(args); err != nil {
 		return exitBadArgs
 	}
-	if *all == (fs.NArg() > 0) {
-		fmt.Fprintln(os.Stderr, "usage: cinema run [--commit REV] <task>... | --all [--force]")
+	if *all == (fs.NArg() > 0) || *jobs < 1 {
+		fmt.Fprintln(os.Stderr, "usage: cinema run [--commit REV [-j N]] <task>... | --all [--force]")
+		return exitBadArgs
+	}
+	if *jobs > 1 && *commit == "" {
+		fmt.Fprintln(os.Stderr, "cinema run: -j needs --commit: parallel tasks get their own clean checkouts, never your working tree")
 		return exitBadArgs
 	}
 	r, code := loadForReport("run", false)
@@ -95,7 +101,12 @@ func cmdRun(args []string) int {
 		}
 	}
 
-	failed := runTasks(ctx, w, todo)
+	var failed int
+	if *jobs > 1 {
+		failed = runParallel(ctx, r, *commit, todo, *jobs)
+	} else {
+		failed = runTasks(ctx, w, todo)
+	}
 	if ctx.Err() != nil {
 		fmt.Fprintln(os.Stderr, "cinema run: interrupted")
 		return exitUnsatisfied
@@ -117,40 +128,119 @@ func runTasks(ctx context.Context, w *repo, todo []*task.Task) int {
 		if ctx.Err() != nil {
 			break
 		}
-		fmt.Fprintf(os.Stderr, "▶ %s: %s\n", t.ID, strings.Join(t.Argv, " "))
-		opts := record.Options{Argv: t.Argv, Dir: filepath.Join(w.root, filepath.FromSlash(t.Cwd)),
-			Stdout: os.Stdout, Stderr: os.Stderr}
-		res, _, state, src, match := execRecorded(ctx, opts, w.at(t.Cwd), nil)
-		mark, note := "✓", ""
-		switch {
-		case res.Start.IsZero():
-			mark, note = "✗", "didn't start"
-		case res.ExitCode != 0:
-			mark, note = "✗", fmt.Sprintf("exit %d", res.ExitCode)
-		case src.Before != src.After:
-			mark, note = "!", "passed, but changed source files: not evidence"
-		case match.TaskID == "":
-			mark, note = "!", "passed, not recorded as task evidence (see warnings above)"
-		case match.Origin == "tool_cache" && !t.AcceptToolCache:
-			mark, note = "!", "passed from go test's cache: not fresh evidence"
-		case state == "":
-			mark, note = "!", "passed, not recorded"
-		}
-		if mark == "✗" {
+		bad, fatal := runOne(ctx, w, t, nil)
+		if bad {
 			failed++
 		}
-		fmt.Printf("%s %s  %s %s\n", mark, t.ID, res.Duration.Round(time.Millisecond), note)
-		if w.capture == "clean" {
-			// A task that writes into the tree (a build deleting a tracked file, a
-			// declared output) must not change what the next task sees. Ignored
-			// files (dependency installs, build caches) are kept.
-			if err := restoreTree(w.root); err != nil {
-				fmt.Fprintf(os.Stderr, "cinema run: restoring the clean checkout: %v\n", err)
-				return failed + len(todo) // can't trust anything after this
-			}
+		if fatal {
+			return failed + len(todo)
 		}
 	}
 	return failed
+}
+
+// runParallel runs todo with up to j workers, each in its own clean checkout of
+// rev, so parallel tasks never see each other's tree writes. Task output goes to
+// the run record (dashboard, explain), not the terminal; failures print a tail.
+func runParallel(ctx context.Context, r *repo, rev string, todo []*task.Task, j int) int {
+	sweepRunDirs()
+	queue := make(chan *task.Task)
+	var mu sync.Mutex
+	failed := 0
+	var wg sync.WaitGroup
+	for range min(j, len(todo)) {
+		wg.Go(func() {
+			cr, cleanup, err := cleanCheckout(r, rev)
+			defer cleanup()
+			for t := range queue {
+				if err != nil {
+					mu.Lock()
+					fmt.Printf("✗ %s  no clean checkout: %v\n", t.ID, err)
+					failed++
+					mu.Unlock()
+					continue
+				}
+				bad, fatal := runOne(ctx, cr, t, &mu)
+				mu.Lock()
+				if bad {
+					failed++
+				}
+				mu.Unlock()
+				if fatal {
+					err = errors.New("checkout could not be restored")
+				}
+			}
+		})
+	}
+	for _, t := range todo {
+		if ctx.Err() != nil {
+			break
+		}
+		queue <- t
+	}
+	close(queue)
+	wg.Wait()
+	return failed
+}
+
+// runOne runs a single task in w. printMu non-nil means parallel mode: output is
+// captured only, and lines are printed under the lock. fatal: w can't be reused.
+func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex) (bad, fatal bool) {
+	say := func(f string, a ...any) {
+		if printMu != nil {
+			printMu.Lock()
+			defer printMu.Unlock()
+		}
+		fmt.Printf(f, a...)
+	}
+	opts := record.Options{Argv: t.Argv, Dir: filepath.Join(w.root, filepath.FromSlash(t.Cwd))}
+	if printMu == nil {
+		fmt.Fprintf(os.Stderr, "▶ %s: %s\n", t.ID, strings.Join(t.Argv, " "))
+		opts.Stdout, opts.Stderr = os.Stdout, os.Stderr
+	} else {
+		say("▶ %s\n", t.ID)
+	}
+	res, _, state, src, match := execRecorded(ctx, opts, w.at(t.Cwd), nil)
+	mark, note := "✓", ""
+	switch {
+	case res.Start.IsZero():
+		mark, note = "✗", "didn't start"
+	case res.ExitCode != 0:
+		mark, note = "✗", fmt.Sprintf("exit %d", res.ExitCode)
+	case src.Before != src.After:
+		mark, note = "!", "passed, but changed source files: not evidence"
+	case match.TaskID == "":
+		mark, note = "!", "passed, not recorded as task evidence (see warnings above)"
+	case match.Origin == "tool_cache" && !t.AcceptToolCache:
+		mark, note = "!", "passed from go test's cache: not fresh evidence"
+	case state == "":
+		mark, note = "!", "passed, not recorded"
+	}
+	bad = mark == "✗"
+	tail := ""
+	if bad && printMu != nil {
+		tail = lastLines(append(res.Stdout.Bytes(), res.Stderr.Bytes()...), 25)
+	}
+	say("%s %s  %s %s\n%s", mark, t.ID, res.Duration.Round(time.Millisecond), note, tail)
+	if w.capture == "clean" {
+		// A task that writes into the tree (a build deleting a tracked file, a
+		// declared output) must not change what the next task sees. Ignored
+		// files (dependency installs, build caches) are kept.
+		if err := restoreTree(w.root); err != nil {
+			fmt.Fprintf(os.Stderr, "cinema run: restoring the clean checkout: %v\n", err)
+			return bad, true // can't trust anything after this
+		}
+	}
+	return bad, false
+}
+
+// lastLines returns the final n lines of b, indented, for a failure summary.
+func lastLines(b []byte, n int) string {
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return "    " + strings.Join(lines, "\n    ") + "\n"
 }
 
 // restoreTree resets a clean checkout to its commit: tracked files restored,

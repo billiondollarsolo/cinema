@@ -80,6 +80,7 @@ func cmdPush(args []string) int {
 	notesOnly := fs.Bool("notes-only", false, "push evidence only, not the branch (e.g. from a VPS)")
 	dryRun := fs.Bool("dry-run", false, "show what would be signed; push nothing")
 	runFirst := fs.Bool("run", false, "first run, in a clean checkout of HEAD, every task that lacks clean evidence for it")
+	jobs := fs.Int("j", 1, "with --run: run up to `N` tasks at once, each in its own clean checkout")
 	var commits stringList
 	fs.Var(&commits, "commit", "sign evidence for `REV` (repeatable; default: the commits being pushed)")
 	if err := fs.Parse(args); err != nil {
@@ -116,7 +117,7 @@ func cmdPush(args []string) int {
 	}
 
 	if *runFirst && !*dryRun {
-		if code := runMissingClean(r); code != 0 {
+		if code := runMissingClean(r, max(*jobs, 1)); code != 0 {
 			return code
 		}
 	}
@@ -298,7 +299,7 @@ func receiptsFor(r *repo, sha, repoID string, priv ed25519.PrivateKey, blobs *sn
 
 // runMissingClean runs, in a clean checkout of HEAD, every reusable task this
 // machine can satisfy that has no clean-checkout evidence for HEAD yet.
-func runMissingClean(r *repo) int {
+func runMissingClean(r *repo, jobs int) int {
 	sha, err := gitOut(r.root, "rev-parse", "HEAD")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cinema push: %v\n", err)
@@ -325,14 +326,20 @@ func runMissingClean(r *repo) int {
 	if len(todo) == 0 {
 		return 0
 	}
-	sweepRunDirs()
-	cr, cleanup, err := cleanCheckout(r, sha)
-	defer cleanup()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "cinema push: %v\n", err)
-		return exitInternal
+	var failed int
+	if jobs > 1 {
+		failed = runParallel(context.Background(), r, sha, todo, jobs)
+	} else {
+		sweepRunDirs()
+		cr, cleanup, err := cleanCheckout(r, sha)
+		defer cleanup()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cinema push: %v\n", err)
+			return exitInternal
+		}
+		failed = runTasks(context.Background(), cr, todo)
 	}
-	if failed := runTasks(context.Background(), cr, todo); failed > 0 {
+	if failed > 0 {
 		fmt.Fprintf(os.Stderr, "cinema push: %d task(s) failed in the clean checkout; pushing anyway (CI will run them)\n", failed)
 	}
 	return 0
