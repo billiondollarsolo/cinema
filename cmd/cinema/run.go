@@ -140,8 +140,28 @@ func runTasks(ctx context.Context, w *repo, todo []*task.Task) int {
 			failed++
 		}
 		fmt.Printf("%s %s  %s %s\n", mark, t.ID, res.Duration.Round(time.Millisecond), note)
+		if w.capture == "clean" {
+			// A task that writes into the tree (a build deleting a tracked file, a
+			// declared output) must not change what the next task sees. Ignored
+			// files (dependency installs, build caches) are kept.
+			if err := restoreTree(w.root); err != nil {
+				fmt.Fprintf(os.Stderr, "cinema run: restoring the clean checkout: %v\n", err)
+				return failed + len(todo) // can't trust anything after this
+			}
+		}
 	}
 	return failed
+}
+
+// restoreTree resets a clean checkout to its commit: tracked files restored,
+// untracked unignored files removed, ignored files kept. Only ever called on
+// cinema's own temp checkouts, never on a user's working tree.
+func restoreTree(root string) error {
+	if _, err := gitOut(root, "checkout", "-q", "--", "."); err != nil {
+		return err
+	}
+	_, err := gitOut(root, "clean", "-fdq")
+	return err
 }
 
 // at is r positioned in a task's cwd, sharing the store and cache.

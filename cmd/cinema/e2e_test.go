@@ -476,3 +476,25 @@ func TestPushRunMakesCleanEvidence(t *testing.T) { // ADR 0002: push --run
 		t.Fatalf("second push: %d\n%s", code, out)
 	}
 }
+
+func TestCleanCheckoutRestoredBetweenTasks(t *testing.T) {
+	e := newEnv(t)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  a-mutates:
+    argv: [sh, -c, "rm main.go && echo x > stray.txt"]
+    platform: any
+    reuse: { allowed: true, max_age: 1h }
+  b-reads:
+    argv: [sh, -c, "test -f main.go && test ! -e stray.txt"]
+    platform: any
+    reuse: { allowed: true, max_age: 1h }
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	out, code := e.cinema("run", "--commit", "HEAD", "a-mutates", "b-reads")
+	if code != 0 || !strings.Contains(out, "✓ b-reads") {
+		t.Fatalf("b saw a's changes: %d\n%s", code, out)
+	}
+}
