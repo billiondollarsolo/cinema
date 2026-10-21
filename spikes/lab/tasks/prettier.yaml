@@ -2,12 +2,14 @@
 # Each pins its Node with runtime: (provisioned identically on the evidence machine
 # and in the gate) and runs prettier's vendored yarn release directly: Node 25+
 # no longer bundles corepack. Tasks install their own dependencies (clean checkout).
-# Node 14/16/18 prod cells rewrite the lockfile, so they aren't tasks.
+# Node 14/16/18 prod cells rewrite the lockfile, and the Node 20 cell builds dist with
+# Node 22 but tests it with 20 (two runtimes in one job), so none of those are tasks.
 schema_version: 1
 tasks:
-  # lint.yml Lint (Node 24)
+  # lint.yml Lint (Node 24): every step except actionlint (fetched from main),
+  # Dependency Review (GitHub API) and renovate@latest, which depend on floating state.
   lint:
-    argv: [bash, -o, pipefail, -c, "Y=$(ls .yarn/releases/yarn-*.cjs) && node $Y install --immutable && for s in lint:deps lint:typecheck lint:eslint lint:prettier lint:spellcheck lint:changelog lint:format-test lint:knip; do node $Y run $s; done && PRETTIER_DEBUG=true node $Y prettier '{docs,website/versioned_docs/version-stable}/**/*.md' --check"]
+    argv: [bash, -o, pipefail, -c, "Y=$(ls $PWD/.yarn/releases/yarn-*.cjs) && node $Y install --immutable && for s in lint:deps lint:typecheck lint:eslint lint:prettier lint:spellcheck lint:changelog lint:format-test; do node $Y run $s; done && PRETTIER_DEBUG=true node $Y prettier '{docs,website/versioned_docs/version-stable}/**/*.md' --check && for d in . website scripts/release scripts/tools/bundle-test scripts/tools/eslint-plugin-prettier-internal-rules; do (cd $d && node $Y install && node $Y dedupe --check) || exit 1; done && node $Y run lint:knip && node ./scripts/ensure-no-files-changed.js"]
     platform: linux/amd64
     runtime: { node: 24.22.1 }
     toolchain: [{cmd: [node, --version]}]
@@ -45,13 +47,6 @@ tasks:
     argv: [bash, -o, pipefail, -c, "Y=$(ls .yarn/releases/yarn-*.cjs) && node $Y install --immutable && node $Y build --clean && node $Y test:production && node $Y test:production-standalone"]
     platform: linux/amd64
     runtime: { node: 22.23.4 }
-    toolchain: [{cmd: [node, --version]}]
-    reuse: { allowed: true, max_age: 72h }
-  # prod-test.yml Test (Node 20)
-  prod-test-20:
-    argv: [bash, -o, pipefail, -c, "Y=$(ls .yarn/releases/yarn-*.cjs) && node $Y install --immutable && node $Y build --clean && node $Y test:production && node $Y test:production-standalone"]
-    platform: linux/amd64
-    runtime: { node: 20.20.2 }
     toolchain: [{cmd: [node, --version]}]
     reuse: { allowed: true, max_age: 72h }
   # prod-test.yml Lint (runner-default Node 22)

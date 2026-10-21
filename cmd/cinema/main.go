@@ -17,6 +17,7 @@ commands:
   run [--commit REV] <task>... | --all [--force]           run tasks by name (clean checkout with --commit)
   status [--json]                                           per task: reusable / stale / missing + reason
   explain [--json] <task>                                   why a task is or isn't reusable
+  log [--failed] <task | run-id>                            a recorded run's captured output
   trust                                                     allow the toolchain commands in .cinema/tasks.yaml
   dashboard [--port N] [--allow-host H] [--no-open]         local web page: checks, runs, logs
   keys init | export                                        this machine's signing key
@@ -27,7 +28,7 @@ commands:
 func main() {
 	// ponytail: map + flag.FlagSet per verb; Cobra only if this stops being readable.
 	cmds := map[string]func([]string) int{
-		"init": cmdInit, "exec": cmdExec, "run": cmdRun, "status": cmdStatus, "explain": cmdExplain, "trust": cmdTrust, "dashboard": cmdDashboard, "keys": cmdKeys, "push": cmdPush, "verify": cmdVerify,
+		"init": cmdInit, "exec": cmdExec, "run": cmdRun, "status": cmdStatus, "explain": cmdExplain, "trust": cmdTrust, "dashboard": cmdDashboard, "keys": cmdKeys, "push": cmdPush, "verify": cmdVerify, "log": cmdLog,
 	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)

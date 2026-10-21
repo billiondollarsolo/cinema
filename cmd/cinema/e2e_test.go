@@ -627,3 +627,28 @@ tasks:
 		t.Fatalf("exec of a runtime-pinned task counted: %s", got)
 	}
 }
+
+func TestLog(t *testing.T) {
+	e := newEnv(t)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  noisy: {argv: [sh, -c, "echo hello-out; echo hello-err >&2; exit ${CODE:-0}"], platform: any, reuse: {allowed: true, max_age: 1h}}
+`)
+	e.cinema("trust")
+	e.cinema("run", "noisy")
+	cmd := exec.Command(bin, "run", "noisy")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data, "CODE=3")
+	cmd.Run()
+	if out, code := e.cinema("log", "noisy"); code != 0 || !strings.Contains(out, "hello-out") {
+		t.Fatalf("log: %d %q", code, out)
+	}
+	cmd = exec.Command(bin, "log", "--failed", "noisy")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+	both, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(both), "failed, exit 3") || !strings.Contains(string(both), "hello-err") {
+		t.Fatalf("log --failed:\n%s", both)
+	}
+	if _, code := e.cinema("log", "nope"); code != exitBadArgs {
+		t.Fatal("unknown task accepted")
+	}
+}

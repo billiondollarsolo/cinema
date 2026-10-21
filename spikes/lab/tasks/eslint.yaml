@@ -1,4 +1,6 @@
-# eslint CI (PR, ubuntu) → CInema tasks, one per upstream job and Node version, Node
+# Note: a YAML comment starting with the linter's name is read by eslint as an inline
+# config directive (lab finding), so this header avoids that.
+# CInema tasks for the eslint CI (PR, ubuntu), one per upstream job and Node version, Node
 # pinned with runtime:. eslint has NO lockfile: npm install floats within semver
 # ranges, and resolved versions are only known after install, so they can't be
 # fingerprinted before a run. Evidence is bound to the source and Node version only;
