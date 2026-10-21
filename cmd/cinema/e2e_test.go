@@ -570,6 +570,35 @@ tasks:
 	}
 }
 
+// A slot holding files cinema can't delete (root-owned output of a container
+// task; simulated with a read-only dir) must fail with the cause and the fix.
+func TestCleanCheckoutUndeletableSlot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can delete anything")
+	}
+	e := newEnv(t)
+	e.write(".gitignore", "out/\n")
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  stuck: {argv: [sh, -c, "mkdir -p out/d && touch out/d/f && chmod 555 out/d"], platform: any, reuse: {allowed: true, max_age: 1h}}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	run := func() string {
+		cmd := exec.Command(bin, "run", "--commit", "HEAD", "stuck")
+		cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+		out, _ := cmd.CombinedOutput()
+		return string(out)
+	}
+	run()
+	slots, _ := filepath.Glob(filepath.Join(e.data, "checkouts", "*", "0"))
+	t.Cleanup(func() { exec.Command("chmod", "-R", "u+w", e.data).Run() })
+	if out := run(); len(slots) != 1 || !strings.Contains(out, "sudo rm -rf "+slots[0]) {
+		t.Fatalf("no actionable error for an undeletable slot:\n%s", out)
+	}
+}
+
 func TestCleanRunTempFilesRemoved(t *testing.T) {
 	e := newEnv(t)
 	tmp := t.TempDir()

@@ -344,6 +344,11 @@ func cleanCheckout(r *repo, rev string) (*repo, func(), error) {
 	if err := prepareSlot(r.root, dir, sha); err != nil {
 		os.RemoveAll(dir) // a broken slot is rebuilt next time
 		release()
+		if _, serr := os.Lstat(dir); serr == nil {
+			// Usually root-owned files from a container that ran as root (docker -v $PWD:...).
+			err = fmt.Errorf("%w\nclean checkout %s has files this user can't remove (root-owned output of a container task?): "+
+				"remove it with `sudo rm -rf %s`, and run the container with --user \"$(id -u):$(id -g)\"", err, dir, dir)
+		}
 		return nil, noop, err
 	}
 	cr, err := openRepoAt(dir)
