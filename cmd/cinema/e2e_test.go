@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/billiondollarsolo/cinema/internal/evidence"
 )
 
 var bin string
@@ -369,4 +371,83 @@ func (e *env) lastRunOrigin(t *testing.T) string {
 		t.Fatalf("runs: %v", err)
 	}
 	return runs[0].Origin
+}
+
+func TestPushSignsAndPublishes(t *testing.T) { // §8.1
+	e := newEnv(t)
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	if out, err := exec.Command("git", "init", "-q", "--bare", bare).CombinedOutput(); err != nil {
+		t.Fatal(string(out))
+	}
+	e.git("remote", "add", "origin", "https://github.com/Example/Repo.git")
+	e.git("config", "remote.origin.pushurl", bare)
+	e.cinema("trust")
+	if out, code := e.cinema("keys", "init"); code != 0 || !strings.HasPrefix(out, "cinema-ed25519 ") {
+		t.Fatalf("keys init: %d %s", code, out)
+	}
+	if _, code := e.cinema("keys", "init"); code == 0 {
+		t.Fatal("keys init replaced a key")
+	}
+	e.cinema("run", "check")
+
+	out, code := e.cinema("push", "--dry-run")
+	if code != 0 || !strings.Contains(out, "check") {
+		t.Fatalf("dry run: %d\n%s", code, out)
+	}
+	out, code = e.cinema("push")
+	if code != 0 || !strings.Contains(out, "evidence: 1 receipt") || !strings.Contains(out, "branch:   pushed main") {
+		t.Fatalf("push: %d\n%s", code, out)
+	}
+	// The remote has our notes ref with a receipt that verifies against our key.
+	refs, _ := exec.Command("git", "-C", bare, "for-each-ref", "--format=%(refname)", "refs/notes/cinema/").Output()
+	if !strings.HasPrefix(string(refs), "refs/notes/cinema/v1/") {
+		t.Fatalf("remote refs: %q", refs)
+	}
+	ref := strings.TrimSpace(string(refs))
+	note, err := exec.Command("git", "-C", bare, "notes", "--ref="+ref, "show", "main").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envs []json.RawMessage
+	if err := json.Unmarshal(note, &envs); err != nil || len(envs) != 1 {
+		t.Fatalf("note: %v %s", err, note)
+	}
+	pubOut, _ := e.cinema("keys", "export")
+	keys, err := evidence.ParseTrustedKeys(pubOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vs, err := evidence.Verify(envs[0], keys)
+	if err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if vs.Predicate.RepositoryID != "github.com/example/repo" || vs.Predicate.Task.ID != "check" {
+		t.Fatalf("predicate: %+v", vs.Predicate)
+	}
+
+	// A dirty tree doesn't match the commit: nothing new to sign.
+	e.write("main.go", "package main // wip\n")
+	e.cinema("run", "check")
+	out, _ = e.cinema("push", "--notes-only")
+	if !strings.Contains(out, "evidence: 1 receipt") { // HEAD still has its receipt from the clean run
+		t.Fatalf("notes-only: %s", out)
+	}
+}
+
+func TestRepositoryID(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://github.com/Owner/Repo.git": "github.com/owner/repo",
+		"git@github.com:Owner/Repo.git":     "github.com/owner/repo",
+		"ssh://git@github.com/owner/repo":   "github.com/owner/repo",
+		"https://gitlab.com/group/sub/proj": "gitlab.com/group/sub/proj",
+	} {
+		if got, err := repositoryID(in); err != nil || got != want {
+			t.Errorf("%s: %q %v", in, got, err)
+		}
+	}
+	for _, bad := range []string{"", "/local/path", "https://github.com/only"} {
+		if _, err := repositoryID(bad); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
 }

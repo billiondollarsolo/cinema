@@ -250,13 +250,14 @@ type TaskRun struct {
 	SourceBefore, SourceAfter string
 	EnvInputs                 []string
 	Origin                    string
+	Capture                   string // workspace | clean
 }
 
 // TaskRuns returns the newest runs of taskID in repo root.
 func (s *Store) TaskRuns(root, taskID string, limit int) ([]TaskRun, error) {
 	rows, err := s.db.Query(`SELECT id, state, started_at, coalesce(duration_ms,0), coalesce(exit_code,-1),
 		coalesce(contract_digest,''), coalesce(env_digest,''), coalesce(vcs,''),
-		coalesce(source_before,''), coalesce(source_after,''), coalesce(env_inputs,''), coalesce(result_origin,'')
+		coalesce(source_before,''), coalesce(source_after,''), coalesce(env_inputs,''), coalesce(result_origin,''), coalesce(capture,'')
 		FROM runs WHERE repo_root=? AND task_id=? AND state != ? ORDER BY started_at DESC, id DESC LIMIT ?`,
 		root, taskID, StateRecording, limit)
 	if err != nil {
@@ -269,7 +270,7 @@ func (s *Store) TaskRuns(root, taskID string, limit int) ([]TaskRun, error) {
 		var started int64
 		var inputs string
 		if err := rows.Scan(&r.ID, &r.State, &started, &r.DurationMS, &r.ExitCode, &r.Contract, &r.Env,
-			&r.VCS, &r.SourceBefore, &r.SourceAfter, &inputs, &r.Origin); err != nil {
+			&r.VCS, &r.SourceBefore, &r.SourceAfter, &inputs, &r.Origin, &r.Capture); err != nil {
 			return nil, err
 		}
 		r.Started = time.UnixMilli(started)
