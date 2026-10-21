@@ -689,6 +689,26 @@ tasks:
 	}
 }
 
+// A task that writes into the tree in a clean checkout is told which files it
+// changed, so the fix (declare them in outputs:) is obvious.
+func TestRunNamesChangedFiles(t *testing.T) {
+	e := newEnv(t)
+	e.write("a-report.txt", "old\n")
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  regen: {argv: [sh, -c, "echo new > a-report.txt && touch fresh.txt"], platform: any, reuse: {allowed: true, max_age: 1h}}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	cmd := exec.Command(bin, "run", "--commit", "HEAD", "regen")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "changed: a-report.txt") || !strings.Contains(string(out), "fresh.txt") || !strings.Contains(string(out), "outputs:") {
+		t.Fatalf("changed files not named:\n%s", out)
+	}
+}
+
 func TestCleanRunTempFilesRemoved(t *testing.T) {
 	e := newEnv(t)
 	tmp := t.TempDir()

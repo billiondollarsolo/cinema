@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/billiondollarsolo/cinema/internal/analyze"
 	"github.com/billiondollarsolo/cinema/internal/plan"
 	"github.com/billiondollarsolo/cinema/internal/record"
 	"github.com/billiondollarsolo/cinema/internal/store"
@@ -258,6 +259,11 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex) (ba
 		mark, note = "✗", fmt.Sprintf("exit %d", res.ExitCode)
 	case src.Before != src.After:
 		mark, note = "!", "passed, but changed source files: not evidence"
+		if w.capture == "clean" { // the slot was clean before the task, so this is exactly what it wrote
+			if changed := changedPaths(w.root); len(changed) > 0 {
+				note += fmt.Sprintf("\n    changed: %s\n    if the task is meant to write them, declare them in outputs:", strings.Join(changed, ", "))
+			}
+		}
 	case match.TaskID == "":
 		mark, note = "!", "passed, not recorded as task evidence (see warnings above)"
 	case match.Origin == "tool_cache" && !t.AcceptToolCache:
@@ -301,6 +307,26 @@ func restoreTree(root string) error {
 	}
 	_, err := gitOut(root, "clean", "-fdq")
 	return err
+}
+
+// changedPaths lists tracked changes and untracked, unignored files (the
+// fingerprinted set), at most 10.
+func changedPaths(root string) []string {
+	// -z, untrimmed: each entry is "XY path" and X may be a space.
+	out, err := exec.Command("git", "-C", root, "status", "--porcelain", "-z", "--untracked-files=all", "--no-renames").Output()
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, e := range strings.Split(string(out), "\x00") {
+		if len(e) > 3 {
+			paths = append(paths, analyze.Printable(e[3:]))
+		}
+	}
+	if len(paths) > 10 {
+		paths = append(paths[:10], fmt.Sprintf("… %d more", len(paths)-10))
+	}
+	return paths
 }
 
 // at is r positioned in a task's cwd, sharing the store and cache.

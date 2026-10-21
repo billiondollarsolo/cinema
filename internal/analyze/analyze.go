@@ -211,6 +211,11 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		if strings.Contains(run, "GITHUB_ENV") || strings.Contains(run, "GITHUB_PATH") || strings.Contains(run, "GITHUB_OUTPUT") {
 			review("a step writes $GITHUB_ENV/$GITHUB_PATH/$GITHUB_OUTPUT: later steps depend on Actions plumbing")
 		}
+		if pipeToShell.MatchString(run) {
+			review("a step pipes a downloaded script into a shell: an unpinned network input; pin a release and check its SHA-256")
+		} else if floating.MatchString(run) {
+			review("a step fetches a floating version (@latest / HEAD / master): results can change without a source change")
+		}
 		if strings.Contains(run, "${{") {
 			review("a step uses an expression cinema can't evaluate: " + firstExpr(run))
 		}
@@ -367,6 +372,11 @@ func agrees(inc, c map[string]string) bool {
 	}
 	return any
 }
+
+var (
+	pipeToShell = regexp.MustCompile(`(curl|wget)\b[^|\n]*\|\s*(sudo\s+)?(ba)?sh\b`)
+	floating    = regexp.MustCompile(`@latest\b|/HEAD/|/(master|main)/[^\s]*\.(sh|py)\b`)
+)
 
 var cinemaGate = regexp.MustCompile(`(^|[\s/])cinema verify\b`)
 

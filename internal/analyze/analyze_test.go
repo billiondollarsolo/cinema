@@ -180,3 +180,15 @@ func TestVersionFileUntrusted(t *testing.T) {
 		t.Fatalf("read outside the repo: %q", v)
 	}
 }
+
+func TestNetworkInputsFlagged(t *testing.T) {
+	src := "on: push\njobs:\n  a: {runs-on: ubuntu-latest, steps: [{run: 'curl -sfL https://x/install.sh | sh -s -- v1'}]}\n" +
+		"  b: {runs-on: ubuntu-latest, steps: [{run: 'go install golang.org/x/vuln/cmd/govulncheck@latest'}]}\n" +
+		"  c: {runs-on: ubuntu-latest, steps: [{run: 'make test'}]}\n"
+	jobs, _ := Workflow("w.yml", []byte(src))
+	for _, j := range jobs {
+		if want := j.ID != "c"; (j.Verdict == Review) != want {
+			t.Errorf("%s: %s %v", j.ID, j.Verdict, j.Reasons)
+		}
+	}
+}
