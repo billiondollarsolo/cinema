@@ -198,7 +198,7 @@ Formatters, `--fix` linters, and code generators can be recorded, but they never
 - declared extra inputs from the task contract (e.g. an ignored `.env.test`)
 - submodule commit IDs
 
-Excluded: `.git/`, ignored files not explicitly declared. `.gitignore` is not proof that an ignored file doesn't matter, so tasks that read ignored files must declare them. Otherwise results can be wrong, and the docs must say so plainly.
+Excluded: `.git/`, ignored files not explicitly declared, and `.cinema/tasks.yaml` (its task-relevant content is in each contract digest; see `docs/adr/0001`). `.gitignore` is not proof that an ignored file doesn't matter, so tasks that read ignored files must declare them. Otherwise results can be wrong, and the docs must say so plainly.
 
 Narrower per-task inputs are deliberately deferred (`vision §11.5, §12.5`). A smaller fingerprint gets more hits but risks false greens.
 
@@ -400,6 +400,7 @@ cinema run <task>|--all [--commit SHA]
 cinema status [--json]          per task: last run, eligible / stale / missing + reason
 cinema explain <task>           why a task is or isn't reusable for HEAD
 cinema push [--notes-only]      sign + publish evidence (+ branch)
+cinema trust                    allow the toolchain commands in this exact tasks.yaml (re-run after any edit)
 cinema keys init|export|list
 cinema verify --event FILE      the CI gate (§11)
 cinema dashboard [--port N] [--allow-host H]
@@ -561,7 +562,12 @@ SIGNER_NOT_ALLOWED      MALFORMED                RECEIPT_EXPIRED
 PARTIAL_COVERAGE        SOURCE_CHANGED_DURING_RUN TOOL_CACHE_REJECTED
 REUSE_DISABLED          FORK_PR                  POLICY_UNAVAILABLE
 POLICY_INVALID          TRANSPORT_UNAVAILABLE    RUN_FAILED
+VCS_MISMATCH
 ```
+
+`VCS_MISMATCH`: a `vcs_context: exact` task whose run was on a different commit, or on a dirty tree.
+
+A failed run on the exact same inputs (contract, environment, source) blocks reuse of any earlier pass. Reusing the pass would hide a flaky or broken check.
 
 CLI, JSON, dashboard, and gate report all use the same codes. Human text is presentation only. Full list in `vision §9.5`.
 
@@ -693,7 +699,7 @@ Report hashing and wrapper overhead separately, always.
 - [x] `tasks.yaml` parser (strict), exact matcher, action key, environment fingerprint (§6)
 - [x] Mutation detection, tool-cache rejection (§4.4–4.5) (before/after recorded; `go test` without `-count` rejected at config load)
 - [ ] `cinema run [--commit]` with clean-checkout mode (§5.2)
-- [ ] `cinema status/explain --json`, reason codes (§10, §12)
+- [x] `cinema status/explain --json`, reason codes (§10, §12), `cinema trust` for toolchain commands
 - [ ] `cinema dashboard`: one page, token auth, Host/Origin checks, SSE refresh, `--allow-host` (§10.4, §9.1)
 - [ ] `cinema init`: tasks skeleton from detected `go.mod` / `package.json`
 - [ ] Tests: ACC-001…021, 047, 048, 051, 066; parser fuzzers

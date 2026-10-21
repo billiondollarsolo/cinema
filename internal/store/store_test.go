@@ -242,7 +242,8 @@ func TestMigrateFromV1(t *testing.T) {
 	dir := t.TempDir()
 	s := open(t, dir)
 	// Rewind to a v1 database: drop the v2 columns' index and version.
-	if _, err := s.db.Exec(`DROP INDEX runs_task; ALTER TABLE runs DROP COLUMN task_id;
+	if _, err := s.db.Exec(`DROP TABLE trusted_configs; ALTER TABLE runs DROP COLUMN env_inputs;
+		DROP INDEX runs_task; ALTER TABLE runs DROP COLUMN task_id;
 		ALTER TABLE runs DROP COLUMN contract_digest; ALTER TABLE runs DROP COLUMN env_digest;
 		ALTER TABLE runs DROP COLUMN vcs; PRAGMA user_version = 1;`); err != nil {
 		t.Fatal(err)
@@ -255,7 +256,7 @@ func TestMigrateFromV1(t *testing.T) {
 	}
 	var v int
 	s.db.QueryRow(`PRAGMA user_version`).Scan(&v)
-	if v != 2 {
+	if v != 3 {
 		t.Fatalf("user_version = %d", v)
 	}
 }
@@ -267,4 +268,19 @@ func addRunV1(t *testing.T, s *Store) string {
 		t.Fatal(err)
 	}
 	return id
+}
+
+func TestTrust(t *testing.T) {
+	s := open(t, t.TempDir())
+	if s.Trusted("/r", "d1") {
+		t.Fatal("trusted by default")
+	}
+	s.TrustConfig("/r", "d1")
+	if !s.Trusted("/r", "d1") || s.Trusted("/r", "d2") || s.Trusted("/other", "d1") {
+		t.Fatal("trust not bound to repo + exact content")
+	}
+	s.TrustConfig("/r", "d2") // re-trust replaces: no growth
+	if s.Trusted("/r", "d1") || !s.Trusted("/r", "d2") {
+		t.Fatal("re-trust didn't replace")
+	}
 }

@@ -34,6 +34,13 @@ var ErrNoConfig = errors.New("task: no " + ConfigPath)
 type Config struct {
 	SchemaVersion int              `yaml:"schema_version"`
 	Tasks         map[string]*Task `yaml:"tasks"`
+	Digest        string           `yaml:"-"` // sha256 of the raw bytes; what `cinema trust` approves
+}
+
+// RunsCommands reports whether computing t's environment executes commands
+// from the config (toolchain cmd entries). Those require a trusted config.
+func (t *Task) RunsCommands() bool {
+	return slices.ContainsFunc(t.Toolchain, func(tc Toolchain) bool { return len(tc.Cmd) > 0 })
 }
 
 type Task struct {
@@ -118,6 +125,8 @@ func Parse(b []byte) (*Config, error) {
 			return nil, fmt.Errorf("task %q: %w", id, err)
 		}
 	}
+	h := sha256.Sum256(b)
+	c.Digest = "sha256:" + hex.EncodeToString(h[:])
 	return &c, nil
 }
 
@@ -172,7 +181,7 @@ func (t *Task) validate() error {
 	default:
 		return errors.New(`vcs_context must be "none" or "exact"`)
 	}
-	if !t.AcceptToolCache && isGoTest(t.Argv) && !slices.ContainsFunc(t.Argv, isCountFlag) {
+	if !t.AcceptToolCache && isGoTest(t.Argv) && !slices.ContainsFunc(t.Argv, disablesTestCache) {
 		return errors.New("go test may replay cached results: add -count=1 to argv, or set accept_tool_cache: true")
 	}
 	if t.Reuse.Allowed {
@@ -187,9 +196,19 @@ func (t *Task) validate() error {
 
 func isGoTest(argv []string) bool { return len(argv) >= 2 && argv[0] == "go" && argv[1] == "test" }
 
-// Any explicit -count makes go test results uncacheable (go help testflag).
-func isCountFlag(a string) bool {
-	return a == "-count" || a == "--count" || strings.HasPrefix(a, "-count=") || strings.HasPrefix(a, "--count=")
+// disablesTestCache: go test caches only when every test flag is in a small
+// cacheable set (go help test); these known flags are outside it. Unknown flags
+// count as cacheable, so the worst case is asking for a needless -count=1.
+func disablesTestCache(arg string) bool {
+	if !strings.HasPrefix(arg, "-") {
+		return false
+	}
+	name, _, _ := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+	switch strings.TrimPrefix(name, "test.") {
+	case "count", "fuzz", "bench", "cpuprofile", "memprofile", "blockprofile", "mutexprofile", "trace":
+		return true
+	}
+	return false
 }
 
 // Match returns the task whose argv and cwd equal the run's exactly (plan §6.3).

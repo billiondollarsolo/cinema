@@ -96,6 +96,22 @@ func TestSensitivity(t *testing.T) { // ACC-009, 012, 013, 015
 	}
 }
 
+func TestTaskConfigExcluded(t *testing.T) { // ADR 0001
+	dir := gitRepo(t)
+	base := take(t, dir)
+	write(t, dir, ".cinema/tasks.yaml", "schema_version: 1\n")
+	if take(t, dir) != base {
+		t.Fatal(".cinema/tasks.yaml affected the fingerprint")
+	}
+	if take(t, dir, ".cinema/tasks.yaml") == base {
+		t.Fatal("declared as an extra input, it must be fingerprinted")
+	}
+	write(t, dir, ".cinema/other.yaml", "x")
+	if take(t, dir) == base {
+		t.Fatal("only tasks.yaml is excluded, not all of .cinema/")
+	}
+}
+
 func TestExtraInputs(t *testing.T) {
 	dir := gitRepo(t)
 	missing := take(t, dir, ".env.test")

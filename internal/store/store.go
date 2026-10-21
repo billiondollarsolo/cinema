@@ -133,7 +133,34 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if v < 3 { // explain + config trust
+		if _, err := db.Exec(`
+			ALTER TABLE runs ADD COLUMN env_inputs TEXT;   -- JSON list of human-readable env inputs (no values)
+			CREATE TABLE trusted_configs (                 -- one row per repo, replaced on re-trust
+				repo_root  TEXT PRIMARY KEY,
+				digest     TEXT NOT NULL,                  -- sha256 of the tasks.yaml bytes trusted
+				trusted_at INTEGER NOT NULL
+			);
+			PRAGMA user_version = 3;`); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// TrustConfig records that the user allows CInema to run the commands in the
+// tasks.yaml with this digest for this repo (like `direnv allow`).
+func (s *Store) TrustConfig(root, digest string) error {
+	_, err := s.db.Exec(`INSERT INTO trusted_configs (repo_root, digest, trusted_at) VALUES (?, ?, ?)
+		ON CONFLICT(repo_root) DO UPDATE SET digest=excluded.digest, trusted_at=excluded.trusted_at`,
+		root, digest, s.now().UnixMilli())
+	return err
+}
+
+// Trusted reports whether exactly this tasks.yaml content was trusted for root.
+func (s *Store) Trusted(root, digest string) bool {
+	var d string
+	return s.db.QueryRow(`SELECT digest FROM trusted_configs WHERE repo_root=?`, root).Scan(&d) == nil && d == digest
 }
 
 // Source is where a run happened and the tree it saw. Zero value = outside a repo
@@ -147,6 +174,7 @@ type Source struct {
 // Zero value = no task matched: history only.
 type Match struct {
 	TaskID, ContractDigest, EnvDigest, VCS string
+	EnvInputs                              []string // human-readable, for explain; never env values
 }
 
 // BeginRun records that a run is starting. Until FinishRun commits, the row is
@@ -181,12 +209,12 @@ func (s *Store) FinishRun(id string, r record.Result, src Source, m Match) (stri
 		canceled=?, leftovers=?, stdout_blob=?, stdout_total=?, stdout_truncated=?,
 		stderr_blob=?, stderr_total=?, stderr_truncated=?,
 		repo_root=?, cwd_rel=?, source_before=?, source_after=?,
-		task_id=?, contract_digest=?, env_digest=?, vcs=? WHERE id=? AND state=?`,
+		task_id=?, contract_digest=?, env_digest=?, vcs=?, env_inputs=? WHERE id=? AND state=?`,
 		state, r.Path, r.Start.UnixMilli(), r.Duration.Milliseconds(), r.ExitCode, nullStr(r.Signal),
 		r.Canceled, r.Leftovers, outBlob, r.Stdout.Total, r.Stdout.Truncated,
 		errBlob, r.Stderr.Total, r.Stderr.Truncated,
 		nullStr(src.RepoRoot), nullStr(src.CwdRel), nullStr(src.Before), nullStr(src.After),
-		nullStr(m.TaskID), nullStr(m.ContractDigest), nullStr(m.EnvDigest), nullStr(m.VCS), id, StateRecording)
+		nullStr(m.TaskID), nullStr(m.ContractDigest), nullStr(m.EnvDigest), nullStr(m.VCS), jsonOrNull(m.EnvInputs), id, StateRecording)
 	if err != nil {
 		return "", err
 	}
@@ -194,6 +222,46 @@ func (s *Store) FinishRun(id string, r record.Result, src Source, m Match) (stri
 		return "", fmt.Errorf("store: run %s is no longer recording", id)
 	}
 	return state, nil
+}
+
+// TaskRun is a recorded run of one task, newest first from TaskRuns.
+type TaskRun struct {
+	ID, State                 string
+	Started                   time.Time
+	DurationMS                int64
+	ExitCode                  int
+	Contract, Env, VCS        string
+	SourceBefore, SourceAfter string
+	EnvInputs                 []string
+}
+
+// TaskRuns returns the newest runs of taskID in repo root.
+func (s *Store) TaskRuns(root, taskID string, limit int) ([]TaskRun, error) {
+	rows, err := s.db.Query(`SELECT id, state, started_at, coalesce(duration_ms,0), coalesce(exit_code,-1),
+		coalesce(contract_digest,''), coalesce(env_digest,''), coalesce(vcs,''),
+		coalesce(source_before,''), coalesce(source_after,''), coalesce(env_inputs,'')
+		FROM runs WHERE repo_root=? AND task_id=? AND state != ? ORDER BY started_at DESC, id DESC LIMIT ?`,
+		root, taskID, StateRecording, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TaskRun
+	for rows.Next() {
+		var r TaskRun
+		var started int64
+		var inputs string
+		if err := rows.Scan(&r.ID, &r.State, &started, &r.DurationMS, &r.ExitCode, &r.Contract, &r.Env,
+			&r.VCS, &r.SourceBefore, &r.SourceAfter, &inputs); err != nil {
+			return nil, err
+		}
+		r.Started = time.UnixMilli(started)
+		if inputs != "" {
+			_ = json.Unmarshal([]byte(inputs), &r.EnvInputs)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // AbortRun deletes a run whose child never started (e.g. command not found).
@@ -292,6 +360,14 @@ func newID(t time.Time) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("run_%d_%s", t.UnixMilli(), hex.EncodeToString(b)), nil
+}
+
+func jsonOrNull(v []string) any {
+	if len(v) == 0 {
+		return nil
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
 }
 
 func nullStr(s string) any {

@@ -83,8 +83,16 @@ func TestParseRejects(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	// accept_tool_cache: true is the explicit opt-in.
-	mustParse(t, "schema_version: 1\ntasks:\n  t: {argv: [go, test, ./...], platform: any, accept_tool_cache: true}\n")
+	// accept_tool_cache: true is the explicit opt-in; other uncacheable flags also qualify.
+	for _, argv := range []string{"[go, test, ./...]\n    accept_tool_cache: true", "[go, test, -count=1, ./...]",
+		"[go, test, -count, \"1\", ./...]", "[go, test, -fuzz, FuzzX, ./x]", "[go, test, --bench=., ./...]"} {
+		mustParse(t, "schema_version: 1\ntasks:\n  t:\n    platform: any\n    argv: "+argv+"\n")
+	}
+	for _, argv := range []string{"[go, test, -race, ./...]", "[go, test, -run, TestX, -v, ./...]", "[go, test, ./count]"} {
+		if _, err := Parse([]byte("schema_version: 1\ntasks:\n  t:\n    platform: any\n    argv: " + argv + "\n")); err == nil {
+			t.Errorf("cacheable %s accepted without accept_tool_cache", argv)
+		}
+	}
 }
 
 func TestExactMatch(t *testing.T) { // ACC-001, ACC-018

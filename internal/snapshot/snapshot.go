@@ -193,6 +193,11 @@ func CleanRel(p string) (string, error) {
 	return c, nil
 }
 
+// excluded is the task config: what matters in it for a task is in that task's
+// contract digest, so editing policy or other tasks mustn't invalidate runs.
+// See docs/adr/0001. Declared extra inputs still include it if a task asks.
+const excluded = ".cinema/tasks.yaml"
+
 // listFiles returns tracked + untracked-non-ignored paths in one git call.
 // Plain paths only: parsing --stage output alongside --others is ambiguous for
 // adversarial file names.
@@ -202,7 +207,7 @@ func listFiles(root string) ([]string, error) {
 		return nil, err
 	}
 	var paths []string
-	seen := map[string]bool{}
+	seen := map[string]bool{excluded: true}
 	for p := range bytes.SplitSeq(out, []byte{0}) {
 		if len(p) > 0 && !seen[string(p)] { // a conflicted file is listed once per stage
 			seen[string(p)] = true
