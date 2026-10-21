@@ -69,7 +69,8 @@ type job struct {
 			WorkingDirectory string `yaml:"working-directory"`
 		} `yaml:"run"`
 	} `yaml:"defaults"`
-	Steps []step `yaml:"steps"`
+	Steps       []step    `yaml:"steps"`
+	Permissions yaml.Node `yaml:"permissions"`
 }
 
 type step struct {
@@ -195,12 +196,20 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		case ok && !v:
 			skip("job condition is false for this combination (if: " + j.If + ")")
 			return r
-		case statusFn.MatchString(j.If):
+		case statusFn.MatchString(j.If) || reportsNeeds(j):
 			skip("reports other jobs' results (if: " + j.If + "); not a check")
 			return r
 		case !ok:
 			review("the job is conditional (if: " + j.If + ")")
 		}
+	}
+	if j.If == "" && reportsNeeds(j) {
+		skip("reports other jobs' results (needs.*.result); not a check")
+		return r
+	}
+	if idToken(&j.Permissions) {
+		skip("requests an OIDC token (permissions: id-token: write): publishes or deploys; not a check")
+		return r
 	}
 	r.RunsOn = sub(scalarOrList(&j.RunsOn))
 	switch os := strings.ToLower(r.RunsOn); {
@@ -243,7 +252,8 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		case action == "actions/checkout", action == "actions/cache", strings.HasPrefix(action, "actions/cache/"),
 			action == "actions/upload-artifact", strings.HasSuffix(action, "/harden-runner"):
 			// checkout: cinema runs in a clean checkout; caches and uploads don't change results
-		case action == "actions/download-artifact":
+		case action == "actions/download-artifact",
+			strings.Contains(action, "artifact") && !strings.Contains(action, "upload") && !strings.Contains(action, "save"):
 			skip("needs artifacts from another job (download-artifact)")
 		case action == "actions/setup-go":
 			p.Go = exactVersion(root, sub(str(s.With["go-version"])), `^1\.[0-9]+\.[0-9]+$`, "Go", str(s.With["go-version-file"]), review, note)
@@ -262,6 +272,9 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		run := sub(s.Run)
 		if strings.Contains(run, "secrets.") || anyEnvMentions(s.Env, "secrets.") {
 			skip("a step uses secrets")
+		}
+		if strings.Contains(run, "github.event.") || anyEnvMentions(s.Env, "github.event.") {
+			skip("a step reads the triggering event (github.event.*, e.g. the PR description): depends on the PR, not the commit")
 		}
 		if ghFiles.MatchString(run) {
 			plumbing = true
@@ -452,6 +465,28 @@ func expand(n *yaml.Node) ([]map[string]string, error) {
 		combos = []map[string]string{nil}
 	}
 	return combos, nil
+}
+
+var needsResult = regexp.MustCompile(`needs\.[A-Za-z0-9_*-]+\.result`)
+
+// reportsNeeds: the job's condition or steps look at other jobs' results, an
+// aggregator status job (build_all_status), not a check of its own.
+func reportsNeeds(j *job) bool {
+	if needsResult.MatchString(j.If) {
+		return true
+	}
+	for _, s := range j.Steps {
+		if needsResult.MatchString(s.If) || needsResult.MatchString(s.Run) {
+			return true
+		}
+	}
+	return false
+}
+
+// idToken: permissions grant id-token: write (OIDC, used to publish or deploy).
+func idToken(n *yaml.Node) bool {
+	var m map[string]string
+	return n.Decode(&m) == nil && m["id-token"] == "write"
 }
 
 // selfRepo: a checkout of the repository the workflow belongs to.
@@ -790,6 +825,9 @@ func (p *ifParser) unary() string {
 	case strings.HasPrefix(t, "matrix."):
 		p.i++
 		return p.combo[strings.TrimPrefix(t, "matrix.")]
+	case t == "github.event_name": // drafts are evidence for the pull request gate
+		p.i++
+		return "pull_request"
 	case t == "runner.os", t == "runner.arch": // drafts are linux/amd64 tasks
 		p.i++
 		return map[string]string{"runner.os": "Linux", "runner.arch": "X64"}[t]

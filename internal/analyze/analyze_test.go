@@ -122,12 +122,13 @@ func TestEvalIf(t *testing.T) {
 		"failure()":                                             false,
 		"runner.os != 'Windows'":                                true,
 		"runner.os == 'Windows' || runner.arch == 'ARM64'":      false,
+		"github.event_name == 'push'":                           false,
 	} {
 		if v, ok := evalIf(src, combo); !ok || v != want {
 			t.Errorf("%s: %v ok=%v, want %v", src, v, ok, want)
 		}
 	}
-	for _, src := range []string{"github.event_name == 'push'", "steps.x.outputs.y", "contains(matrix.os, 'ubuntu')", "matrix.node ="} {
+	for _, src := range []string{"github.ref == 'refs/heads/main'", "steps.x.outputs.y", "contains(matrix.os, 'ubuntu')", "matrix.node ="} {
 		if _, ok := evalIf(src, combo); ok {
 			t.Errorf("%s: evaluated, want unsupported", src)
 		}
@@ -314,6 +315,46 @@ jobs:
 			if j.Verdict != Skip {
 				t.Errorf("foreign checkout not skipped: %+v", j)
 			}
+		}
+	}
+}
+
+func TestNotChecksPrometheus(t *testing.T) {
+	src := `on: pull_request
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: always() && github.event_name == 'pull_request' && startsWith(github.base_ref, 'release-')
+    steps:
+      - if: ${{ contains(needs.*.result, 'failure') }}
+        run: exit 1
+  publish:
+    runs-on: ubuntu-latest
+    permissions: {contents: read, id-token: write}
+    steps: [{run: make assets}]
+  notes:
+    runs-on: ubuntu-latest
+    steps:
+      - env: {BODY: "${{ github.event.pull_request.body }}"}
+        run: ./check "$BODY"
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: prometheus/promci-artifacts/restore@v1
+      - run: tar xf .tarballs/ui.tgz
+  push-only:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps: [{run: make}]
+`
+	jobs, err := Workflow("ci.yml", []byte(src))
+	if err != nil || len(jobs) != 5 {
+		t.Fatalf("%v %+v", err, jobs)
+	}
+	for _, j := range jobs {
+		if j.Verdict != Skip {
+			t.Errorf("%s: want skip, got %s %q", j.ID, j.Verdict, j.Reasons)
 		}
 	}
 }
