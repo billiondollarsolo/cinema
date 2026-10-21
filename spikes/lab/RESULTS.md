@@ -88,7 +88,7 @@ Each PR appends a Go comment to the project's main entry point, so upstream's pa
 **What it says about savings**
 - **Runner minutes:** the gate replaces whatever Linux work its tasks cover, at a fixed cost of about 25–50 s and 1 billed minute. That's 24–75% here. It goes up as more jobs become tasks: Docker integration tests and cross-builds are the next obvious ones.
 - **Time to green improves only when the critical path is covered.** In these projects the slowest job is usually something a Linux box can't or shouldn't replace: Windows tests, fuzzing, Docker integration. The gate is never slower than upstream when evidence exists; without evidence the parallel gate is needed (finding 16).
-- **Local cost:** serial clean-checkout runs took 2.3 min (cli), 10.7 min (traefik) and 28 min (prometheus) on 16 cores. `-j` (finding 17) targets that.
+- **Local cost:** serial clean-checkout runs took 2.3 min (cli), 10.7 min (traefik) and 28 min (prometheus) on 16 cores. With `-j 4` and stable checkout slots, prometheus's 16 tasks take **11.8 min cold and 11.2 min warm (2.4× faster)**. That's now bounded by the two longest tasks (race suites, about 8.8 min each), which are dominated by running tests that `-count=1` never caches. More workers wouldn't help.
 
 ## Findings and what changed in CInema
 
@@ -119,6 +119,8 @@ Each finding came from a real project and was fixed with a test.
 16. **With no evidence, one gate job is a regression.** First push, forks, contributors without CInema: prometheus's serial gate was 9 of 16 tasks in after 34 min; traefik's cross-build alone took 62 min on a 4-vCPU runner (26 min on the 16-core VPS). Upstream runs those in parallel jobs, 10–23 min. Fix: a parallel gate. A plan job verifies receipts, a matrix runs one job per RUN task, and a gate job is the single required check. Fully reused costs plan + gate only.
 17. **Local runs are serial.** prometheus took 28 min while lint and small checks left cores idle. `cinema run --commit REV -j N` / `push --run -j N` run tasks in parallel, each worker in its own clean checkout.
 18. **Docker-built checks need image fingerprints.** prometheus's 109-runner-minute cross-build runs in `golang-builder:<tag>` images. A floating tag is an input `[tool, --version]` can't capture. A toolchain entry that records an image's resolved digest is needed before it can be a task.
+20. **Random clean-checkout paths defeat path-keyed build caches.** Go without `-trimpath`, and most compilers, key on source paths: a fresh `/tmp/cinema-run-<pid>-x` per run recompiled everything and grew the Go cache to 77 GB. Fix: stable, locked slots per repo, fully reset between runs (ignored files too, so ADR 0002 still holds), swept after 7 days. Security follow-up: slots live in the per-user data dir, not a shared TMPDIR.
+21. **Killed tools leave temp junk.** `/tmp/go-build*` work dirs piled up after go processes were stopped. Each task in a clean checkout now gets a private `TMPDIR` that's removed afterwards.
 19. **Upstream config files come along into mirrors.** `dependabot.yml` opened PRs on the cli mirror. Mirrors should drop bots that act on the repo.
 13. **Security review findings while building P2,** all fixed:
     - Toolchain commands are an allowlist (`[tool, --version]`).
