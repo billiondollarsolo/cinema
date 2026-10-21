@@ -119,6 +119,8 @@ func TestEvalIf(t *testing.T) {
 		"(matrix.node == '18' || matrix.os == 'UBUNTU-LATEST')": true,
 		"success() && matrix.node == 14":                        true,
 		"failure()":                                             false,
+		"runner.os != 'Windows'":                                true,
+		"runner.os == 'Windows' || runner.arch == 'ARM64'":      false,
 	} {
 		if v, ok := evalIf(src, combo); !ok || v != want {
 			t.Errorf("%s: %v ok=%v, want %v", src, v, ok, want)

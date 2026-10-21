@@ -733,6 +733,9 @@ func (p *ifParser) unary() string {
 	case strings.HasPrefix(t, "matrix."):
 		p.i++
 		return p.combo[strings.TrimPrefix(t, "matrix.")]
+	case t == "runner.os", t == "runner.arch": // drafts are linux/amd64 tasks
+		p.i++
+		return map[string]string{"runner.os": "Linux", "runner.arch": "X64"}[t]
 	case t == "true", t == "false", t == "success()", t == "always()":
 		p.i++
 		if t == "false" {
