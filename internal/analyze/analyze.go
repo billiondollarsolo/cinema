@@ -54,6 +54,7 @@ type workflow struct {
 
 type job struct {
 	RunsOn    yaml.Node      `yaml:"runs-on"`
+	If        string         `yaml:"if"`
 	Uses      string         `yaml:"uses"` // reusable workflow
 	Container yaml.Node      `yaml:"container"`
 	Services  map[string]any `yaml:"services"`
@@ -111,8 +112,8 @@ func workflowAt(root, name string, src []byte) ([]Job, error) {
 	if err := yaml.Unmarshal(src, &w); err != nil {
 		return nil, err
 	}
-	if !triggersCI(&w.On) {
-		return nil, nil
+	if !triggersCI(&w.On) || strings.HasPrefix(filepath.Base(name), "copilot-setup-steps.") {
+		return nil, nil // copilot-setup-steps: the Copilot agent's environment, not a check
 	}
 	var out []Job
 	for _, j := range w.Jobs {
@@ -152,6 +153,18 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		skip("calls reusable workflow " + j.Uses)
 		return r
 	}
+	if j.If != "" {
+		switch v, ok := evalIf(j.If, combo); {
+		case ok && !v:
+			skip("job condition is false for this combination (if: " + j.If + ")")
+			return r
+		case statusFn.MatchString(j.If):
+			skip("reports other jobs' results (if: " + j.If + "); not a check")
+			return r
+		case !ok:
+			review("the job is conditional (if: " + j.If + ")")
+		}
+	}
 	r.RunsOn = sub(scalarOrList(&j.RunsOn))
 	switch os := strings.ToLower(r.RunsOn); {
 	case strings.Contains(os, "windows"), strings.Contains(os, "macos"):
@@ -170,6 +183,7 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 
 	p := &Proposal{ID: taskID(id, combo)}
 	var body []string
+	plumbing := false // a step writes $GITHUB_ENV & co.: emulate them between steps
 	env := literalEnv(wfEnv, combo, review)
 	env = append(env, literalEnv(j.Env, combo, review)...)
 	for _, s := range j.Steps {
@@ -208,8 +222,8 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		if strings.Contains(run, "secrets.") || anyEnvMentions(s.Env, "secrets.") {
 			skip("a step uses secrets")
 		}
-		if strings.Contains(run, "GITHUB_ENV") || strings.Contains(run, "GITHUB_PATH") || strings.Contains(run, "GITHUB_OUTPUT") {
-			review("a step writes $GITHUB_ENV/$GITHUB_PATH/$GITHUB_OUTPUT: later steps depend on Actions plumbing")
+		if ghFiles.MatchString(run) {
+			plumbing = true
 		}
 		if sudo.MatchString(run) {
 			review("a step uses sudo (installs or changes the machine): make it a prerequisite of the evidence machine, not part of the task")
@@ -229,6 +243,9 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		}
 		var b strings.Builder
 		b.WriteString("(\n")
+		if plumbing {
+			b.WriteString("  _gh_load\n")
+		}
 		if dir != "" {
 			fmt.Fprintf(&b, "  cd %s\n", shellQuote(sub(dir)))
 		}
@@ -254,6 +271,10 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		for _, e := range env {
 			b.WriteString("export " + e + "\n")
 		}
+		if plumbing {
+			b.WriteString(ghPreamble)
+			note("$GITHUB_ENV, $GITHUB_PATH and $GITHUB_OUTPUT are emulated with temp files, loaded before each step")
+		}
 		b.WriteString(strings.Join(body, "\n"))
 		p.Body = b.String()
 		r.Proposal = p
@@ -261,9 +282,34 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 	return r
 }
 
-// triggersCI: on push or pull_request (string, list or map form).
+// ghPreamble gives the steps Actions' step-to-step files: lines appended to
+// $GITHUB_ENV (NAME=value or NAME<<DELIM heredocs) and $GITHUB_PATH are
+// applied before each later step; $GITHUB_OUTPUT is written but only read
+// through ${{ steps.* }}, which is flagged separately.
+const ghPreamble = `export GITHUB_ENV=$(mktemp) GITHUB_PATH=$(mktemp) GITHUB_OUTPUT=$(mktemp) GITHUB_STEP_SUMMARY=/dev/null
+trap 'rm -f "$GITHUB_ENV" "$GITHUB_PATH" "$GITHUB_OUTPUT"' EXIT
+_gh_load() {
+  local l n d v x p
+  while IFS= read -r l; do
+    n=${l%%=*}
+    if [[ $n == *'<<'* ]]; then
+      n=${l%%<<*} d=${l#*<<} v=
+      while IFS= read -r x && [[ $x != "$d" ]]; do v+=${v:+$'\n'}$x; done
+      export "$n=$v"
+    elif [[ $l == *=* ]]; then
+      export "$n=${l#*=}"
+    fi
+  done <"$GITHUB_ENV"
+  while IFS= read -r p; do [[ -n $p ]] && PATH=$p:$PATH; done <"$GITHUB_PATH"
+}
+`
+
+// triggersCI: on pull_request, or on push to any branch. A workflow that runs
+// only on pushes to named branches or tags (no pull_request) is post-merge:
+// releases and deploys, not checks a PR waits for.
 func triggersCI(n *yaml.Node) bool {
 	var names []string
+	var push *yaml.Node
 	switch n.Kind {
 	case yaml.ScalarNode:
 		names = []string{n.Value}
@@ -274,9 +320,26 @@ func triggersCI(n *yaml.Node) bool {
 	case yaml.MappingNode:
 		for i := 0; i < len(n.Content); i += 2 {
 			names = append(names, n.Content[i].Value)
+			if n.Content[i].Value == "push" {
+				push = n.Content[i+1]
+			}
 		}
 	}
-	return slices.Contains(names, "push") || slices.Contains(names, "pull_request")
+	if slices.Contains(names, "pull_request") || slices.Contains(names, "pull_request_target") {
+		return true
+	}
+	if !slices.Contains(names, "push") {
+		return false
+	}
+	if push != nil && push.Kind == yaml.MappingNode {
+		for i := 0; i < len(push.Content); i += 2 {
+			k, v := push.Content[i].Value, push.Content[i+1]
+			if k == "tags" || k == "branches" && !slices.ContainsFunc(v.Content, func(b *yaml.Node) bool { return b.Value == "**" || b.Value == "*" }) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // expand implements GitHub's matrix expansion: the cartesian product of list
@@ -377,6 +440,8 @@ func agrees(inc, c map[string]string) bool {
 }
 
 var (
+	statusFn    = regexp.MustCompile(`\b(failure|cancelled)\(\)`)
+	ghFiles     = regexp.MustCompile(`\$\{?GITHUB_(ENV|PATH|OUTPUT)\b`)
 	sudo        = regexp.MustCompile(`(^|[\s;&|(])sudo\s`)
 	pipeToShell = regexp.MustCompile(`(curl|wget)\b[^|\n]*\|\s*(sudo\s+)?(ba)?sh\b`)
 	floating    = regexp.MustCompile(`@latest\b|/HEAD/|/(master|main)/[^\s]*\.(sh|py)\b`)

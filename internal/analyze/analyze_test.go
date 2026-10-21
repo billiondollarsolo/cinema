@@ -3,6 +3,7 @@ package analyze
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -191,5 +192,47 @@ func TestNetworkInputsFlagged(t *testing.T) {
 		if want := j.ID != "c"; (j.Verdict == Review) != want {
 			t.Errorf("%s: %s %v", j.ID, j.Verdict, j.Reasons)
 		}
+	}
+}
+
+func TestNotChecks(t *testing.T) {
+	for name, src := range map[string]string{
+		"publish.yml":             "on: {push: {branches: [main]}}\njobs: {x: {runs-on: ubuntu-latest, steps: [{run: make}]}}\n",
+		"tags.yml":                "on: {push: {tags: ['v*']}}\njobs: {x: {runs-on: ubuntu-latest, steps: [{run: make}]}}\n",
+		"copilot-setup-steps.yml": "on: [push, pull_request]\njobs: {x: {runs-on: ubuntu-latest, steps: [{run: make}]}}\n",
+	} {
+		if jobs, _ := Workflow(name, []byte(src)); len(jobs) != 0 {
+			t.Errorf("%s analyzed: %v", name, jobs)
+		}
+	}
+	jobs, _ := Workflow("ci.yml", []byte("on: {push: {branches: ['**']}}\njobs:\n"+
+		"  test: {runs-on: ubuntu-latest, steps: [{run: make}]}\n"+
+		"  failed: {needs: test, if: '(!cancelled() && failure())', runs-on: ubuntu-latest, steps: [{run: echo failed}]}\n"))
+	for _, j := range jobs {
+		if want := map[string]string{"test": Task, "failed": Skip}[j.ID]; j.Verdict != want {
+			t.Errorf("%s: %s %v, want %s", j.ID, j.Verdict, j.Reasons, want)
+		}
+	}
+}
+
+// The emulated step files behave like Actions': env and path written by one
+// step are visible to the next, heredoc values included, and nothing is left behind.
+func TestGitHubEnvEmulated(t *testing.T) {
+	src := "on: pull_request\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n" +
+		"      - run: |\n          echo FOO=bar >> \"$GITHUB_ENV\"\n          printf 'ML<<EOF\\nl1\\nl2\\nEOF\\n' >> $GITHUB_ENV\n          echo /opt/x/bin >> $GITHUB_PATH\n          echo \"$GITHUB_ENV\" > envfile\n" +
+		"      - run: |\n          test \"$FOO\" = bar && test \"$ML\" = \"$(printf 'l1\\nl2')\" && case :$PATH: in *:/opt/x/bin:*) ;; *) exit 9;; esac\n"
+	jobs, err := Workflow("ci.yml", []byte(src))
+	if err != nil || len(jobs) != 1 || jobs[0].Verdict != Task || jobs[0].Proposal == nil {
+		t.Fatalf("%v %+v", err, jobs)
+	}
+	d := t.TempDir()
+	cmd := exec.Command("bash", "-eo", "pipefail", "-c", jobs[0].Proposal.Body)
+	cmd.Dir = d
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s\n%s", err, out, jobs[0].Proposal.Body)
+	}
+	b, _ := os.ReadFile(filepath.Join(d, "envfile"))
+	if _, err := os.Stat(strings.TrimSpace(string(b))); !os.IsNotExist(err) {
+		t.Errorf("temp file %s left behind", b)
 	}
 }
