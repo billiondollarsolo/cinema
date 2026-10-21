@@ -27,12 +27,13 @@ var DefaultPolicy = Policy{
 }
 
 type MaintainStats struct {
-	Skipped      bool  `json:"skipped"` // ran within the last 24 h
-	RunsDeleted  int64 `json:"runs_deleted"`
-	LogsExpired  int64 `json:"logs_expired"`
-	LogsEvicted  int64 `json:"logs_evicted"` // dropped by the size cap
-	BlobsDeleted int   `json:"blobs_deleted"`
-	BytesFreed   int64 `json:"bytes_freed"`
+	Skipped       bool  `json:"skipped"` // ran within the last 24 h
+	RunsDeleted   int64 `json:"runs_deleted"`
+	LogsExpired   int64 `json:"logs_expired"`
+	LogsEvicted   int64 `json:"logs_evicted"` // dropped by the size cap
+	BlobsDeleted  int   `json:"blobs_deleted"`
+	BytesFreed    int64 `json:"bytes_freed"`
+	CachesDeleted int   `json:"caches_deleted"` // fingerprint caches of repos unused for RunMaxAge
 }
 
 const maintainEvery = 24 * time.Hour
@@ -91,6 +92,7 @@ func (s *Store) Maintain(force bool) (MaintainStats, error) {
 			}
 		}
 	}
+	st.CachesDeleted = s.sweepFSCache()
 	_, err = s.db.Exec(`INSERT INTO meta (k, v) VALUES ('last_maintain', ?)
 		ON CONFLICT(k) DO UPDATE SET v=excluded.v`, strconv.FormatInt(now.UnixMilli(), 10))
 	return st, err
@@ -150,6 +152,27 @@ func (s *Store) enforceCap(files map[string]blobFile) (int64, error) {
 		return nil
 	})
 	return evicted, err
+}
+
+// sweepFSCache drops fingerprint caches (one per repo, see snapshot.CachePath)
+// not written for RunMaxAge, and temp files from interrupted saves.
+func (s *Store) sweepFSCache() int {
+	dir := filepath.Join(s.dir, "fscache")
+	entries, _ := os.ReadDir(dir)
+	n := 0
+	for _, e := range entries {
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		age := s.now().Sub(fi.ModTime())
+		if (filepath.Ext(e.Name()) == ".tmp" && age > time.Hour) || age > s.Policy.RunMaxAge {
+			if os.Remove(filepath.Join(dir, e.Name())) == nil {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 func (s *Store) referenced() (map[string]bool, error) {

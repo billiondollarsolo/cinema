@@ -73,7 +73,11 @@ CREATE TABLE IF NOT EXISTS runs (
 	stdout_truncated INTEGER,
 	stderr_blob      TEXT,
 	stderr_total     INTEGER,
-	stderr_truncated INTEGER
+	stderr_truncated INTEGER,
+	repo_root        TEXT,              -- NULL outside a git repo
+	cwd_rel          TEXT,              -- cwd relative to repo_root
+	source_before    TEXT,              -- "sha256:…" whole-source fingerprint (plan §5)
+	source_after     TEXT               -- differs from before → SOURCE_CHANGED_DURING_RUN
 );
 CREATE INDEX IF NOT EXISTS runs_started ON runs(started_at);
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
@@ -92,7 +96,7 @@ func Open(dir string) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{db: db, dir: dir, Policy: DefaultPolicy, now: time.Now}
-	if _, err := db.Exec(schema); err != nil {
+	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
@@ -105,6 +109,28 @@ func Open(dir string) (*Store, error) {
 }
 
 func (s *Store) Close() error { return s.db.Close() }
+
+// migrate brings the schema to the current version (PRAGMA user_version).
+// Add a step per version; never edit a released step.
+func migrate(db *sql.DB) error {
+	var v int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil {
+		return err
+	}
+	if v < 1 {
+		if _, err := db.Exec(schema + `PRAGMA user_version = 1;`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Source is where a run happened and the tree it saw. Zero value = outside a repo
+// or fingerprinting failed: the run is kept as history and is never eligible.
+type Source struct {
+	RepoRoot, CwdRel string
+	Before, After    string
+}
 
 // BeginRun records that a run is starting. Until FinishRun commits, the row is
 // StateRecording and can never be treated as a result.
@@ -121,7 +147,7 @@ func (s *Store) BeginRun(argv []string, cwd string) (string, error) {
 
 // FinishRun makes output durable first, then flips the state in one statement,
 // so a crash at any point leaves either StateRecording (→ incomplete) or a complete row.
-func (s *Store) FinishRun(id string, r record.Result) (string, error) {
+func (s *Store) FinishRun(id string, r record.Result, src Source) (string, error) {
 	outBlob, err := s.putBlob(r.Stdout.Bytes())
 	if err != nil {
 		return "", err
@@ -136,10 +162,12 @@ func (s *Store) FinishRun(id string, r record.Result) (string, error) {
 	}
 	res, err := s.db.Exec(`UPDATE runs SET state=?, path=?, started_at=?, duration_ms=?, exit_code=?, signal=?,
 		canceled=?, leftovers=?, stdout_blob=?, stdout_total=?, stdout_truncated=?,
-		stderr_blob=?, stderr_total=?, stderr_truncated=? WHERE id=? AND state=?`,
+		stderr_blob=?, stderr_total=?, stderr_truncated=?,
+		repo_root=?, cwd_rel=?, source_before=?, source_after=? WHERE id=? AND state=?`,
 		state, r.Path, r.Start.UnixMilli(), r.Duration.Milliseconds(), r.ExitCode, nullStr(r.Signal),
 		r.Canceled, r.Leftovers, outBlob, r.Stdout.Total, r.Stdout.Truncated,
-		errBlob, r.Stderr.Total, r.Stderr.Truncated, id, StateRecording)
+		errBlob, r.Stderr.Total, r.Stderr.Truncated,
+		nullStr(src.RepoRoot), nullStr(src.CwdRel), nullStr(src.Before), nullStr(src.After), id, StateRecording)
 	if err != nil {
 		return "", err
 	}

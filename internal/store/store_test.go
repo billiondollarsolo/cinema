@@ -33,7 +33,7 @@ func addRun(t *testing.T, s *Store, code int, out string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.FinishRun(id, result(code, out)); err != nil {
+	if _, err := s.FinishRun(id, result(code, out), Source{}); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -62,7 +62,7 @@ func TestLifecycle(t *testing.T) {
 	if s.col(t, pass, "stderr_blob") != nil {
 		t.Fatal("empty stream stored a blob")
 	}
-	if _, err := s.FinishRun(pass, result(0, "")); err == nil {
+	if _, err := s.FinishRun(pass, result(0, ""), Source{}); err == nil {
 		t.Fatal("finished a run twice")
 	}
 }
@@ -84,7 +84,7 @@ func TestCrashLeavesIncomplete(t *testing.T) { // ACC-066
 	if got := s.col(t, alive, "state"); got != StateRecording {
 		t.Fatalf("live recorder: %v", got)
 	}
-	if _, err := s.FinishRun(id, result(0, "")); err == nil {
+	if _, err := s.FinishRun(id, result(0, ""), Source{}); err == nil {
 		t.Fatal("incomplete run became finishable")
 	}
 }
@@ -104,7 +104,7 @@ func TestConcurrentWriters(t *testing.T) { // ACC-051
 			for range 15 {
 				id, err := s.BeginRun([]string{"x"}, "/r")
 				if err == nil {
-					_, err = s.FinishRun(id, result(0, "same output"))
+					_, err = s.FinishRun(id, result(0, "same output"), Source{})
 				}
 				if err != nil {
 					t.Error(err)
@@ -217,5 +217,23 @@ func TestUnwritableDir(t *testing.T) { // ACC-006 (store side; CLI keeps the chi
 	t.Cleanup(func() { os.Chmod(dir, 0o700) })
 	if _, err := Open(filepath.Join(dir, "sub")); err == nil {
 		t.Fatal("opened a store in an unwritable dir")
+	}
+}
+
+func TestSweepFSCache(t *testing.T) { // §13.1 fingerprint caches
+	dir := t.TempDir()
+	s := open(t, dir)
+	os.MkdirAll(filepath.Join(dir, "fscache"), 0o700)
+	used := filepath.Join(dir, "fscache", "used.gob")
+	stale := filepath.Join(dir, "fscache", "stale.gob")
+	os.WriteFile(used, nil, 0o600)
+	os.WriteFile(stale, nil, 0o600)
+	old := time.Now().Add(-100 * 24 * time.Hour)
+	os.Chtimes(stale, old, old)
+	if st, _ := s.Maintain(true); st.CachesDeleted != 1 {
+		t.Fatalf("deleted %d caches, want 1", st.CachesDeleted)
+	}
+	if _, err := os.Stat(used); err != nil {
+		t.Fatal("recent cache removed")
 	}
 }

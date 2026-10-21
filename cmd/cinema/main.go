@@ -7,8 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/billiondollarsolo/cinema/internal/record"
+	"github.com/billiondollarsolo/cinema/internal/snapshot"
 	"github.com/billiondollarsolo/cinema/internal/store"
 )
 
@@ -64,10 +67,12 @@ func cmdExec(args []string) int {
 
 	// Recording problems are reported, never fatal: the child runs and its exit
 	// code is returned regardless (plan §4.1, ACC-006).
-	st, runID, recErr := beginRecording(argv)
+	st, dataDir, runID, recErr := beginRecording(argv)
 	if st != nil {
 		defer st.Close()
 	}
+	fp := newFingerprinter(dataDir)
+	src := fp.before()
 
 	res, err := record.Run(ctx, opts)
 	if err != nil && res.Start.IsZero() {
@@ -85,15 +90,19 @@ func cmdExec(args []string) int {
 	if res.Leftovers {
 		fmt.Fprintln(os.Stderr, "cinema exec: stopped processes the command left running")
 	}
+	src.After = fp.after()
+	if src.Before != "" && src.After != "" && src.Before != src.After {
+		fmt.Fprintln(os.Stderr, "cinema exec: the command changed source files; this run can't certify the tree")
+	}
 	state := ""
 	if recErr == nil {
-		state, recErr = st.FinishRun(runID, res)
+		state, recErr = st.FinishRun(runID, res, src)
 	}
 	if recErr != nil {
 		fmt.Fprintf(os.Stderr, "cinema exec: run not recorded: %v\n", recErr)
 	}
 	if *recordJSON != "" {
-		if err := writeJSON(*recordJSON, runID, state, res); err != nil {
+		if err := writeJSON(*recordJSON, runID, state, src, res); err != nil {
 			fmt.Fprintf(os.Stderr, "cinema exec: --record-json: %v\n", err)
 		}
 	}
@@ -105,31 +114,90 @@ func cmdExec(args []string) int {
 	return res.ExitCode
 }
 
-func beginRecording(argv []string) (*store.Store, string, error) {
-	dir, err := store.DataDir()
-	if err != nil {
-		return nil, "", err
+func beginRecording(argv []string) (st *store.Store, dataDir, runID string, err error) {
+	if dataDir, err = store.DataDir(); err != nil {
+		return nil, "", "", err
 	}
-	st, err := store.Open(dir)
-	if err != nil {
-		return nil, "", err
+	if st, err = store.Open(dataDir); err != nil {
+		return nil, dataDir, "", err
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
-		return st, "", err
+		return st, dataDir, "", err
 	}
-	id, err := st.BeginRun(argv, cwd)
-	return st, id, err
+	runID, err = st.BeginRun(argv, cwd)
+	return st, dataDir, runID, err
 }
 
-func writeJSON(path, runID, state string, res record.Result) error {
+// fingerprinter snapshots the enclosing git repo before and after a run.
+// Failures are reported and leave the fingerprint empty (never eligible).
+type fingerprinter struct {
+	root, cwdRel, cachePath string
+	cache                   *snapshot.Cache
+}
+
+func newFingerprinter(dataDir string) *fingerprinter {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return &fingerprinter{}
+	}
+	root, err := snapshot.RepoRoot(cwd)
+	if err != nil {
+		return &fingerprinter{} // not in a git repo: history only
+	}
+	// RepoRoot resolves symlinks (macOS /tmp → /private/tmp); match it.
+	if real, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = real
+	}
+	rel, err := filepath.Rel(root, cwd)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+		fmt.Fprintf(os.Stderr, "cinema exec: can't place %s inside repo %s\n", cwd, root)
+		return &fingerprinter{}
+	}
+	f := &fingerprinter{root: root, cwdRel: filepath.ToSlash(rel)}
+	if dataDir != "" {
+		f.cachePath = snapshot.CachePath(dataDir, root)
+		f.cache = snapshot.LoadCache(f.cachePath)
+	}
+	return f
+}
+
+func (f *fingerprinter) before() store.Source {
+	return store.Source{RepoRoot: f.root, CwdRel: f.cwdRel, Before: f.take()}
+}
+
+func (f *fingerprinter) after() string {
+	d := f.take()
+	if f.cachePath != "" {
+		_ = f.cache.Save(f.cachePath) // a lost cache only costs re-hashing
+	}
+	return d
+}
+
+func (f *fingerprinter) take() string {
+	if f.root == "" {
+		return ""
+	}
+	s, err := snapshot.Take(f.root, nil, f.cache)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cinema exec: fingerprint: %v\n", err)
+		return ""
+	}
+	return s.Digest
+}
+
+func writeJSON(path, runID, state string, src store.Source, res record.Result) error {
 	b, err := json.MarshalIndent(struct {
 		SchemaVersion int    `json:"schema_version"`
 		RunID         string `json:"run_id,omitempty"` // empty when the run wasn't recorded
 		State         string `json:"state,omitempty"`
+		RepoRoot      string `json:"repo_root,omitempty"`
+		CwdRel        string `json:"cwd_rel,omitempty"`
+		SourceBefore  string `json:"source_before,omitempty"`
+		SourceAfter   string `json:"source_after,omitempty"`
 		record.Result
 		DurationMS int64 `json:"duration_ms"`
-	}{1, runID, state, res, res.Duration.Milliseconds()}, "", "  ")
+	}{1, runID, state, src.RepoRoot, src.CwdRel, src.Before, src.After, res, res.Duration.Milliseconds()}, "", "  ")
 	if err != nil {
 		return err
 	}
