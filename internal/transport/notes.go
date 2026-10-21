@@ -5,6 +5,7 @@ package transport
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,9 +85,15 @@ func Squash(root, ref string) error {
 
 // Fetch pulls every cinema notes ref from remote, replacing local copies
 // (remote is authoritative for others' keys; our own ref is rewritten on push).
-func Fetch(root, remote string, extraArgs ...string) error {
-	args := append([]string{"fetch", "--quiet", "--no-tags"}, extraArgs...)
-	args = append(args, remote, "+"+RefPrefix+"*:"+RefPrefix+"*")
+// token, if set, is sent as a one-shot auth header and never written to
+// .git/config, so later steps can't read it (P0-2: private repos need it).
+func Fetch(root, remote, token string) error {
+	var args []string
+	if token != "" {
+		auth := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
+		args = append(args, "-c", "http.extraheader=AUTHORIZATION: basic "+auth)
+	}
+	args = append(args, "fetch", "--quiet", "--no-tags", remote, "+"+RefPrefix+"*:"+RefPrefix+"*")
 	_, err := git(root, nil, args...)
 	return err
 }

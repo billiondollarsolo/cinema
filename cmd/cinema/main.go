@@ -21,12 +21,13 @@ commands:
   dashboard [--port N] [--allow-host H] [--no-open]         local web page: checks, runs, logs
   keys init | export                                        this machine's signing key
   push [--remote R] [--notes-only] [--commit REV]...        sign evidence for pushed commits, push branch + notes
+  verify --event FILE [--execute] [--report FILE]           the CI gate: reuse verified receipts, run the rest
 `
 
 func main() {
 	// ponytail: map + flag.FlagSet per verb; Cobra only if this stops being readable.
 	cmds := map[string]func([]string) int{
-		"init": cmdInit, "exec": cmdExec, "run": cmdRun, "status": cmdStatus, "explain": cmdExplain, "trust": cmdTrust, "dashboard": cmdDashboard, "keys": cmdKeys, "push": cmdPush,
+		"init": cmdInit, "exec": cmdExec, "run": cmdRun, "status": cmdStatus, "explain": cmdExplain, "trust": cmdTrust, "dashboard": cmdDashboard, "keys": cmdKeys, "push": cmdPush, "verify": cmdVerify,
 	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)

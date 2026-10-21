@@ -92,7 +92,7 @@ func TestTwoMachinesSeparateRefs(t *testing.T) { // ACC-032
 			t.Fatal(r.EvidenceErr)
 		}
 	}
-	if err := Fetch(a, "origin"); err != nil {
+	if err := Fetch(a, "origin", ""); err != nil {
 		t.Fatal(err)
 	}
 	refs, _ := Refs(a)
