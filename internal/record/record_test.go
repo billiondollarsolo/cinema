@@ -89,8 +89,39 @@ func TestBoundedCapture(t *testing.T) { // ACC-007
 	if term.Len() != 100000 {
 		t.Errorf("terminal got %d bytes, want all 100000", term.Len())
 	}
-	if r.Stdout.Total != 100000 || len(r.Stdout.Data) != 1000 || !r.Stdout.Truncated {
-		t.Errorf("capture total=%d kept=%d truncated=%v", r.Stdout.Total, len(r.Stdout.Data), r.Stdout.Truncated)
+	if r.Stdout.Total != 100000 || !r.Stdout.Truncated {
+		t.Errorf("capture total=%d truncated=%v", r.Stdout.Total, r.Stdout.Truncated)
+	}
+}
+
+func TestCaptureKeepsHeadAndTail(t *testing.T) {
+	for _, chunk := range []int{1, 7, 64, 5000} { // write sizes smaller and larger than the ring
+		c := Capture{Limit: 100}
+		var all []byte
+		for i := 0; len(all) < 1000; i++ {
+			b := make([]byte, chunk)
+			for j := range b {
+				b[j] = byte('a' + (len(all)+j)%26)
+			}
+			all = append(all, b...)
+			c.Write(b)
+		}
+		got := string(c.Bytes())
+		head, tail := string(all[:20]), string(all[len(all)-80:])
+		marker := "\n… cinema: " + strconv.Itoa(len(all)-100) + " bytes omitted …\n"
+		if got != head+marker+tail {
+			t.Errorf("chunk %d: got %q", chunk, got)
+		}
+	}
+	c := Capture{Limit: 100}
+	c.Write([]byte("small"))
+	if string(c.Bytes()) != "small" || c.Truncated {
+		t.Errorf("under limit: %q truncated=%v", c.Bytes(), c.Truncated)
+	}
+	c = Capture{Limit: 100}
+	c.Write(make([]byte, 100)) // exactly at the limit: complete, not truncated
+	if len(c.Bytes()) != 100 || c.Truncated {
+		t.Errorf("at limit: len %d truncated=%v", len(c.Bytes()), c.Truncated)
 	}
 }
 

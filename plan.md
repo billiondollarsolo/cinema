@@ -158,7 +158,7 @@ cinema exec -- bash -o pipefail -c 'go test ./... | tee out.txt'   # shell only 
 - Preserve cwd, environment, stdin, stdout, stderr, and **the child's exit code**. CInema never turns a failure into 0.
 - Recording failure is reported on stderr and produces **no reusable receipt**. The child's exit code is still returned.
 - Signals: forward SIGINT/SIGTERM to the process group. On timeout or cancel, terminate the group, wait a grace period, then kill.
-- Output: tee to the terminal unchanged, plus a bounded capture to a blob (default 10 MiB per stream; truncation recorded).
+- Output: tee to the terminal unchanged, plus a bounded capture to a blob (default 10 MiB per stream). Past the limit, keep the first 20% and the last 80% with an explicit `N bytes omitted` marker, so failure summaries (printed last) always survive. Raise the limit once capture streams to disk.
 - Machine-readable metadata never goes to the child's stdout. Use `--record-json PATH`.
 - Pipe mode only in the MVP. PTY mode is deferred (`vision §10.2`).
 
