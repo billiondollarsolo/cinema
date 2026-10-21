@@ -71,7 +71,9 @@ How we got there (each step is a finding):
 2. `787b733`: the task file changed to the official lint binary. Only tasks.yaml changed, so the 13 existing runs stayed valid (ADR 0001) and only lint re-ran, 90 s. It still failed: polluted tool cache (finding 15).
 3. `3764398`: the lint cache is isolated per binary. Lint passes, 16 receipts, 180 s.
 
-### traefik: in progress
+### traefik (`mjtechguy/cinema-lab-traefik`)
+
+13 tasks: build (linux/amd64 and the 18 cross targets), lint, validate-generate, validate-vendor, webui build and unit tests, unit tests, and the integration suites as 5 `exclusive` groups (core-a, core-b, docker, k8s, kv). Clean-checkout evidence with `-j 3` takes 23 min on the VPS. The integration groups take 1–9 min each and run alone (finding 28).
 
 ## PR experiments: real code change, merge-commit gate, same PR as upstream
 
@@ -80,7 +82,8 @@ Each PR appends a Go comment to the project's main entry point, so upstream's pa
 | PR | Gate | Upstream PR CI (same PR) | Covered by the gate | Not covered (why) |
 |---|---|---|---|---|
 | [prometheus#1](https://github.com/mjtechguy/cinema-lab-prometheus/pull/1) | **PASS, 16/16 reused, 24 s** | 24 jobs, 128.7 runner-min, 144 billed, 16.6 min to green; passed | Go tests, More Go tests, lint, 32-bit, UI, compliance, parser: **37 runner-min (29%)** | Windows tests (16.6 min, the critical path; different platform), fuzzing ×4 (33 min; never reusable), cross-build (21.5 min; Docker, needs image fingerprinting), previous-Go, upgrade, mixins |
-| [traefik#1](https://github.com/mjtechguy/cinema-lab-traefik/pull/1) | **PASS, 8/8 reused, 23 s** | 39 jobs, 119.4 runner-min, 138 billed, 8.7 min to green; passed | Build Binaries (19 targets), Validate, Test Unit: **~90 runner-min (75%)** | Test Integration (30 runner-min, 8.7 min, the critical path; Docker, next to add) |
+| [traefik#1](https://github.com/mjtechguy/cinema-lab-traefik/pull/1) | **PASS, 8/8 reused, 23 s** | 39 jobs, 119.4 runner-min, 138 billed, 8.7 min to green; passed | Build Binaries (19 targets), Validate, Test Unit: **~90 runner-min (75%)** | Test Integration (30 runner-min, 8.7 min, the critical path; Docker, added in #3) |
+| [traefik#3](https://github.com/mjtechguy/cinema-lab-traefik/pull/3) | **PASS, 13/13 reused, 36 s, 0.4 runner-min** | 39 jobs, 127.1 runner-min, 9.2 min to green; passed | Build Binaries, Validate, Test Unit, **Test Integration**: **~127 runner-min (~100%)**, including the critical path | nothing on Linux |
 | [cli#3](https://github.com/mjtechguy/cinema-lab-cli/pull/3) | **PASS, 6/7 reused, 51 s** (govulncheck inline) | 10 jobs, 32 runner-min, 38 billed, 11 min to green; passed | Ubuntu build/test, lint: **7.7 runner-min (24%)** | macOS + Windows legs (19 min), CodeQL (upload-only), integration tests (need a GitHub token) |
 | [vite#1](https://github.com/mjtechguy/cinema-lab-vite/pull/1) | **PASS, 6/6 reused, 13 s** | 9 jobs, 25.2 runner-min, 31 billed, 4.9 min to green; **failed on Windows only**, every Ubuntu job passed | Lint job (81 s) fully; the Node 24 Ubuntu Build&Test partially (unit tests, not its Playwright e2e suites): **~2–6 runner-min (10–25%)** | Node 20/22/26 cells (the evidence machine has only Node 24, and Node is fingerprinted to the patch), macOS, Windows, e2e (Playwright) |
 
@@ -132,21 +135,24 @@ Each finding came from a real project and was fixed with a test.
 29. **Failed runs need to be readable from a terminal.** On a headless box there was no way to see a failed task's output (no sqlite3, and the dashboard needs a browser). `cinema log [--failed] <task|run-id>` prints it.
 30. **No lockfile means no exact reuse.** eslint resolves dependency versions only at install time, after the environment is fingerprinted and in a way the gate can't check without installing. Evidence is bound to source and Node version only, with a short `max_age`. This is a limit, not a bug.
 
-## The parallel gate with no evidence (fork-like): first runs
-
-| Project | Parallel gate wall | Task jobs | Upstream median PR time to green |
-|---|---:|---:|---:|
-| prettier | 5.2 min | 8 | 7.2 min |
-| eslint | 3.7 min | 6 | 12.6 min |
-
-With no receipts, the gate is no longer a regression: each matrix job runs one task. (Three task jobs failed on these first runs because of task-definition and formatting issues, findings 25–26. They were fixed before the evidence runs.)
-
 19. **Upstream config files come along into mirrors.** `dependabot.yml` opened PRs on the cli mirror. Mirrors should drop bots that act on the repo.
 13. **Security review findings while building P2,** all fixed:
     - Toolchain commands are an allowlist (`[tool, --version]`).
     - The gate fails closed when the base config can't be confirmed.
     - The dashboard URL token is single-use.
     - Notes are size-checked before they're read.
+31. **One task per upstream matrix leg, or near it.** The parallel gate's no-evidence wall time is its slowest task. A task that loops over a matrix upstream runs in parallel (traefik's 18 cross targets) turns minutes into an hour. Split such loops into several tasks. With evidence it makes no difference: the gate reused all 13 tasks in 36 s.
+32. **Container tasks can leave root-owned files in a checkout slot.** Then `git clean` can't reset the slot, and nothing can delete it without root. CInema now fails with the slot path, the `sudo rm -rf` to remove it, and the fix: run containers with `--user "$(id -u):$(id -g)"`. prometheus's crossbuild already does, and its outputs are user-owned.
+
+## The parallel gate with no evidence (fork-like): first runs
+
+| Project | Parallel gate wall | Task jobs | Upstream median PR time to green |
+|---|---:|---:|---:|
+| prettier | 5.2 min | 8 | 7.2 min |
+| eslint | 3.7 min | 6 | 12.6 min |
+| traefik ([#2](https://github.com/mjtechguy/cinema-lab-traefik/pull/2)) | **72 min** (12 of 13 jobs done in ≤ 12 min; `build-cross` 71 min) | 13 | 9.1 min (same PR, 115 runner-min) |
+
+With no receipts, the gate is no longer a regression *when each task is about one upstream job*: each matrix job runs one task. traefik's `build-cross` packs 18 upstream matrix legs into one task, and so it ran 71 min serially on a 4-vCPU runner versus 4.6 min per upstream leg (finding 31). It is now 6 tasks of 3 targets, about 12 min each, the same as the longest integration group. (Three task jobs failed on these first runs because of task-definition and formatting issues, findings 25–26. They were fixed before the evidence runs.)
 
 ## Local runs (`run-lab.sh`, VPS, root pass)
 
