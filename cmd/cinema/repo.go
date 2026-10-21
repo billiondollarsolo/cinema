@@ -32,6 +32,7 @@ type repo struct {
 	cache        *snapshot.Cache
 	cachePath    string
 	snaps        map[string]string // memoized source digests by extra-inputs key
+	dataDir      string            // for provisioned runtimes
 }
 
 func openRepo() (*repo, error) {
@@ -67,6 +68,7 @@ func openRepoAt(cwd string) (*repo, error) {
 	r.cfg, r.cfgErr = task.Load(root)
 	if r.st != nil {
 		r.cachePath = snapshot.CachePath(dataDir, root)
+		r.dataDir = dataDir
 		r.cache = snapshot.LoadCache(r.cachePath)
 	}
 	return r, nil
@@ -112,7 +114,11 @@ func (r *repo) current(t *task.Task) (plan.Current, task.Env, error) {
 	if t.RunsCommands() && !r.trusted() {
 		return cur, task.Env{}, errUntrusted
 	}
-	env, err := t.EnvFingerprint(r.root)
+	renv, err := t.RuntimeEnv(r.dataDir)
+	if err != nil {
+		return cur, task.Env{}, err
+	}
+	env, err := t.EnvFingerprint(r.root, renv)
 	if err != nil {
 		return cur, env, err
 	}

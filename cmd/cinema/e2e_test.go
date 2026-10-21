@@ -609,3 +609,21 @@ func TestRunParallelExclusive(t *testing.T) {
 		t.Fatalf("exclusive tasks collided under -j: %d\n%s", code, out)
 	}
 }
+
+func TestExecOfRuntimePinnedTaskIsHistoryOnly(t *testing.T) {
+	e := newEnv(t)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  pinned: {argv: [sh, -c, "true"], platform: any, runtime: {go: 1.26.10}, reuse: {allowed: true, max_age: 1h}}
+`)
+	e.cinema("trust")
+	cmd := exec.Command(bin, "exec", "--", "sh", "-c", "true")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "pins a runtime") {
+		t.Fatalf("no hint:\n%s", out)
+	}
+	if got := e.states()["pinned"]; got != "missing/NO_RECEIPT" {
+		t.Fatalf("exec of a runtime-pinned task counted: %s", got)
+	}
+}

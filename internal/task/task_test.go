@@ -174,17 +174,17 @@ func TestEnvFingerprint(t *testing.T) { // ACC-019
 	}
 	version("1.0")
 	native := mk(runtime.GOOS + "/" + runtime.GOARCH)
-	a, err := native.EnvFingerprint(root)
+	a, err := native.EnvFingerprint(root, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	version("1.1")
-	if b, _ := native.EnvFingerprint(root); b.Digest == a.Digest {
+	if b, _ := native.EnvFingerprint(root, nil); b.Digest == a.Digest {
 		t.Fatal("toolchain version change not detected")
 	}
 	version("1.0")
 	t.Setenv("CINEMA_TEST_VAR", "")
-	if b, _ := native.EnvFingerprint(root); b.Digest == a.Digest {
+	if b, _ := native.EnvFingerprint(root, nil); b.Digest == a.Digest {
 		t.Fatal("set-but-empty env var looks like unset")
 	}
 	os.Unsetenv("CINEMA_TEST_VAR")
@@ -195,10 +195,10 @@ func TestEnvFingerprint(t *testing.T) { // ACC-019
 	}
 	// A task for another platform still fingerprints this machine's real platform,
 	// so the run can never match the other platform's expectation.
-	if b, _ := mk(other).EnvFingerprint(root); b.Digest != a.Digest || b.Inputs[0] != "platform="+Platform() {
+	if b, _ := mk(other).EnvFingerprint(root, nil); b.Digest != a.Digest || b.Inputs[0] != "platform="+Platform() {
 		t.Fatalf("foreign-platform task: %v", b.Inputs)
 	}
-	if b, _ := mk("any").EnvFingerprint(root); b.Digest == a.Digest || b.Inputs[0] != "platform=any" || !strings.HasPrefix(b.Inputs[1], "user=") {
+	if b, _ := mk("any").EnvFingerprint(root, nil); b.Digest == a.Digest || b.Inputs[0] != "platform=any" || !strings.HasPrefix(b.Inputs[1], "user=") {
 		t.Fatal("platform any should be machine-independent")
 	}
 	for _, in := range a.Inputs {
@@ -270,7 +270,7 @@ func TestToolchainFileSafety(t *testing.T) {
 	syscall.Mkfifo(filepath.Join(root, "fifo"), 0o644)
 	for _, f := range []string{"zero", "link", "fifo"} {
 		tk := mustParse(t, "schema_version: 1\ntasks:\n  t: {argv: [make], platform: any, toolchain: [{file: "+f+"}]}\n").Tasks["t"]
-		if _, err := tk.EnvFingerprint(root); err == nil {
+		if _, err := tk.EnvFingerprint(root, nil); err == nil {
 			t.Errorf("toolchain file %s (symlink) was read", f)
 		}
 	}
@@ -296,7 +296,7 @@ func TestToolchainImage(t *testing.T) {
 	}
 	// A pinned digest needs no docker and no trust; a tag needs both.
 	tk := mustParse(t, cfg(pinned)).Tasks["t"]
-	env, err := tk.EnvFingerprint(t.TempDir())
+	env, err := tk.EnvFingerprint(t.TempDir(), nil)
 	if err != nil || !strings.Contains(strings.Join(env.Inputs, " "), "sha256:aaaa") || tk.RunsCommands() {
 		t.Fatalf("pinned image: %v %v runsCommands=%v", err, env.Inputs, tk.RunsCommands())
 	}

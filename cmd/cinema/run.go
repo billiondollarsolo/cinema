@@ -218,13 +218,22 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex) (ba
 		fmt.Printf(f, a...)
 	}
 	opts := record.Options{Argv: t.Argv, Dir: filepath.Join(w.root, filepath.FromSlash(t.Cwd))}
+	renv, err := t.RuntimeEnv(w.dataDir)
+	if err != nil {
+		say("✗ %s  runtime: %v\n", t.ID, err)
+		return true, false
+	}
+	opts.Env = renv // provisioned runtime (nil: inherit)
+	if opts.Env == nil {
+		opts.Env = os.Environ()
+	}
 	if w.capture == "clean" {
 		// A private TMPDIR, removed afterwards: tools killed mid-run (go's
 		// /tmp/go-build* work dirs) can't leave junk behind (plan §13.1). Only in
 		// cinema's own checkouts; `cinema exec` keeps the caller's environment.
 		if tmp, err := os.MkdirTemp("", "cinema-task-*"); err == nil {
 			defer os.RemoveAll(tmp)
-			opts.Env = append(os.Environ(), "TMPDIR="+tmp)
+			opts.Env = append(opts.Env, "TMPDIR="+tmp)
 		}
 	}
 	if printMu == nil {

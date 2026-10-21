@@ -14,6 +14,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/billiondollarsolo/cinema/internal/record"
 )
 
 // Platform is this machine as a task platform string.
@@ -34,15 +36,18 @@ type Env struct {
 // Linux task.
 //
 // Env var values feed the digest only and are never shown: don't allowlist secrets.
-func (t *Task) EnvFingerprint(root string) (Env, error) {
-	var env Env
+//
+// env is the environment the task runs with (RuntimeEnv; nil = inherited):
+// probes run in it, so they report the runtime the task will actually use.
+func (t *Task) EnvFingerprint(root string, env []string) (Env, error) {
+	var fp Env
 	e := newEnc("cinema.env.v1")
 	platform := PlatformAny
 	if t.Platform != PlatformAny {
 		platform = Platform()
 	}
 	e.str(platform)
-	env.Inputs = append(env.Inputs, "platform="+platform)
+	fp.Inputs = append(fp.Inputs, "platform="+platform)
 	// Root changes results: permission tests fail (or skip, i.e. pass) as root.
 	// GitHub's runners are non-root, container jobs often root; they must match.
 	user := "user=nonroot"
@@ -50,20 +55,20 @@ func (t *Task) EnvFingerprint(root string) (Env, error) {
 		user = "user=root"
 	}
 	e.str(user)
-	env.Inputs = append(env.Inputs, user)
+	fp.Inputs = append(fp.Inputs, user)
 
 	dir := filepath.Join(root, filepath.FromSlash(t.Cwd))
 	e.u64(uint64(len(t.Toolchain)))
 	for _, tc := range t.Toolchain {
 		if len(tc.Cmd) > 0 {
-			out, err := toolOutput(dir, tc.Cmd)
+			out, err := toolOutput(dir, tc.Cmd, env)
 			if err != nil {
 				return Env{}, fmt.Errorf("toolchain %q: %w", strings.Join(tc.Cmd, " "), err)
 			}
 			e.str("cmd")
 			e.list(tc.Cmd)
 			e.str(out)
-			env.Inputs = append(env.Inputs, strings.Join(tc.Cmd, " ")+" → "+firstLine(out))
+			fp.Inputs = append(fp.Inputs, strings.Join(tc.Cmd, " ")+" → "+firstLine(out))
 			continue
 		}
 		if tc.Image != "" {
@@ -74,7 +79,7 @@ func (t *Task) EnvFingerprint(root string) (Env, error) {
 			e.str("image")
 			e.str(tc.Image)
 			e.str(d)
-			env.Inputs = append(env.Inputs, tc.Image+" → "+d[:min(len(d), 19)])
+			fp.Inputs = append(fp.Inputs, tc.Image+" → "+d[:min(len(d), 19)])
 			continue
 		}
 		d, err := hashRegularFile(filepath.Join(root, filepath.FromSlash(tc.File)))
@@ -84,7 +89,7 @@ func (t *Task) EnvFingerprint(root string) (Env, error) {
 		e.str("file")
 		e.str(tc.File)
 		e.str(d)
-		env.Inputs = append(env.Inputs, tc.File+" → sha256:"+d[:12])
+		fp.Inputs = append(fp.Inputs, tc.File+" → sha256:"+d[:12])
 	}
 
 	names := sorted(t.Env)
@@ -98,18 +103,24 @@ func (t *Task) EnvFingerprint(root string) (Env, error) {
 		if set {
 			state = "set"
 		}
-		env.Inputs = append(env.Inputs, "env "+n+" "+state) // never the value
+		fp.Inputs = append(fp.Inputs, "env "+n+" "+state) // never the value
 	}
-	env.Digest = e.sum()
-	return env, nil
+	fp.Digest = e.sum()
+	return fp, nil
 }
 
 // toolOutput runs a version command: no shell, 30 s cap, combined output, trimmed.
-func toolOutput(dir string, argv []string) (string, error) {
+func toolOutput(dir string, argv []string, env []string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
+	if env != nil {
+		cmd.Env = env
+		if p, err := record.LookPath(argv[0], env); err == nil {
+			cmd.Path = p // the pinned runtime, not whatever is first on our PATH
+		}
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%v: %s", err, firstLine(string(out)))
@@ -156,7 +167,7 @@ func imageDigest(ref string) (string, error) {
 		return "sha256:" + d, nil
 	}
 	inspect := func() (string, error) {
-		return toolOutput("", []string{"docker", "image", "inspect", "--format", "{{json .RepoDigests}}", ref})
+		return toolOutput("", []string{"docker", "image", "inspect", "--format", "{{json .RepoDigests}}", ref}, nil)
 	}
 	out, err := inspect()
 	if err != nil {

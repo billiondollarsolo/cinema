@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -62,6 +64,13 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	res := Result{Argv: o.Argv, Stdout: Capture{Limit: o.CaptureLimit}, Stderr: Capture{Limit: o.CaptureLimit}}
 
 	cmd := exec.CommandContext(ctx, o.Argv[0], o.Argv[1:]...)
+	if o.Env != nil {
+		// exec.Command resolved argv[0] with OUR PATH; the child's PATH (a pinned
+		// runtime first) is the one that must decide which binary runs.
+		if p, err := LookPath(o.Argv[0], o.Env); err == nil {
+			cmd.Path = p
+		}
+	}
 	res.Path = cmd.Path
 	cmd.Dir, cmd.Env, cmd.Stdin = o.Dir, o.Env, o.Stdin
 	// Own the pipes (instead of letting os/exec copy) so Wait returns when the child
@@ -165,6 +174,29 @@ func reapGroup(pgid int, grace time.Duration) bool {
 	}
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	return true
+}
+
+// LookPath finds file using the PATH in env (not this process's PATH).
+func LookPath(file string, env []string) (string, error) {
+	if strings.ContainsRune(file, '/') {
+		return file, nil
+	}
+	path := ""
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			path = v
+		}
+	}
+	for _, dir := range filepath.SplitList(path) {
+		if dir == "" || !filepath.IsAbs(dir) {
+			continue // like exec.LookPath: never resolve from the current directory
+		}
+		p := filepath.Join(dir, file)
+		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0 {
+			return p, nil
+		}
+	}
+	return "", exec.ErrNotFound
 }
 
 // tee copies to the terminal and the capture. Terminal errors (closed pipe,

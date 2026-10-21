@@ -40,7 +40,7 @@ type Config struct {
 // RunsCommands reports whether computing t's environment executes commands
 // from the config (toolchain cmd entries). Those require a trusted config.
 func (t *Task) RunsCommands() bool {
-	return slices.ContainsFunc(t.Toolchain, func(tc Toolchain) bool {
+	return t.Runtime.set() || slices.ContainsFunc(t.Toolchain, func(tc Toolchain) bool {
 		return len(tc.Cmd) > 0 || (tc.Image != "" && !strings.Contains(tc.Image, "@sha256:"))
 	})
 }
@@ -59,8 +59,11 @@ type Task struct {
 	// Exclusive: never run alongside other tasks locally (-j), e.g. tests that
 	// bind fixed ports or create a fixed docker network. Scheduling only: not
 	// part of the contract digest.
-	Exclusive bool  `yaml:"exclusive"`
-	Reuse     Reuse `yaml:"reuse"`
+	Exclusive bool `yaml:"exclusive"`
+	// Runtime pins Go/Node versions that cinema provisions for the task and its
+	// probes, on the evidence machine and in the gate alike (runtime.go).
+	Runtime Runtime `yaml:"runtime"`
+	Reuse   Reuse   `yaml:"reuse"`
 }
 
 // Toolchain is one environment input: a command whose output identifies a tool
@@ -218,6 +221,9 @@ func (t *Task) validate() error {
 		}
 		t.Outputs[i] = c
 	}
+	if err := t.Runtime.validate(); err != nil {
+		return err
+	}
 	switch t.VCSContext {
 	case "":
 		t.VCSContext = "none"
@@ -324,6 +330,8 @@ func (t *Task) ContractDigest(root string) (string, error) {
 	e.list(sorted(t.Outputs))
 	e.str(t.VCSContext)
 	e.bool(t.AcceptToolCache)
+	e.str(t.Runtime.Go)
+	e.str(t.Runtime.Node)
 	e.str(script)
 	return e.sum(), nil
 }

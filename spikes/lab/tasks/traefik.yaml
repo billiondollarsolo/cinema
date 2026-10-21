@@ -53,3 +53,42 @@ tasks:
     toolchain: [{cmd: [node, --version]}]
     env: [NODE_OPTIONS, TZ]
     reuse: { allowed: true, max_age: 72h }
+  # test-integration.yaml (12 shards upstream) as 5 suite groups. They share a fixed
+  # docker network and ports, so they run exclusively under -j. Images are pulled
+  # by tag at test time and not fingerprinted (finding 18), hence max_age: 24h;
+  # docker itself isn't probed (dev box and runner versions differ).
+  integration-k8s:
+    argv: [bash, -o, pipefail, -c, "export CGO_ENABLED=0; touch webui/static/index.html && make binary-linux-amd64 && go test ./integration -count=1 -test.timeout=60m -run '^(TestK8sSuite|TestGatewayAPISuite)$'"]
+    platform: linux/amd64
+    exclusive: true
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 24h }
+  integration-kv:
+    argv: [bash, -o, pipefail, -c, "export CGO_ENABLED=0; touch webui/static/index.html && make binary-linux-amd64 && go test ./integration -count=1 -test.timeout=60m -run '^(TestConsulSuite|TestConsulCatalogSuite|TestEtcdSuite|TestRedisSuite|TestRedisSentinelSuite|TestZookeeperSuite)$'"]
+    platform: linux/amd64
+    exclusive: true
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 24h }
+  integration-docker:
+    argv: [bash, -o, pipefail, -c, "export CGO_ENABLED=0; touch webui/static/index.html && make binary-linux-amd64 && go test ./integration -count=1 -test.timeout=60m -run '^(TestDockerSuite|TestDockerComposeSuite|TestTracingSuite|TestAcmeSuite)$'"]
+    platform: linux/amd64
+    exclusive: true
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 24h }
+  integration-core-a:
+    argv: [bash, -o, pipefail, -c, "export CGO_ENABLED=0; touch webui/static/index.html && make binary-linux-amd64 && go test ./integration -count=1 -test.timeout=60m -run '^(TestAccessLogSuite|TestDualLoggingSuite|TestErrorPagesSuite|TestFileSuite|TestGRPCSuite|TestHeadersSuite|TestHealthCheckSuite|TestHostResolverSuite|TestHTTPSSuite|TestHTTPSuite|TestKeepAliveSuite|TestLogRotationSuite)$'"]
+    platform: linux/amd64
+    exclusive: true
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 24h }
+  integration-core-b:
+    argv: [bash, -o, pipefail, -c, "export CGO_ENABLED=0; touch webui/static/index.html && make binary-linux-amd64 && go test ./integration -count=1 -test.timeout=60m -run '^(TestProxyProtocolSuite|TestRateLimitSuite|TestRestSuite|TestRetrySuite|TestRoutingSuite|TestSimpleSuite|TestTCPHealthCheckSuite|TestTCPSuite|TestThrottlingSuite|TestTimeoutSuite|TestTLSClientHeadersSuite|TestUDPSuite|TestWebsocketSuite)$'"]
+    platform: linux/amd64
+    exclusive: true
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 24h }

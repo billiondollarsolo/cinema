@@ -284,3 +284,23 @@ func TestTrust(t *testing.T) {
 		t.Fatal("re-trust didn't replace")
 	}
 }
+
+func TestSweepRuntimes(t *testing.T) {
+	dir := t.TempDir()
+	s := open(t, dir)
+	used := filepath.Join(dir, "runtimes", "node", "node-v1-linux-x64")
+	stale := filepath.Join(dir, "runtimes", "node", "node-v0-linux-x64")
+	partial := filepath.Join(dir, "runtimes", "node", ".install-123")
+	for _, d := range []string{used, stale, partial} {
+		os.MkdirAll(filepath.Join(d, "bin"), 0o755)
+	}
+	old := time.Now().Add(-100 * 24 * time.Hour)
+	os.Chtimes(stale, old, old)
+	os.Chtimes(partial, time.Now().Add(-2*time.Hour), time.Now().Add(-2*time.Hour))
+	if st, _ := s.Maintain(true); st.RuntimesDeleted != 2 {
+		t.Fatalf("deleted %d, want 2", st.RuntimesDeleted)
+	}
+	if _, err := os.Stat(used); err != nil {
+		t.Fatal("recently used runtime removed")
+	}
+}

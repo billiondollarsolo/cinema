@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -27,13 +28,14 @@ var DefaultPolicy = Policy{
 }
 
 type MaintainStats struct {
-	Skipped       bool  `json:"skipped"` // ran within the last 24 h
-	RunsDeleted   int64 `json:"runs_deleted"`
-	LogsExpired   int64 `json:"logs_expired"`
-	LogsEvicted   int64 `json:"logs_evicted"` // dropped by the size cap
-	BlobsDeleted  int   `json:"blobs_deleted"`
-	BytesFreed    int64 `json:"bytes_freed"`
-	CachesDeleted int   `json:"caches_deleted"` // fingerprint caches of repos unused for RunMaxAge
+	Skipped         bool  `json:"skipped"` // ran within the last 24 h
+	RunsDeleted     int64 `json:"runs_deleted"`
+	LogsExpired     int64 `json:"logs_expired"`
+	LogsEvicted     int64 `json:"logs_evicted"` // dropped by the size cap
+	BlobsDeleted    int   `json:"blobs_deleted"`
+	BytesFreed      int64 `json:"bytes_freed"`
+	CachesDeleted   int   `json:"caches_deleted"`   // fingerprint caches of repos unused for RunMaxAge
+	RuntimesDeleted int   `json:"runtimes_deleted"` // provisioned runtimes unused for RunMaxAge
 }
 
 const maintainEvery = 24 * time.Hour
@@ -93,6 +95,7 @@ func (s *Store) Maintain(force bool) (MaintainStats, error) {
 		}
 	}
 	st.CachesDeleted = s.sweepFSCache()
+	st.RuntimesDeleted = s.sweepRuntimes()
 	_, err = s.db.Exec(`INSERT INTO meta (k, v) VALUES ('last_maintain', ?)
 		ON CONFLICT(k) DO UPDATE SET v=excluded.v`, strconv.FormatInt(now.UnixMilli(), 10))
 	return st, err
@@ -169,6 +172,30 @@ func (s *Store) sweepFSCache() int {
 		if (filepath.Ext(e.Name()) == ".tmp" && age > time.Hour) || age > s.Policy.RunMaxAge {
 			if os.Remove(filepath.Join(dir, e.Name())) == nil {
 				n++
+			}
+		}
+	}
+	return n
+}
+
+// sweepRuntimes removes provisioned runtimes (runtimes/<lang>/<version>) whose
+// last use is older than RunMaxAge, plus interrupted installs.
+func (s *Store) sweepRuntimes() int {
+	n := 0
+	langs, _ := os.ReadDir(filepath.Join(s.dir, "runtimes"))
+	for _, l := range langs {
+		dir := filepath.Join(s.dir, "runtimes", l.Name())
+		vers, _ := os.ReadDir(dir)
+		for _, v := range vers {
+			fi, err := v.Info()
+			if err != nil {
+				continue
+			}
+			age := s.now().Sub(fi.ModTime())
+			if (strings.HasPrefix(v.Name(), ".install-") && age > time.Hour) || age > s.Policy.RunMaxAge {
+				if os.RemoveAll(filepath.Join(dir, v.Name())) == nil {
+					n++
+				}
 			}
 		}
 	}

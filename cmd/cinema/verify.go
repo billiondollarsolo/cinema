@@ -16,6 +16,7 @@ import (
 	"github.com/billiondollarsolo/cinema/internal/plan"
 	"github.com/billiondollarsolo/cinema/internal/record"
 	"github.com/billiondollarsolo/cinema/internal/snapshot"
+	"github.com/billiondollarsolo/cinema/internal/store"
 	"github.com/billiondollarsolo/cinema/internal/task"
 	"github.com/billiondollarsolo/cinema/internal/transport"
 )
@@ -231,7 +232,15 @@ func cmdVerify(args []string) int {
 // executeGateTask runs one task's exact argv from its cwd and records the result.
 func executeGateTask(root string, t *task.Task, tr *gateTaskReport) {
 	fmt.Printf("::group::RUN %s: %s\n", t.ID, strings.Join(t.Argv, " "))
-	res, err := record.Run(context.Background(), record.Options{Argv: t.Argv,
+	dataDir, _ := store.DataDir()
+	env, err := t.RuntimeEnv(dataDir) // the same pinned runtime the evidence machine used
+	if err != nil {
+		fmt.Println("::endgroup::")
+		fmt.Printf("%s FAILED: runtime: %v\n", t.ID, err)
+		tr.Executed, tr.ExitCode = true, 1
+		return
+	}
+	res, err := record.Run(context.Background(), record.Options{Argv: t.Argv, Env: env,
 		Dir: filepath.Join(root, filepath.FromSlash(t.Cwd)), Stdout: os.Stdout, Stderr: os.Stderr})
 	fmt.Println("::endgroup::")
 	tr.Executed = true
@@ -348,7 +357,15 @@ func expectedFor(root string, t *task.Task, repoID, candidate string) (plan.Expe
 	if exp.Contract, err = t.ContractDigest(root); err != nil {
 		return exp, err
 	}
-	env, err := t.EnvFingerprint(root)
+	dataDir, err := store.DataDir()
+	if err != nil {
+		return exp, err
+	}
+	renv, err := t.RuntimeEnv(dataDir)
+	if err != nil {
+		return exp, err
+	}
+	env, err := t.EnvFingerprint(root, renv)
 	if err != nil {
 		return exp, err
 	}
