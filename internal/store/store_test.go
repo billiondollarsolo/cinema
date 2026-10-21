@@ -33,7 +33,7 @@ func addRun(t *testing.T, s *Store, code int, out string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.FinishRun(id, result(code, out), Source{}); err != nil {
+	if _, err := s.FinishRun(id, result(code, out), Source{}, Match{}); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -62,7 +62,7 @@ func TestLifecycle(t *testing.T) {
 	if s.col(t, pass, "stderr_blob") != nil {
 		t.Fatal("empty stream stored a blob")
 	}
-	if _, err := s.FinishRun(pass, result(0, ""), Source{}); err == nil {
+	if _, err := s.FinishRun(pass, result(0, ""), Source{}, Match{}); err == nil {
 		t.Fatal("finished a run twice")
 	}
 }
@@ -84,7 +84,7 @@ func TestCrashLeavesIncomplete(t *testing.T) { // ACC-066
 	if got := s.col(t, alive, "state"); got != StateRecording {
 		t.Fatalf("live recorder: %v", got)
 	}
-	if _, err := s.FinishRun(id, result(0, ""), Source{}); err == nil {
+	if _, err := s.FinishRun(id, result(0, ""), Source{}, Match{}); err == nil {
 		t.Fatal("incomplete run became finishable")
 	}
 }
@@ -104,7 +104,7 @@ func TestConcurrentWriters(t *testing.T) { // ACC-051
 			for range 15 {
 				id, err := s.BeginRun([]string{"x"}, "/r")
 				if err == nil {
-					_, err = s.FinishRun(id, result(0, "same output"), Source{})
+					_, err = s.FinishRun(id, result(0, "same output"), Source{}, Match{})
 				}
 				if err != nil {
 					t.Error(err)
@@ -236,4 +236,35 @@ func TestSweepFSCache(t *testing.T) { // §13.1 fingerprint caches
 	if _, err := os.Stat(used); err != nil {
 		t.Fatal("recent cache removed")
 	}
+}
+
+func TestMigrateFromV1(t *testing.T) {
+	dir := t.TempDir()
+	s := open(t, dir)
+	// Rewind to a v1 database: drop the v2 columns' index and version.
+	if _, err := s.db.Exec(`DROP INDEX runs_task; ALTER TABLE runs DROP COLUMN task_id;
+		ALTER TABLE runs DROP COLUMN contract_digest; ALTER TABLE runs DROP COLUMN env_digest;
+		ALTER TABLE runs DROP COLUMN vcs; PRAGMA user_version = 1;`); err != nil {
+		t.Fatal(err)
+	}
+	old := addRunV1(t, s)
+	s.Close()
+	s = open(t, dir)
+	if s.col(t, old, "task_id") != nil || s.col(t, old, "state") != StatePassed {
+		t.Fatal("v1 row not preserved through migration")
+	}
+	var v int
+	s.db.QueryRow(`PRAGMA user_version`).Scan(&v)
+	if v != 2 {
+		t.Fatalf("user_version = %d", v)
+	}
+}
+
+func addRunV1(t *testing.T, s *Store) string {
+	t.Helper()
+	id, _ := s.BeginRun([]string{"x"}, "/r")
+	if _, err := s.db.Exec(`UPDATE runs SET state=? WHERE id=?`, StatePassed, id); err != nil {
+		t.Fatal(err)
+	}
+	return id
 }

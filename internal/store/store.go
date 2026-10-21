@@ -122,6 +122,17 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if v < 2 { // task matching (plan §6)
+		if _, err := db.Exec(`
+			ALTER TABLE runs ADD COLUMN task_id TEXT;          -- exact argv+cwd match, else NULL
+			ALTER TABLE runs ADD COLUMN contract_digest TEXT;
+			ALTER TABLE runs ADD COLUMN env_digest TEXT;
+			ALTER TABLE runs ADD COLUMN vcs TEXT;              -- commit for vcs_context: exact, "dirty", or NULL
+			CREATE INDEX runs_task ON runs(repo_root, task_id, started_at);
+			PRAGMA user_version = 2;`); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -130,6 +141,12 @@ func migrate(db *sql.DB) error {
 type Source struct {
 	RepoRoot, CwdRel string
 	Before, After    string
+}
+
+// Match is the task a run was matched to, with the digests captured when it ran.
+// Zero value = no task matched: history only.
+type Match struct {
+	TaskID, ContractDigest, EnvDigest, VCS string
 }
 
 // BeginRun records that a run is starting. Until FinishRun commits, the row is
@@ -147,7 +164,7 @@ func (s *Store) BeginRun(argv []string, cwd string) (string, error) {
 
 // FinishRun makes output durable first, then flips the state in one statement,
 // so a crash at any point leaves either StateRecording (→ incomplete) or a complete row.
-func (s *Store) FinishRun(id string, r record.Result, src Source) (string, error) {
+func (s *Store) FinishRun(id string, r record.Result, src Source, m Match) (string, error) {
 	outBlob, err := s.putBlob(r.Stdout.Bytes())
 	if err != nil {
 		return "", err
@@ -163,11 +180,13 @@ func (s *Store) FinishRun(id string, r record.Result, src Source) (string, error
 	res, err := s.db.Exec(`UPDATE runs SET state=?, path=?, started_at=?, duration_ms=?, exit_code=?, signal=?,
 		canceled=?, leftovers=?, stdout_blob=?, stdout_total=?, stdout_truncated=?,
 		stderr_blob=?, stderr_total=?, stderr_truncated=?,
-		repo_root=?, cwd_rel=?, source_before=?, source_after=? WHERE id=? AND state=?`,
+		repo_root=?, cwd_rel=?, source_before=?, source_after=?,
+		task_id=?, contract_digest=?, env_digest=?, vcs=? WHERE id=? AND state=?`,
 		state, r.Path, r.Start.UnixMilli(), r.Duration.Milliseconds(), r.ExitCode, nullStr(r.Signal),
 		r.Canceled, r.Leftovers, outBlob, r.Stdout.Total, r.Stdout.Truncated,
 		errBlob, r.Stderr.Total, r.Stderr.Truncated,
-		nullStr(src.RepoRoot), nullStr(src.CwdRel), nullStr(src.Before), nullStr(src.After), id, StateRecording)
+		nullStr(src.RepoRoot), nullStr(src.CwdRel), nullStr(src.Before), nullStr(src.After),
+		nullStr(m.TaskID), nullStr(m.ContractDigest), nullStr(m.EnvDigest), nullStr(m.VCS), id, StateRecording)
 	if err != nil {
 		return "", err
 	}

@@ -4,15 +4,18 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/billiondollarsolo/cinema/internal/record"
 	"github.com/billiondollarsolo/cinema/internal/snapshot"
 	"github.com/billiondollarsolo/cinema/internal/store"
+	"github.com/billiondollarsolo/cinema/internal/task"
 )
 
 // Exit codes for everything except exec, which returns the child's code (plan §10.2).
@@ -73,6 +76,7 @@ func cmdExec(args []string) int {
 	}
 	fp := newFingerprinter(dataDir)
 	src := fp.before()
+	match := matchTask(src, argv)
 
 	res, err := record.Run(ctx, opts)
 	if err != nil && res.Start.IsZero() {
@@ -96,13 +100,13 @@ func cmdExec(args []string) int {
 	}
 	state := ""
 	if recErr == nil {
-		state, recErr = st.FinishRun(runID, res, src)
+		state, recErr = st.FinishRun(runID, res, src, match)
 	}
 	if recErr != nil {
 		fmt.Fprintf(os.Stderr, "cinema exec: run not recorded: %v\n", recErr)
 	}
 	if *recordJSON != "" {
-		if err := writeJSON(*recordJSON, runID, state, src, res); err != nil {
+		if err := writeJSON(*recordJSON, runID, state, src, match, res); err != nil {
 			fmt.Fprintf(os.Stderr, "cinema exec: --record-json: %v\n", err)
 		}
 	}
@@ -127,6 +131,56 @@ func beginRecording(argv []string) (st *store.Store, dataDir, runID string, err 
 	}
 	runID, err = st.BeginRun(argv, cwd)
 	return st, dataDir, runID, err
+}
+
+// matchTask finds the task this exact argv+cwd is, and captures its contract
+// and environment digests now, while the toolchain is the one the run uses.
+// Problems are reported; the run is then history only, never task evidence.
+func matchTask(src store.Source, argv []string) store.Match {
+	if src.RepoRoot == "" {
+		return store.Match{}
+	}
+	cfg, err := task.Load(src.RepoRoot)
+	if errors.Is(err, task.ErrNoConfig) {
+		return store.Match{}
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cinema exec: %s is invalid (POLICY_INVALID): %v\n", task.ConfigPath, err)
+		return store.Match{}
+	}
+	t := cfg.Match(argv, src.CwdRel)
+	if t == nil {
+		return store.Match{}
+	}
+	m := store.Match{TaskID: t.ID}
+	if m.ContractDigest, err = t.ContractDigest(src.RepoRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "cinema exec: task %s: %v\n", t.ID, err)
+		return store.Match{}
+	}
+	env, err := t.EnvFingerprint(src.RepoRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cinema exec: task %s: environment: %v\n", t.ID, err)
+		return store.Match{}
+	}
+	m.EnvDigest = env.Digest
+	if t.VCSContext == "exact" {
+		m.VCS = headCommit(src.RepoRoot)
+	}
+	return m
+}
+
+// headCommit is HEAD's SHA for a clean tree, or "dirty": a dirty tree isn't any
+// commit, so vcs_context: exact tasks can't reuse it (plan §5.3).
+func headCommit(root string) string {
+	status, err := exec.Command("git", "-C", root, "status", "--porcelain", "--untracked-files=normal").Output()
+	if err != nil || len(status) > 0 {
+		return "dirty"
+	}
+	head, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return "dirty"
+	}
+	return strings.TrimSpace(string(head))
 }
 
 // fingerprinter snapshots the enclosing git repo before and after a run.
@@ -186,7 +240,7 @@ func (f *fingerprinter) take() string {
 	return s.Digest
 }
 
-func writeJSON(path, runID, state string, src store.Source, res record.Result) error {
+func writeJSON(path, runID, state string, src store.Source, m store.Match, res record.Result) error {
 	b, err := json.MarshalIndent(struct {
 		SchemaVersion int    `json:"schema_version"`
 		RunID         string `json:"run_id,omitempty"` // empty when the run wasn't recorded
@@ -195,9 +249,10 @@ func writeJSON(path, runID, state string, src store.Source, res record.Result) e
 		CwdRel        string `json:"cwd_rel,omitempty"`
 		SourceBefore  string `json:"source_before,omitempty"`
 		SourceAfter   string `json:"source_after,omitempty"`
+		TaskID        string `json:"task_id,omitempty"` // exact argv+cwd match in .cinema/tasks.yaml
 		record.Result
 		DurationMS int64 `json:"duration_ms"`
-	}{1, runID, state, src.RepoRoot, src.CwdRel, src.Before, src.After, res, res.Duration.Milliseconds()}, "", "  ")
+	}{1, runID, state, src.RepoRoot, src.CwdRel, src.Before, src.After, m.TaskID, res, res.Duration.Milliseconds()}, "", "  ")
 	if err != nil {
 		return err
 	}
