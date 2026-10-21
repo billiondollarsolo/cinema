@@ -266,6 +266,23 @@ tasks:
     reuse: { allowed: false }       # always runs in CI
 ```
 
+Fields added from the lab (all optional):
+
+```yaml
+  integration:
+    argv: [bash, -o, pipefail, -c, "make binary && go test -count=1 ./integration"]
+    platform: linux/amd64
+    runtime: { go: 1.26.10, node: 24.22.1 }   # provisioned identically locally and in the gate (§6.4)
+    toolchain:
+      - cmd: [go, version]                    # allowlist: [tool, --version] | [go, version] | [java, -version]
+      - file: web/package-lock.json           # regular file, no symlinks, ≤ 64 MiB
+      - image: quay.io/org/builder:1.27-base  # fingerprinted by resolved digest
+    outputs: [cover-profile.out, dist]        # written by the task, unignored: left out of its fingerprint
+    exclusive: true                           # never alongside other tasks under -j (fixed ports, networks)
+    accept_tool_cache: false
+    reuse: { allowed: true, max_age: 24h, capture: clean }   # capture: clean (default) | workspace (ADR 0002)
+```
+
 - `platform: any` is an explicit, reviewable claim by the repo owner. It's the main lever for reusing Mac results on lint/typecheck/format checks. Never infer it.
 - For `npm run <x>`, the task digest includes the resolved script text from `package.json`. Changing the script invalidates old runs.
 
