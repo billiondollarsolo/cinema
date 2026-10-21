@@ -124,6 +124,23 @@ Each finding came from a real project and was fixed with a test.
 21. **Killed tools leave temp junk.** `/tmp/go-build*` work dirs piled up after go processes were stopped. Each task in a clean checkout now gets a private `TMPDIR` that's removed afterwards.
 22. **Files CInema adds must follow the repo's formatter.** In vite, oxfmt's `format && git diff --exit-code` failed on `.cinema/tasks.yaml` and on the gate workflow until both were formatted with the repo's own formatter. Formatting `tasks.yaml` changes layout, not meaning, so every task contract stayed identical and only `format-check` re-ran (ADR 0001). Formatting the workflow changed the tree, so everything re-ran.
 23. **Runtime-version matrices need one task per version.** vite tests Node 20, 22, 24 and 26. Node is fingerprinted to the patch (correctly), so only the Node 24 cell can reuse evidence from a Node-24 machine. Covering the matrix means a task per version and an evidence machine with each version installed.
+24. **Toolchain drift and runtime matrices are now handled by `runtime:` pinning.** `runtime: {go: 1.26.10, node: 22.23.4}` makes CInema provision exactly that version for the task and its probes, on the evidence machine and in the gate. Go goes through `GOTOOLCHAIN`; Node uses the official tarball checked against `SHASUMS256.txt`. Environments match by construction. On GitHub runners the plan jobs provisioned Node 20/22/24/26 without any `setup-node`. A runtime-version matrix is one task per version.
+25. **One task, one runtime.** prettier's Node 20 cell builds `dist/` with Node 22 and only *tests* on 20. A single-runtime task can't express a two-runtime pipeline, so that cell stays an upstream job.
+26. **A repo's linter reads CInema's files.** eslint parsed a YAML comment starting with "eslint" as an inline config directive and failed. prettier's `--check` and knip also flagged the lab files. CInema's files must be lint- and format-clean for the repo they live in.
+27. **Parallel local runs can trip timing-sensitive tests.** traefik's `TestForwardAuthClientClosedRequest` (a client-close race) failed under `-j 4` load and passed alone. It's a safe failure (no receipt) but costs a re-run. Such tasks can be marked `exclusive`.
+28. **Tasks that share global resources** (traefik's integration suites use a fixed docker subnet and fixed ports) get `exclusive: true`: they run alone under `-j`.
+29. **Failed runs need to be readable from a terminal.** On a headless box there was no way to see a failed task's output (no sqlite3, and the dashboard needs a browser). `cinema log [--failed] <task|run-id>` prints it.
+30. **No lockfile means no exact reuse.** eslint resolves dependency versions only at install time, after the environment is fingerprinted and in a way the gate can't check without installing. Evidence is bound to source and Node version only, with a short `max_age`. This is a limit, not a bug.
+
+## The parallel gate with no evidence (fork-like): first runs
+
+| Project | Parallel gate wall | Task jobs | Upstream median PR time to green |
+|---|---:|---:|---:|
+| prettier | 5.2 min | 8 | 7.2 min |
+| eslint | 3.7 min | 6 | 12.6 min |
+
+With no receipts, the gate is no longer a regression: each matrix job runs one task. (Three task jobs failed on these first runs because of task-definition and formatting issues, findings 25–26. They were fixed before the evidence runs.)
+
 19. **Upstream config files come along into mirrors.** `dependabot.yml` opened PRs on the cli mirror. Mirrors should drop bots that act on the repo.
 13. **Security review findings while building P2,** all fixed:
     - Toolchain commands are an allowlist (`[tool, --version]`).
