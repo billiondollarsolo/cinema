@@ -666,7 +666,7 @@ Report hashing and wrapper overhead separately, always.
 
 ### P1 — Local core + tiny dashboard
 
-- [ ] `cinema exec`: argv exec, exit code, signals, process group, bounded tee capture (§4.1)
+- [x] `cinema exec`: argv exec, exit code, signals, process group, bounded tee capture (§4.1) (overhead p95 ≈ 3 ms; DB recording lands with the store)
 - [ ] SQLite store, blob store, run state machine, crash recovery (§13)
 - [ ] Whole-source fingerprint + metadata cache (§5)
 - [ ] `tasks.yaml` parser (strict), exact matcher, action key, environment fingerprint (§6)
