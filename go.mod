@@ -1,3 +1,3 @@
-module github.com/mjtechguy/cinema
+module github.com/billiondollarsolo/cinema
 
 go 1.27.1

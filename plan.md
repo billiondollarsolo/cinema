@@ -655,11 +655,11 @@ Report hashing and wrapper overhead separately, always.
 
 ### P0 — Feasibility spikes (do first; throwaway code allowed)
 
-- [~] **P0-1 Gate cost.** (floor: ~10 s wall, 1 billed min; real-repo comparison pending, see spikes/README.md) Single-job workflow on a real repo: measure wall time and billed minutes for (a) all reused (simulate with a stub that verifies one DSSE receipt), (b) the original CI. **Kill/continue decision.**
+- [x] **P0-1 Gate cost.** (fully reused gate 9 s vs 140 s realistic Go CI; continue. See spikes/README.md) Single-job workflow on a real repo: measure wall time and billed minutes for (a) all reused (simulate with a stub that verifies one DSSE receipt), (b) the original CI. **Kill/continue decision.**
 - [x] **P0-2 Git notes round trip.** (private repos need a token for the notes fetch; fork case untested) Push `refs/notes/cinema/v1/*` to GitHub; fetch in Actions with `actions/checkout` + `git fetch origin 'refs/notes/cinema/*:refs/notes/cinema/*'`; confirm `--atomic`; test two machines pushing different refs; test a fork PR (expect: no notes; that's fine).
 - [x] **P0-3 Merge-commit fingerprint.** (match only when base hasn't moved) For a PR, compare the tree fingerprint of PR head vs `GITHUB_SHA` merge commit across: base unchanged, base changed in unrelated file, base changed in task input. Confirms how often head receipts can match in practice.
 - [x] **P0-4 Hashing cost.** (results: spikes/README.md) Fingerprint 1k / 10k / 100k-file repos, cold and warm.
-- [ ] **P0-5 Reuse estimate.** Take 2–3 of your own repos: list CI checks, mark which could honestly be `platform: any`, estimate the hit rate.
+- [~] **P0-5 Reuse estimate.** (done on made-up repos; real up-to-date rate pending) Take 2–3 of your own repos: list CI checks, mark which could honestly be `platform: any`, estimate the hit rate.
 - [~] **P0-6 License + predicate domain.** (Apache-2.0 chosen; domain open) Pick license; reserve a domain/URI for `predicateType`.
 
 **Exit:** P0-1 shows a clear time win when everything is reused, and P0-2 works on github.com.
