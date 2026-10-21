@@ -211,6 +211,9 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		if strings.Contains(run, "GITHUB_ENV") || strings.Contains(run, "GITHUB_PATH") || strings.Contains(run, "GITHUB_OUTPUT") {
 			review("a step writes $GITHUB_ENV/$GITHUB_PATH/$GITHUB_OUTPUT: later steps depend on Actions plumbing")
 		}
+		if sudo.MatchString(run) {
+			review("a step uses sudo (installs or changes the machine): make it a prerequisite of the evidence machine, not part of the task")
+		}
 		if pipeToShell.MatchString(run) {
 			review("a step pipes a downloaded script into a shell: an unpinned network input; pin a release and check its SHA-256")
 		} else if floating.MatchString(run) {
@@ -374,6 +377,7 @@ func agrees(inc, c map[string]string) bool {
 }
 
 var (
+	sudo        = regexp.MustCompile(`(^|[\s;&|(])sudo\s`)
 	pipeToShell = regexp.MustCompile(`(curl|wget)\b[^|\n]*\|\s*(sudo\s+)?(ba)?sh\b`)
 	floating    = regexp.MustCompile(`@latest\b|/HEAD/|/(master|main)/[^\s]*\.(sh|py)\b`)
 )

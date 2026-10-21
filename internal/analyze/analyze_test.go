@@ -184,7 +184,8 @@ func TestVersionFileUntrusted(t *testing.T) {
 func TestNetworkInputsFlagged(t *testing.T) {
 	src := "on: push\njobs:\n  a: {runs-on: ubuntu-latest, steps: [{run: 'curl -sfL https://x/install.sh | sh -s -- v1'}]}\n" +
 		"  b: {runs-on: ubuntu-latest, steps: [{run: 'go install golang.org/x/vuln/cmd/govulncheck@latest'}]}\n" +
-		"  c: {runs-on: ubuntu-latest, steps: [{run: 'make test'}]}\n"
+		"  c: {runs-on: ubuntu-latest, steps: [{run: 'make test'}]}\n" +
+		"  d: {runs-on: ubuntu-latest, steps: [{run: 'sudo apt-get install -y shellcheck'}]}\n"
 	jobs, _ := Workflow("w.yml", []byte(src))
 	for _, j := range jobs {
 		if want := j.ID != "c"; (j.Verdict == Review) != want {
