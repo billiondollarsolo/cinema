@@ -243,7 +243,7 @@ func TestToolchainProbesOnly(t *testing.T) {
 	cfg := func(cmd string) string {
 		return "schema_version: 1\ntasks:\n  t:\n    argv: [make]\n    platform: any\n    toolchain: [{cmd: " + cmd + "}]\n"
 	}
-	for _, ok := range []string{"[go, version]", "[node, --version]", "[rustc, -V]", "[npm, -v]", "[python3.12, -VV]", "[java, -version]"} {
+	for _, ok := range []string{"[go, version]", "[node, --version]", "[rustc, --version]", "[npm, --version]", "[python3.12, --version]", "[java, -version]"} {
 		if _, err := Parse([]byte(cfg(ok))); err != nil {
 			t.Errorf("%s rejected: %v", ok, err)
 		}
@@ -251,7 +251,8 @@ func TestToolchainProbesOnly(t *testing.T) {
 	for _, bad := range []string{
 		"[./v.sh, --version]", "[/usr/bin/node, --version]", "[node]", "[node, v.js]", "[node, scripts/v.js]",
 		"[python3, -mfoo]", "[python3, script]", "[python3, -c, print]", "[sh, -c, echo]", "[node, --require=x]",
-		"[go, run, x]", "[make, version, x]", "[env, make]", "[go, env, GOVERSION]", "[\"go version\", -v]", "[\"\", -v]",
+		"[go, run, x]", "[make, version, x]", "[env, make]", "[make, version]", "[npm, version]", "[ninja, -v]",
+		"[rustc, -V]", "[node, version]", "[java, version]", "[go, env, GOVERSION]", "[\"go version\", -v]", "[\"\", -v]",
 	} {
 		if _, err := Parse([]byte(cfg(bad))); err == nil {
 			t.Errorf("%s accepted", bad)

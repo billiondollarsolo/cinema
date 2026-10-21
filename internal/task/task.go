@@ -203,16 +203,18 @@ func (t *Task) validate() error {
 // with arguments, wrappers) can't be expressed. `cinema trust` still gates
 // running them at all; a tool that needs more belongs in a `file:` entry.
 var (
-	probeNameRE  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
-	versionFlags = []string{"--version", "-version", "-v", "-V", "-VV", "version"}
+	probeNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
+	// Only `--version`: `version` is a build target for make/just/rake, `npm
+	// version` edits package.json, and `-v` means a verbose BUILD for ninja.
+	// Exact exceptions where the other form is the tool's own builtin:
+	probeExceptions = map[string]string{"go": "version", "java": "-version"}
 )
 
 func validateProbe(cmd []string) error {
-	if len(cmd) != 2 || !probeNameRE.MatchString(cmd[0]) || !slices.Contains(versionFlags, cmd[1]) {
-		return fmt.Errorf("toolchain cmd must be [tool, version-flag], e.g. [go, version] or [node, --version] "+
-			"(flag one of %s); got %q", strings.Join(versionFlags, " "), cmd)
+	if len(cmd) == 2 && probeNameRE.MatchString(cmd[0]) && (cmd[1] == "--version" || probeExceptions[cmd[0]] == cmd[1]) {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("toolchain cmd must be [tool, --version] (or [go, version], [java, -version]); got %q", cmd)
 }
 
 func isGoTest(argv []string) bool { return len(argv) >= 2 && argv[0] == "go" && argv[1] == "test" }
