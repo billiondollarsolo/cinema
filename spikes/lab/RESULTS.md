@@ -73,6 +73,23 @@ How we got there (each step is a finding):
 
 ### traefik: in progress
 
+## PR experiments: real code change, merge-commit gate, same PR as upstream
+
+Each PR appends a Go comment to the project's main entry point, so upstream's path filters run their full PR CI. Evidence: `cinema push --run` on the VPS (clean checkout, non-root). CI checks out GitHub's synthetic merge commit. `main` hadn't moved, so its tree equals the PR head's, and receipts made for the head match.
+
+| PR | Gate | Upstream PR CI (same PR) | Covered by the gate | Not covered (why) |
+|---|---|---|---|---|
+| [prometheus#1](https://github.com/mjtechguy/cinema-lab-prometheus/pull/1) | **PASS, 16/16 reused, 24 s** | 24 jobs, 128.7 runner-min, 144 billed, 16.6 min to green; passed | Go tests, More Go tests, lint, 32-bit, UI, compliance, parser: **37 runner-min (29%)** | Windows tests (16.6 min, the critical path; different platform), fuzzing ×4 (33 min; never reusable), cross-build (21.5 min; Docker, needs image fingerprinting), previous-Go, upgrade, mixins |
+| [traefik#1](https://github.com/mjtechguy/cinema-lab-traefik/pull/1) | **PASS, 8/8 reused, 23 s** | 39 jobs, 119.4 runner-min, 138 billed, 8.7 min to green; passed | Build Binaries (19 targets), Validate, Test Unit: **~90 runner-min (75%)** | Test Integration (30 runner-min, 8.7 min, the critical path; Docker, next to add) |
+| [cli#3](https://github.com/mjtechguy/cinema-lab-cli/pull/3) | **PASS, 6/7 reused, 51 s** (govulncheck inline) | 10 jobs, 32 runner-min, 38 billed, 11 min to green; passed | Ubuntu build/test, lint: **7.7 runner-min (24%)** | macOS + Windows legs (19 min), CodeQL (upload-only), integration tests (need a GitHub token) |
+
+**No false greens:** upstream passed on every commit where the gate passed.
+
+**What it says about savings**
+- **Runner minutes:** the gate replaces whatever Linux work its tasks cover, at a fixed cost of about 25–50 s and 1 billed minute. That's 24–75% here. It goes up as more jobs become tasks: Docker integration tests and cross-builds are the next obvious ones.
+- **Time to green improves only when the critical path is covered.** In these projects the slowest job is usually something a Linux box can't or shouldn't replace: Windows tests, fuzzing, Docker integration. The gate is never slower than upstream when evidence exists; without evidence the parallel gate is needed (finding 16).
+- **Local cost:** serial clean-checkout runs took 2.3 min (cli), 10.7 min (traefik) and 28 min (prometheus) on 16 cores. `-j` (finding 17) targets that.
+
 ## Findings and what changed in CInema
 
 Each finding came from a real project and was fixed with a test.
@@ -99,6 +116,10 @@ Each finding came from a real project and was fixed with a test.
 12. **Never-reusable, parallel jobs belong outside the gate.** prometheus fuzzes in 4 parallel 4-minute jobs. Inside one gate job they'd run serially for 16 minutes and make CI slower.
 14. **"Same tool, same version" isn't the same artifact.** golangci-lint v2.14.0 built with `go install`/`go run` reports a revive issue that the official v2.14.0 release binary doesn't, whichever Go builds it. CI uses the release binary (golangci-lint-action). Rule: tasks must invoke the exact artifact CI uses. Lab lint tasks now download the pinned release and verify its SHA-256 (in the argv, so part of the contract).
 15. **Tool caches outside the repo are unfingerprinted inputs.** golangci-lint keys its analysis cache on the version string and file hashes. The `go install` build and the official binary both call themselves 2.14.0, so the official binary replayed the other build's cached issue: polluted cache exit 1, cleared cache exit 0. Unlike `go test`, nothing in the output shows it. Rule: isolate tool caches per tool build (lab: `GOLANGCI_LINT_CACHE` per binary). General guidance: a tool cache shared across different builds is an input CInema can't see.
+16. **With no evidence, one gate job is a regression.** First push, forks, contributors without CInema: prometheus's serial gate was 9 of 16 tasks in after 34 min; traefik's cross-build alone took 62 min on a 4-vCPU runner (26 min on the 16-core VPS). Upstream runs those in parallel jobs, 10–23 min. Fix: a parallel gate. A plan job verifies receipts, a matrix runs one job per RUN task, and a gate job is the single required check. Fully reused costs plan + gate only.
+17. **Local runs are serial.** prometheus took 28 min while lint and small checks left cores idle. `cinema run --commit REV -j N` / `push --run -j N` run tasks in parallel, each worker in its own clean checkout.
+18. **Docker-built checks need image fingerprints.** prometheus's 109-runner-minute cross-build runs in `golang-builder:<tag>` images. A floating tag is an input `[tool, --version]` can't capture. A toolchain entry that records an image's resolved digest is needed before it can be a task.
+19. **Upstream config files come along into mirrors.** `dependabot.yml` opened PRs on the cli mirror. Mirrors should drop bots that act on the repo.
 13. **Security review findings while building P2,** all fixed:
     - Toolchain commands are an allowlist (`[tool, --version]`).
     - The gate fails closed when the base config can't be confirmed.
