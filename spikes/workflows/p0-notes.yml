@@ -1,0 +1,39 @@
+# P0-2 notes fetch in Actions + P0-3 merge-commit vs PR-head fingerprint.
+name: p0-notes
+on: { pull_request: {}, push: { branches: [main] }, workflow_dispatch: {} }
+permissions: { contents: read }
+jobs:
+  notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0, persist-credentials: false }
+      - name: fetch notes without credentials (expected to fail on a private repo)
+        continue-on-error: true
+        run: git fetch origin 'refs/notes/cinema/*:refs/notes/cinema/*'
+      - name: fetch notes with a one-shot token header
+        env: { TOKEN: "${{ github.token }}" }
+        run: |
+          auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          time git -c http.extraheader="AUTHORIZATION: basic $auth" fetch origin '+refs/notes/cinema/*:refs/notes/cinema/*'
+          git for-each-ref refs/notes/
+      - name: show notes on merge commit and PR head
+        env: { HEAD_SHA: "${{ github.event.pull_request.head.sha }}" }
+        run: |
+          echo "GITHUB_SHA=$GITHUB_SHA HEAD_SHA=$HEAD_SHA"
+          for ref in $(git for-each-ref --format='%(refname)' refs/notes/cinema/); do
+            for sha in $GITHUB_SHA $HEAD_SHA; do
+              echo "$ref @ $sha: $(git notes --ref=$ref show $sha 2>/dev/null | head -c 120 || echo none)"
+            done
+          done
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: github.event_name == 'pull_request'
+        with: { go-version-file: go.mod, cache: false }
+      - name: fingerprint merge commit vs PR head
+        if: github.event_name == 'pull_request'
+        env: { HEAD_SHA: "${{ github.event.pull_request.head.sha }}" }
+        run: |
+          go build -o /tmp/fp ./spikes/fingerprint
+          echo "P0-3 merge $(/tmp/fp -repo . | head -1)"
+          git checkout -q "$HEAD_SHA"
+          echo "P0-3 head  $(/tmp/fp -repo . | head -1)"

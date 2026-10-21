@@ -1,4 +1,4 @@
-# P0-1: copy to <target-repo>/.github/workflows/p0-gate.yml (see spikes/README.md).
+# P0-1: copy to <target-repo>/.github/workflows/ (see spikes/README.md).
 # Measures the floor cost of a fully reused PR: runner + checkout + binary download + one verify.
 name: p0-gate
 on:
