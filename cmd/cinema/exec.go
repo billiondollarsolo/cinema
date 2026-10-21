@@ -41,7 +41,7 @@ func cmdExec(args []string) int {
 	}
 	r, repoErr := openRepo()
 	defer r.close()
-	res, runID, state, src, match := execRecorded(ctx, opts, r, repoErr)
+	res, runID, state, src, match := execRecorded(ctx, opts, r, repoErr, nil)
 	if res.Start.IsZero() {
 		return 127 // shell convention for "command not found / not executable"
 	}
@@ -56,7 +56,9 @@ func cmdExec(args []string) int {
 // execRecorded runs argv under supervision and records it. Recording problems
 // are reported on stderr and never change the child's behavior or exit code
 // (plan §4.1, ACC-006). A zero res.Start means the child never started.
-func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr error) (res record.Result, runID, state string, src store.Source, match store.Match) {
+//
+// want is the task being run (`cinema run`); nil means find it by argv (`cinema exec`).
+func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr error, want *task.Task) (res record.Result, runID, state string, src store.Source, match store.Match) {
 	warn := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "cinema: "+format+"\n", a...) }
 	recErr := r.stErr
 	if recErr == nil {
@@ -75,6 +77,8 @@ func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr err
 		// outside a git repo: history only
 	case r.cfgErr != nil && !errors.Is(r.cfgErr, task.ErrNoConfig):
 		warn("%s is invalid (POLICY_INVALID): %v", task.ConfigPath, r.cfgErr)
+	case want != nil:
+		t = want
 	case r.cfg != nil:
 		t = r.cfg.Match(opts.Argv, r.cwdRel)
 	}

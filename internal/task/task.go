@@ -294,16 +294,22 @@ func disablesTestCache(arg string) bool {
 
 // Match returns the task whose argv and cwd equal the run's exactly (plan §6.3).
 // A narrowed filter, an extra flag or another directory is different work.
+// Tasks can share an argv (one per runtime version); then a bare command can't
+// say which it was, and Match returns nil: history only, never a guess.
 func (c *Config) Match(argv []string, cwdRel string) *Task {
 	if cwdRel == "" {
 		cwdRel = "."
 	}
+	var found *Task
 	for _, t := range c.Tasks {
 		if t.Cwd == cwdRel && slices.Equal(t.Argv, argv) {
-			return t
+			if found != nil {
+				return nil
+			}
+			found = t
 		}
 	}
-	return nil
+	return found
 }
 
 // ContractDigest identifies what the task does. It includes the resolved

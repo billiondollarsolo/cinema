@@ -633,6 +633,39 @@ tasks:
 	}
 }
 
+// Tasks may share an argv (one per runtime version: eslint's mocha-20..26).
+// `cinema run X` must record the run as X, never as a look-alike chosen by
+// argv (lab: a Node 20 run filed under mocha-26 with mocha-26's environment).
+func TestRunRecordsTheTaskItRan(t *testing.T) {
+	e := newEnv(t)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  a: {argv: [sh, -c, "true"], platform: any, reuse: {allowed: true, max_age: 1h}}
+  b: {argv: [sh, -c, "true"], platform: any, reuse: {allowed: true, max_age: 1h}}
+  c: {argv: [sh, -c, "true"], platform: any, reuse: {allowed: true, max_age: 1h}}
+  d: {argv: [sh, -c, "true"], platform: any, reuse: {allowed: true, max_age: 1h}}
+  e: {argv: [sh, -c, "true"], platform: any, reuse: {allowed: true, max_age: 1h}}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	for i := 0; i < 3; i++ {
+		e.cinema("run", "--force", "c")
+	}
+	for id, st := range e.states() {
+		if want := id == "c"; strings.HasPrefix(st, "reusable") != want {
+			t.Errorf("%s: %s", id, st)
+		}
+	}
+	// A bare exec of an ambiguous argv can't say which task it was: history only.
+	e.cinema("exec", "--", "sh", "-c", "true")
+	for id, st := range e.states() {
+		if want := id == "c"; strings.HasPrefix(st, "reusable") != want {
+			t.Errorf("after exec, %s: %s", id, st)
+		}
+	}
+}
+
 func TestCleanRunTempFilesRemoved(t *testing.T) {
 	e := newEnv(t)
 	tmp := t.TempDir()

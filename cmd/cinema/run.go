@@ -242,7 +242,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex) (ba
 	} else {
 		say("▶ %s\n", t.ID)
 	}
-	res, _, state, src, match := execRecorded(ctx, opts, w.at(t.Cwd), nil)
+	res, _, state, src, match := execRecorded(ctx, opts, w.at(t.Cwd), nil, t)
 	mark, note := "✓", ""
 	switch {
 	case res.Start.IsZero():
