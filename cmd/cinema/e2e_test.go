@@ -564,7 +564,7 @@ tasks:
 	if out := run("needs-fresh"); !strings.Contains(out, "✓ needs-fresh") {
 		t.Fatalf("ignored file from the previous run leaked into the slot:\n%s", out)
 	}
-	slots, _ := filepath.Glob(filepath.Join(os.Getenv("TMPDIR"), "cinema-checkouts", "*", "0"))
+	slots, _ := filepath.Glob(filepath.Join(e.data, "checkouts", "*", "0"))
 	if len(slots) != 1 {
 		t.Fatalf("expected one reused slot, got %v", slots)
 	}

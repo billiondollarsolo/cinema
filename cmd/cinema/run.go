@@ -19,6 +19,7 @@ import (
 
 	"github.com/billiondollarsolo/cinema/internal/plan"
 	"github.com/billiondollarsolo/cinema/internal/record"
+	"github.com/billiondollarsolo/cinema/internal/store"
 	"github.com/billiondollarsolo/cinema/internal/task"
 )
 
@@ -279,7 +280,7 @@ func (r *repo) at(cwdRel string) *repo {
 // change the bytes, and the evidence would describe different code.
 //
 // The checkout lives in a stable, locked slot per repo
-// ($TMPDIR/cinema-checkouts/<repo>/<n>) instead of a fresh random dir: build
+// (<data dir>/checkouts/<repo>/<n>) instead of a fresh random dir: build
 // caches keyed by source path (Go without -trimpath, most compilers) stay warm
 // instead of recompiling everything and growing without bound (lab: a 77 GB Go
 // cache). Between runs the slot is reset completely, ignored files included,
@@ -292,8 +293,15 @@ func cleanCheckout(r *repo, rev string) (*repo, func(), error) {
 	if err != nil {
 		return nil, noop, fmt.Errorf("unknown commit %q", rev)
 	}
+	// Slots live in cinema's per-user data dir (0700), never in a shared TMPDIR:
+	// a predictable /tmp path could be pre-created by another user (a symlink, or
+	// a .git with hooks that `git checkout` would run as us).
+	root, err := checkoutsRoot()
+	if err != nil {
+		return nil, noop, err
+	}
 	h := sha256.Sum256([]byte(r.id))
-	base := filepath.Join(os.TempDir(), checkoutsDir, hex.EncodeToString(h[:6]))
+	base := filepath.Join(root, hex.EncodeToString(h[:6]))
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		return nil, noop, err
 	}
@@ -325,12 +333,32 @@ func cleanCheckout(r *repo, rev string) (*repo, func(), error) {
 	return cr, cleanup, nil
 }
 
-const checkoutsDir = "cinema-checkouts"
+// checkoutsRoot is <data dir>/checkouts, created 0700 and verified to be a
+// real directory owned by us.
+func checkoutsRoot() (string, error) {
+	dataDir, err := store.DataDir()
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Join(dataDir, "checkouts")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", err
+	}
+	fi, err := os.Lstat(root)
+	if err != nil {
+		return "", err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !fi.IsDir() || !ok || int(st.Uid) != os.Geteuid() || fi.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("%s must be a directory owned by you with mode 0700", root)
+	}
+	return root, nil
+}
 
 // lockSlot takes the first free slot under base (one per concurrent run or -j worker).
 func lockSlot(base string) (*os.File, int, error) {
 	for i := range 64 {
-		f, err := os.OpenFile(filepath.Join(base, strconv.Itoa(i)+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+		f, err := os.OpenFile(filepath.Join(base, strconv.Itoa(i)+".lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -383,9 +411,13 @@ func sweepRunDirs() {
 			os.RemoveAll(filepath.Join(tmp, e.Name()))
 		}
 	}
-	repos, _ := os.ReadDir(filepath.Join(tmp, checkoutsDir))
+	croot, err := checkoutsRoot()
+	if err != nil {
+		return
+	}
+	repos, _ := os.ReadDir(croot)
 	for _, rd := range repos {
-		base := filepath.Join(tmp, checkoutsDir, rd.Name())
+		base := filepath.Join(croot, rd.Name())
 		slots, _ := os.ReadDir(base)
 		for _, sl := range slots {
 			if !sl.IsDir() {
@@ -395,7 +427,7 @@ func sweepRunDirs() {
 			if err != nil || time.Since(info.ModTime()) < 7*24*time.Hour {
 				continue
 			}
-			f, err := os.OpenFile(filepath.Join(base, sl.Name()+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+			f, err := os.OpenFile(filepath.Join(base, sl.Name()+".lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 			if err != nil {
 				continue
 			}

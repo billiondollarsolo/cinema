@@ -1,41 +1,43 @@
-# vite CI (PR, ubuntu, node-24 cell) → CInema tasks. Tests read packages/*/dist,
-# which is gitignored (not fingerprinted), so each test task builds first:
-# a stale dist must never let a test pass for new source.
+# vite CI (PR, ubuntu, node-24 cell) → CInema tasks, for clean checkouts (ADR 0002):
+# every task installs its own dependencies (a gate RUN job starts from a bare
+# checkout too), and tests build first because they read the gitignored
+# packages/*/dist. pnpm's version comes from packageManager (in the source), so
+# only node is probed; the gate pins Node to the evidence machine's 24.22.0.
 schema_version: 1
 tasks:
   build:
-    argv: [pnpm, run, build]
+    argv: [bash, -o, pipefail, -c, "pnpm install --frozen-lockfile && pnpm run build"]
     platform: linux/amd64
-    toolchain: [{cmd: [node, --version]}, {cmd: [pnpm, --version]}, {file: pnpm-lock.yaml}]
+    toolchain: [{cmd: [node, --version]}]
     env: [CI, NODE_OPTIONS]
     reuse: { allowed: true, max_age: 72h }
   lint:
-    argv: [pnpm, run, lint]
+    argv: [bash, -o, pipefail, -c, "pnpm install --frozen-lockfile && pnpm run lint"]
     platform: any
-    toolchain: [{cmd: [node, --version]}, {cmd: [pnpm, --version]}, {file: pnpm-lock.yaml}]
+    toolchain: [{cmd: [node, --version]}]
     env: [CI]
     reuse: { allowed: true, max_age: 72h }
   format-check:
-    argv: [bash, -o, pipefail, -c, "pnpm format && git diff --exit-code"]
+    argv: [bash, -o, pipefail, -c, "pnpm install --frozen-lockfile && pnpm format && git diff --exit-code"]
     platform: any
-    toolchain: [{cmd: [node, --version]}, {cmd: [pnpm, --version]}, {file: pnpm-lock.yaml}]
+    toolchain: [{cmd: [node, --version]}]
     env: [CI]
     reuse: { allowed: true, max_age: 72h }
   typecheck:
-    argv: [bash, -o, pipefail, -c, "pnpm run build && pnpm run typecheck"]
+    argv: [bash, -o, pipefail, -c, "pnpm install --frozen-lockfile && pnpm run build && pnpm run typecheck"]
     platform: linux/amd64
-    toolchain: [{cmd: [node, --version]}, {cmd: [pnpm, --version]}, {file: pnpm-lock.yaml}]
+    toolchain: [{cmd: [node, --version]}]
     env: [CI, NODE_OPTIONS]
     reuse: { allowed: true, max_age: 72h }
   test-docs:
-    argv: [bash, -o, pipefail, -c, "pnpm run build && pnpm run test-docs"]
+    argv: [bash, -o, pipefail, -c, "pnpm install --frozen-lockfile && pnpm run build && pnpm run test-docs"]
     platform: linux/amd64
-    toolchain: [{cmd: [node, --version]}, {cmd: [pnpm, --version]}, {file: pnpm-lock.yaml}]
+    toolchain: [{cmd: [node, --version]}]
     env: [CI, NODE_OPTIONS]
     reuse: { allowed: true, max_age: 72h }
   test-unit:
-    argv: [bash, -o, pipefail, -c, "pnpm run build && pnpm run test-unit"]
+    argv: [bash, -o, pipefail, -c, "pnpm install --frozen-lockfile && pnpm run build && pnpm run test-unit"]
     platform: linux/amd64
-    toolchain: [{cmd: [node, --version]}, {cmd: [pnpm, --version]}, {file: pnpm-lock.yaml}]
+    toolchain: [{cmd: [node, --version]}]
     env: [CI, NODE_OPTIONS, VITEST_SEGFAULT_RETRY]
     reuse: { allowed: true, max_age: 72h }
