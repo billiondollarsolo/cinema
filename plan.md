@@ -619,7 +619,7 @@ CInema leaves nothing behind that it no longer needs. No daemon, so every rule r
 | Leftover | Rule |
 |---|---|
 | Processes the command left running | When the child exits, SIGTERM its process group, then SIGKILL after the grace period; report it on stderr and in the run record. `setsid` escapees aren't touched, but the pipes they hold are dropped after the grace period. |
-| Clean-checkout dirs (`run --commit`) | Shared clone into `$TMPDIR/cinema-run-<pid>-*`, never `git worktree add`, so `.git` is never modified. Remove on exit, including after a signal. `run --commit` sweeps `cinema-run-*` dirs older than 1 min whose owner PID is gone. No fingerprint cache for them (it would be junk). |
+| Clean-checkout dirs (`run --commit`) | Shared clone in a stable, locked slot `$TMPDIR/cinema-checkouts/<repo>/<n>`, never `git worktree add`, so `.git` is never modified. A stable path keeps path-keyed build caches warm (lab: random paths grew a Go cache to 77 GB). Each run fully resets the slot, ignored files included (ADR 0002). Slots unused for 7 days are swept. Each task in a clean checkout gets a private `TMPDIR`, removed afterwards, so killed tools can't leave `/tmp/go-build*` behind. |
 | Partial blob/DB writes | Temp file + rename. On startup, sweep `*.tmp` older than 1 h in the data dir. |
 | Fingerprint caches (`fscache/<repo>.gob`) | One file per repo, rewritten on use. The daily pass deletes caches unused for 90 days, and temp files older than 1 h. |
 | Old runs and logs | §13 retention. Applied by any command, at most once per 24 h (timestamp in `state.db`); one indexed `DELETE` plus blob unlink, under 50 ms. Blobs no longer referenced by any row are deleted in the same pass. `cinema gc` forces it. |

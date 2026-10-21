@@ -539,3 +539,57 @@ tasks:
 		t.Fatalf("not parallel: %v", d)
 	}
 }
+
+// A reused clean-checkout slot must not carry ignored files from an earlier run
+// into the next one: that's the stale node_modules / dist/ false green (ADR 0002).
+func TestCleanCheckoutSlotResetBetweenRuns(t *testing.T) {
+	e := newEnv(t)
+	t.Setenv("TMPDIR", t.TempDir())
+	e.write(".gitignore", "build/\n")
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  make-artifact: {argv: [sh, -c, "mkdir -p build && echo stale > build/out"], platform: any, reuse: {allowed: true, max_age: 1h}}
+  needs-fresh: {argv: [sh, -c, "test ! -e build/out"], platform: any, reuse: {allowed: true, max_age: 1h}}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	run := func(args ...string) string {
+		cmd := exec.Command(bin, append([]string{"run", "--commit", "HEAD"}, args...)...)
+		cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+		out, _ := cmd.CombinedOutput()
+		return string(out)
+	}
+	run("make-artifact")
+	if out := run("needs-fresh"); !strings.Contains(out, "✓ needs-fresh") {
+		t.Fatalf("ignored file from the previous run leaked into the slot:\n%s", out)
+	}
+	slots, _ := filepath.Glob(filepath.Join(os.Getenv("TMPDIR"), "cinema-checkouts", "*", "0"))
+	if len(slots) != 1 {
+		t.Fatalf("expected one reused slot, got %v", slots)
+	}
+}
+
+func TestCleanRunTempFilesRemoved(t *testing.T) {
+	e := newEnv(t)
+	tmp := t.TempDir()
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  litter: {argv: [sh, -c, "mkdir \"$TMPDIR/go-build-junk\" && echo $TMPDIR > \"$TMPDIR/../where\""], platform: any, reuse: {allowed: true, max_age: 1h}}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	cmd := exec.Command(bin, "run", "--commit", "HEAD", "litter")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data, "TMPDIR="+tmp)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	where, err := os.ReadFile(filepath.Join(tmp, "where"))
+	if err != nil {
+		t.Fatal("task didn't get a private TMPDIR under the real one")
+	}
+	if _, err := os.Stat(strings.TrimSpace(string(where))); !os.IsNotExist(err) {
+		t.Fatalf("task TMPDIR %s not removed", where)
+	}
+}

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -194,6 +196,15 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex) (ba
 		fmt.Printf(f, a...)
 	}
 	opts := record.Options{Argv: t.Argv, Dir: filepath.Join(w.root, filepath.FromSlash(t.Cwd))}
+	if w.capture == "clean" {
+		// A private TMPDIR, removed afterwards: tools killed mid-run (go's
+		// /tmp/go-build* work dirs) can't leave junk behind (plan §13.1). Only in
+		// cinema's own checkouts; `cinema exec` keeps the caller's environment.
+		if tmp, err := os.MkdirTemp("", "cinema-task-*"); err == nil {
+			defer os.RemoveAll(tmp)
+			opts.Env = append(os.Environ(), "TMPDIR="+tmp)
+		}
+	}
 	if printMu == nil {
 		fmt.Fprintf(os.Stderr, "▶ %s: %s\n", t.ID, strings.Join(t.Argv, " "))
 		opts.Stdout, opts.Stderr = os.Stdout, os.Stderr
@@ -262,44 +273,98 @@ func (r *repo) at(cwdRel string) *repo {
 	return &c
 }
 
-// cleanCheckout materializes rev in a temp dir with exact bytes: a shared clone
-// (objects borrowed via alternates, nothing written to the real repo) plus a
-// detached checkout. Not `git archive`: export-ignore / export-subst attributes
-// would change the bytes, and the evidence would describe different code.
-// cleanup is always safe to call and removes the dir (plan §13.1).
+// cleanCheckout materializes rev with exact bytes in a clean checkout: a shared
+// clone (objects borrowed via alternates, nothing written to the real repo) and
+// a detached checkout. Not `git archive`: export-ignore / export-subst would
+// change the bytes, and the evidence would describe different code.
+//
+// The checkout lives in a stable, locked slot per repo
+// ($TMPDIR/cinema-checkouts/<repo>/<n>) instead of a fresh random dir: build
+// caches keyed by source path (Go without -trimpath, most compilers) stay warm
+// instead of recompiling everything and growing without bound (lab: a 77 GB Go
+// cache). Between runs the slot is reset completely, ignored files included,
+// so nothing from an earlier commit (node_modules, dist/, generated code) can
+// leak into this one (ADR 0002). Slots unused for a week are swept.
+// cleanup releases the slot and is always safe to call.
 func cleanCheckout(r *repo, rev string) (*repo, func(), error) {
 	noop := func() {}
 	sha, err := gitOut(r.root, "rev-parse", "--verify", "--end-of-options", rev+"^{commit}")
 	if err != nil {
 		return nil, noop, fmt.Errorf("unknown commit %q", rev)
 	}
-	dir, err := os.MkdirTemp("", tmpPrefix+strconv.Itoa(os.Getpid())+"-*")
+	h := sha256.Sum256([]byte(r.id))
+	base := filepath.Join(os.TempDir(), checkoutsDir, hex.EncodeToString(h[:6]))
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return nil, noop, err
+	}
+	lock, slot, err := lockSlot(base)
 	if err != nil {
 		return nil, noop, err
 	}
-	cleanup := func() { os.RemoveAll(dir) }
-	if _, err := gitOut(r.root, "clone", "-q", "--shared", "--no-checkout", "--", r.root, dir); err != nil {
-		return nil, cleanup, err
-	}
-	if _, err := gitOut(dir, "checkout", "-q", "--detach", sha); err != nil {
-		return nil, cleanup, err
+	release := func() { syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); lock.Close() }
+	dir := filepath.Join(base, strconv.Itoa(slot))
+	if err := prepareSlot(r.root, dir, sha); err != nil {
+		os.RemoveAll(dir) // a broken slot is rebuilt next time
+		release()
+		return nil, noop, err
 	}
 	cr, err := openRepoAt(dir)
 	if err != nil {
-		return nil, cleanup, err
+		release()
+		return nil, noop, err
 	}
-	if cr.st != nil {
-		inner := cleanup
-		cleanup = func() { cr.st.Close(); inner() }
+	cleanup := func() {
+		if cr.st != nil {
+			cr.st.Close()
+		}
+		release()
 	}
 	cr.id, cr.capture = r.id, "clean"
-	cr.cache, cr.cachePath = nil, "" // a cache keyed on a temp dir would be junk
+	cr.cache, cr.cachePath = nil, "" // checkout files change every run: nothing to cache
 	fmt.Fprintf(os.Stderr, "cinema run: clean checkout of %s\n", sha[:12])
 	return cr, cleanup, nil
 }
 
-// sweepRunDirs removes clean-checkout dirs left by a cinema that died
-// (plan §13.1, CLEAN-002): owner PID gone and older than a minute.
+const checkoutsDir = "cinema-checkouts"
+
+// lockSlot takes the first free slot under base (one per concurrent run or -j worker).
+func lockSlot(base string) (*os.File, int, error) {
+	for i := range 64 {
+		f, err := os.OpenFile(filepath.Join(base, strconv.Itoa(i)+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			return nil, 0, err
+		}
+		if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
+			return f, i, nil
+		}
+		f.Close()
+	}
+	return nil, 0, errors.New("all 64 clean-checkout slots are busy")
+}
+
+// prepareSlot leaves dir as a shared clone of root at sha with nothing else in
+// it: tracked files reset, untracked and ignored files removed.
+func prepareSlot(root, dir, sha string) error {
+	want := filepath.Join(root, ".git", "objects")
+	alt, err := os.ReadFile(filepath.Join(dir, ".git", "objects", "info", "alternates"))
+	if err != nil || strings.TrimSpace(string(alt)) != want {
+		os.RemoveAll(dir)
+		if _, err := gitOut(root, "clone", "-q", "--shared", "--no-checkout", "--", root, dir); err != nil {
+			return err
+		}
+	}
+	if _, err := gitOut(dir, "checkout", "-q", "-f", "--detach", sha); err != nil {
+		return err
+	}
+	if _, err := gitOut(dir, "clean", "-ffdxq"); err != nil {
+		return err
+	}
+	now := time.Now()
+	return os.Chtimes(dir, now, now)
+}
+
+// sweepRunDirs removes clean-checkout slots unused for a week (and not locked),
+// and the per-run dirs older versions left behind (plan §13.1, CLEAN-002).
 func sweepRunDirs() {
 	tmp := os.TempDir()
 	entries, _ := os.ReadDir(tmp)
@@ -316,6 +381,29 @@ func sweepRunDirs() {
 		}
 		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
 			os.RemoveAll(filepath.Join(tmp, e.Name()))
+		}
+	}
+	repos, _ := os.ReadDir(filepath.Join(tmp, checkoutsDir))
+	for _, rd := range repos {
+		base := filepath.Join(tmp, checkoutsDir, rd.Name())
+		slots, _ := os.ReadDir(base)
+		for _, sl := range slots {
+			if !sl.IsDir() {
+				continue
+			}
+			info, err := sl.Info()
+			if err != nil || time.Since(info.ModTime()) < 7*24*time.Hour {
+				continue
+			}
+			f, err := os.OpenFile(filepath.Join(base, sl.Name()+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+			if err != nil {
+				continue
+			}
+			if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
+				os.RemoveAll(filepath.Join(base, sl.Name()))
+				os.Remove(f.Name())
+			}
+			f.Close()
 		}
 	}
 }
