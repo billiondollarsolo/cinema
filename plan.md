@@ -286,6 +286,20 @@ Acceptance rules (max age, trusted keys) are **not** part of the key. A stricter
 
 Exact argv only. `go test -run TestLogin ./...` does not satisfy `go test ./...`. Different tags, `-race`, filters, or package sets are different work. Unknown commands are kept as history and never count toward a task.
 
+### 6.4 Writing tasks that reuse (lab rules)
+
+Each rule comes from a real project in `spikes/lab/RESULTS.md`.
+
+1. **Make the task what CI runs, artifact included.** A `go install` build of golangci-lint v2.14.0 and the official v2.14.0 release disagree. CI's action runs the release, so the task must download that release, pinned, and verify its checksum in the argv.
+2. **Match the CI toolchain exactly, and pin the gate's toolchain to the evidence machine.** `go version` and `node --version` are fingerprinted down to the patch. A `setup-go` with `check-latest`, a floating `lts/*`, or a different patch means `ENVIRONMENT_MISMATCH`.
+3. **Probe only what isn't pinned in source.** pnpm and yarn versions come from `packageManager`, already covered by the source fingerprint. Probing them, or a tool whose version differs between dev box and runner image (git), only causes misses.
+4. **Isolate tool caches per tool build.** Caches outside the repo are inputs CInema can't see (golangci-lint replayed another build's results). Point them at a per-version directory.
+5. **Include setup in the task.** CI evidence comes from a clean checkout (ADR 0002): no `node_modules`, no `dist/`. `yarn install --immutable && …` belongs in the argv, and warm local caches keep it fast.
+6. **Declare outputs a task writes into the tree** if they aren't ignored (`cover-profile.out`, a build dir that deletes tracked files).
+7. **Keep never-reusable work in its original parallel jobs** (time-boxed fuzzing, live-network checks). Inside the single gate job it only adds serial time.
+8. **Run evidence as a non-root user** when CI is non-root (GitHub runners). Root changes test results.
+9. **Make `.cinema/tasks.yaml` follow the repo's formatter,** or list it in the formatter's ignore file. Repo-wide formatters and linters will touch it.
+
 ---
 
 ## 7. Receipts and keys
