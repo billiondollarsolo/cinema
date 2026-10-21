@@ -66,6 +66,17 @@ func (t *Task) EnvFingerprint(root string) (Env, error) {
 			env.Inputs = append(env.Inputs, strings.Join(tc.Cmd, " ")+" → "+firstLine(out))
 			continue
 		}
+		if tc.Image != "" {
+			d, err := imageDigest(tc.Image)
+			if err != nil {
+				return Env{}, fmt.Errorf("toolchain image %s: %w", tc.Image, err)
+			}
+			e.str("image")
+			e.str(tc.Image)
+			e.str(d)
+			env.Inputs = append(env.Inputs, tc.Image+" → "+d[:min(len(d), 19)])
+			continue
+		}
 		d, err := hashRegularFile(filepath.Join(root, filepath.FromSlash(tc.File)))
 		if err != nil {
 			return Env{}, fmt.Errorf("toolchain file %s: %w", tc.File, err)
@@ -135,4 +146,39 @@ func hashRegularFile(path string) (string, error) {
 		return "", fmt.Errorf("larger than %d bytes", maxToolchainFile)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// imageDigest resolves an image reference to its content digest. A reference
+// pinned with @sha256 is already immutable; a tag is resolved through the local
+// docker daemon, pulling it first if it isn't present.
+func imageDigest(ref string) (string, error) {
+	if _, d, ok := strings.Cut(ref, "@sha256:"); ok {
+		return "sha256:" + d, nil
+	}
+	inspect := func() (string, error) {
+		return toolOutput("", []string{"docker", "image", "inspect", "--format", "{{json .RepoDigests}}", ref})
+	}
+	out, err := inspect()
+	if err != nil {
+		// Pulls of builder images take minutes; version probes keep their 30 s cap.
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+		if out, perr := exec.CommandContext(ctx, "docker", "pull", "-q", ref).CombinedOutput(); perr != nil {
+			return "", fmt.Errorf("can't resolve (docker pull: %v: %s)", perr, firstLine(string(out)))
+		}
+		if out, err = inspect(); err != nil {
+			return "", err
+		}
+	}
+	// RepoDigests: ["repo@sha256:..."]; the image was pulled under this ref's repo.
+	repo := ref
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		repo = ref[:i]
+	}
+	for _, rd := range strings.Split(strings.Trim(out, "[]\""), "\",\"") {
+		if r, d, ok := strings.Cut(rd, "@"); ok && (r == repo || strings.HasSuffix(r, "/"+repo)) {
+			return d, nil
+		}
+	}
+	return "", fmt.Errorf("no registry digest for %s (built locally?)", ref)
 }

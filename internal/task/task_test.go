@@ -275,3 +275,32 @@ func TestToolchainFileSafety(t *testing.T) {
 		}
 	}
 }
+
+func TestToolchainImage(t *testing.T) {
+	cfg := func(img string) string {
+		return "schema_version: 1\ntasks:\n  t:\n    argv: [make]\n    platform: linux/amd64\n    toolchain: [{image: \"" + img + "\"}]\n"
+	}
+	pinned := "quay.io/prometheus/golang-builder@sha256:" + strings.Repeat("a", 64)
+	for _, ok := range []string{"golang:1.27", "quay.io/prometheus/golang-builder:1.27-base", "localhost:5000/x/y:v1", pinned} {
+		if _, err := Parse([]byte(cfg(ok))); err != nil {
+			t.Errorf("%s rejected: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"Golang:1", "golang:1.27; rm -rf /", "-v", "a b", "golang@sha256:abc"} {
+		if _, err := Parse([]byte(cfg(bad))); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	if _, err := Parse([]byte("schema_version: 1\ntasks:\n  t:\n    argv: [make]\n    platform: any\n    toolchain: [{image: golang:1.27, file: go.mod}]\n")); err == nil {
+		t.Error("image + file accepted")
+	}
+	// A pinned digest needs no docker and no trust; a tag needs both.
+	tk := mustParse(t, cfg(pinned)).Tasks["t"]
+	env, err := tk.EnvFingerprint(t.TempDir())
+	if err != nil || !strings.Contains(strings.Join(env.Inputs, " "), "sha256:aaaa") || tk.RunsCommands() {
+		t.Fatalf("pinned image: %v %v runsCommands=%v", err, env.Inputs, tk.RunsCommands())
+	}
+	if !mustParse(t, cfg("golang:1.27")).Tasks["t"].RunsCommands() {
+		t.Fatal("a tag must require trust (it runs docker pull)")
+	}
+}

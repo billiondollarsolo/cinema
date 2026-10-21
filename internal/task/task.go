@@ -40,7 +40,9 @@ type Config struct {
 // RunsCommands reports whether computing t's environment executes commands
 // from the config (toolchain cmd entries). Those require a trusted config.
 func (t *Task) RunsCommands() bool {
-	return slices.ContainsFunc(t.Toolchain, func(tc Toolchain) bool { return len(tc.Cmd) > 0 })
+	return slices.ContainsFunc(t.Toolchain, func(tc Toolchain) bool {
+		return len(tc.Cmd) > 0 || (tc.Image != "" && !strings.Contains(tc.Image, "@sha256:"))
+	})
 }
 
 type Task struct {
@@ -58,10 +60,13 @@ type Task struct {
 }
 
 // Toolchain is one environment input: a command whose output identifies a tool
-// version, or a file whose content does. Exactly one of Cmd / File.
+// version, a file whose content does, or a container image (by resolved digest,
+// so a floating tag that moves is a mismatch, not a silent false green).
+// Exactly one of Cmd / File / Image.
 type Toolchain struct {
-	Cmd  []string `yaml:"cmd"`
-	File string   `yaml:"file"`
+	Cmd   []string `yaml:"cmd"`
+	File  string   `yaml:"file"`
+	Image string   `yaml:"image"` // container image; fingerprinted by its resolved digest
 }
 
 // Reuse is acceptance policy. It is NOT part of the contract digest: a stricter
@@ -85,6 +90,7 @@ var (
 	idRE       = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 	platformRE = regexp.MustCompile(`^[a-z0-9]+/[a-z0-9]+$`)
 	envNameRE  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	imageRE    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(@sha256:[0-9a-f]{64})?$`)
 )
 
 // Load reads and validates root/.cinema/tasks.yaml.
@@ -160,19 +166,30 @@ func (t *Task) validate() error {
 		return errors.New(`platform is required: "goos/goarch" (e.g. linux/amd64) or "any"`)
 	}
 	for i, tc := range t.Toolchain {
+		set := 0
+		for _, ok := range []bool{len(tc.Cmd) > 0, tc.File != "", tc.Image != ""} {
+			if ok {
+				set++
+			}
+		}
+		if set != 1 {
+			return fmt.Errorf("toolchain[%d]: exactly one of cmd, file or image", i)
+		}
 		switch {
-		case len(tc.Cmd) > 0 && tc.File == "":
+		case tc.Image != "":
+			if !imageRE.MatchString(tc.Image) {
+				return fmt.Errorf("toolchain[%d]: invalid image reference %q", i, tc.Image)
+			}
+		case len(tc.Cmd) > 0:
 			if err := validateProbe(tc.Cmd); err != nil {
 				return fmt.Errorf("toolchain[%d]: %w", i, err)
 			}
-		case len(tc.Cmd) == 0 && tc.File != "":
+		default:
 			c, err := snapshot.CleanRel(tc.File)
 			if err != nil {
 				return fmt.Errorf("toolchain[%d]: %w", i, err)
 			}
 			t.Toolchain[i].File = c
-		default:
-			return fmt.Errorf("toolchain[%d]: exactly one of cmd or file", i)
 		}
 	}
 	for _, e := range t.Env {
@@ -296,6 +313,7 @@ func (t *Task) ContractDigest(root string) (string, error) {
 	for _, tc := range t.Toolchain {
 		e.list(tc.Cmd)
 		e.str(tc.File)
+		e.str(tc.Image)
 	}
 	e.list(sorted(t.Env))
 	e.list(sorted(t.ExtraInputs))
