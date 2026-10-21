@@ -56,7 +56,7 @@ func cmdAnalyze(args []string) int {
 		for _, j := range jobs {
 			counts[j.Verdict]++
 			why := strings.Join(j.Reasons, "; ")
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", j.Verdict, j.Workflow, jobName(j), why)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", j.Verdict, analyze.Printable(j.Workflow), analyze.Printable(jobName(j)), analyze.Printable(why))
 		}
 		tw.Flush()
 		fmt.Printf("\n%d task, %d review, %d skip. `cinema analyze --yaml` drafts tasks for the first two;\n"+
@@ -119,12 +119,12 @@ func draft(jobs []analyze.Job) ([]byte, error) {
 		t.Content = append(t.Content, s("timeout"), s("60m"),
 			s("reuse"), flow(m(s("allowed"), s("true"), s("max_age"), s("24h"))))
 		key := s(p.ID)
-		key.HeadComment = fmt.Sprintf("%s: %s", j.Workflow, jobName(j))
-		if len(j.Reasons) > 0 {
-			key.HeadComment += "\nREVIEW: " + strings.Join(j.Reasons, "\nREVIEW: ")
+		key.HeadComment = analyze.Printable(fmt.Sprintf("%s: %s", j.Workflow, jobName(j)))
+		for _, r := range j.Reasons {
+			key.HeadComment += "\nREVIEW: " + analyze.Printable(r)
 		}
 		for _, n := range j.Notes {
-			key.HeadComment += "\nNOTE: " + n
+			key.HeadComment += "\nNOTE: " + analyze.Printable(n)
 		}
 		tasks.Content = append(tasks.Content, key, t)
 	}

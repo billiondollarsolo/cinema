@@ -6,12 +6,15 @@ package analyze
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
+	"unicode"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -381,7 +384,7 @@ func substitute(s string, combo map[string]string) string {
 }
 
 func exactVersion(root, v, pattern, tool, file string, review, note func(string)) string {
-	if v == "" && file != "" && root != "" {
+	if v == "" && file != "" && root != "" && filepath.IsLocal(filepath.FromSlash(file)) {
 		v = versionFromFile(filepath.Join(root, filepath.FromSlash(file)))
 	}
 	exact := regexp.MustCompile(pattern)
@@ -409,8 +412,18 @@ func exactVersion(root, v, pattern, tool, file string, review, note func(string)
 // versionFromFile reads a version file the way setup-go/setup-node do:
 // .go-version / .nvmrc / .node-version hold the version; go.mod's toolchain
 // directive wins over its go directive. "" if absent or unreadable.
+// The workflow names the file, so it's untrusted: a symlink to /dev/zero or a
+// FIFO must not hang or exhaust memory (no symlinks, regular files, capped read).
 func versionFromFile(path string) string {
-	b, err := os.ReadFile(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return ""
+	}
+	b, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
 	if err != nil || len(b) > 1<<20 {
 		return ""
 	}
@@ -660,3 +673,16 @@ func (p *ifParser) unary() string {
 }
 
 func truthy(v string) bool { return v != "" && v != "false" && v != "0" }
+
+// Printable makes workflow-derived text safe to show: control characters
+// (newlines, ESC, CR, C1) and Unicode line/paragraph separators and bidi
+// controls become spaces, so a crafted workflow can't drive the terminal or
+// break out of a YAML comment into the draft.
+func Printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' || unicode.Is(unicode.Bidi_Control, r) {
+			return ' '
+		}
+		return r
+	}, s)
+}

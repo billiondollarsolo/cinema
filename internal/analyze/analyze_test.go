@@ -163,3 +163,20 @@ func TestResolve(t *testing.T) {
 		}
 	}
 }
+
+func TestPrintable(t *testing.T) {
+	if got := Printable("a\nb\x1b[31mc d‮e"); strings.ContainsAny(got, "\n\x1b ‮") {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestVersionFileUntrusted(t *testing.T) {
+	d := t.TempDir()
+	os.Symlink("/dev/zero", filepath.Join(d, ".nvmrc"))
+	if v := versionFromFile(filepath.Join(d, ".nvmrc")); v != "" {
+		t.Fatalf("followed a symlink: %q", v)
+	}
+	if v := exactVersion(d, "", `^x$`, "Node", "../../etc/passwd", func(string) {}, func(string) {}); v != "" {
+		t.Fatalf("read outside the repo: %q", v)
+	}
+}
