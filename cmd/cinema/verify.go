@@ -240,7 +240,13 @@ func executeGateTask(root string, t *task.Task, tr *gateTaskReport) {
 		tr.Executed, tr.ExitCode = true, 1
 		return
 	}
-	res, err := record.Run(context.Background(), record.Options{Argv: t.Argv, Env: env,
+	ctx := context.Background()
+	if t.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, t.Timeout)
+		defer cancel()
+	}
+	res, err := record.Run(ctx, record.Options{Argv: t.Argv, Env: env,
 		Dir: filepath.Join(root, filepath.FromSlash(t.Cwd)), Stdout: os.Stdout, Stderr: os.Stderr})
 	fmt.Println("::endgroup::")
 	tr.Executed = true

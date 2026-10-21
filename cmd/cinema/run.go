@@ -218,6 +218,11 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex) (ba
 		fmt.Printf(f, a...)
 	}
 	opts := record.Options{Argv: t.Argv, Dir: filepath.Join(w.root, filepath.FromSlash(t.Cwd))}
+	if t.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, t.Timeout)
+		defer cancel()
+	}
 	renv, err := t.RuntimeEnv(w.dataDir)
 	if err != nil {
 		say("✗ %s  runtime: %v\n", t.ID, err)
@@ -247,6 +252,8 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex) (ba
 	switch {
 	case res.Start.IsZero():
 		mark, note = "✗", "didn't start"
+	case res.TimedOut:
+		mark, note = "✗", fmt.Sprintf("timed out after %s", t.Timeout)
 	case res.ExitCode != 0:
 		mark, note = "✗", fmt.Sprintf("exit %d", res.ExitCode)
 	case src.Before != src.After:

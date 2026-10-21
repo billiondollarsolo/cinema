@@ -63,7 +63,11 @@ type Task struct {
 	// Runtime pins Go/Node versions that cinema provisions for the task and its
 	// probes, on the evidence machine and in the gate alike (runtime.go).
 	Runtime Runtime `yaml:"runtime"`
-	Reuse   Reuse   `yaml:"reuse"`
+	// Timeout stops a run that takes longer (a deadlock is otherwise forever) and
+	// counts it as failed. Optional; not part of the contract digest.
+	Timeout    time.Duration `yaml:"-"`
+	RawTimeout string        `yaml:"timeout"`
+	Reuse      Reuse         `yaml:"reuse"`
 }
 
 // Toolchain is one environment input: a command whose output identifies a tool
@@ -240,6 +244,13 @@ func (t *Task) validate() error {
 	case "clean", "workspace":
 	default:
 		return errors.New(`reuse.capture must be "clean" or "workspace"`)
+	}
+	if t.RawTimeout != "" {
+		d, err := time.ParseDuration(t.RawTimeout)
+		if err != nil || d <= 0 {
+			return errors.New("timeout must be a duration like 30m")
+		}
+		t.Timeout = d
 	}
 	if t.Reuse.Allowed {
 		d, err := time.ParseDuration(t.Reuse.RawAge)

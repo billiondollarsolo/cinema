@@ -666,6 +666,29 @@ tasks:
 	}
 }
 
+// A task's timeout stops a hang (lab: prettier's jest deadlocked for 90 min)
+// and counts as a failure: a hang is a real bug, unlike the user stopping cinema.
+func TestTaskTimeout(t *testing.T) {
+	e := newEnv(t)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  hang: {argv: [sleep, "30"], platform: any, timeout: 300ms, reuse: {allowed: true, max_age: 1h}}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	start := time.Now()
+	cmd := exec.Command(bin, "run", "hang")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+	out, err := cmd.CombinedOutput()
+	if err == nil || time.Since(start) > 10*time.Second || !strings.Contains(string(out), "timed out after 300ms") {
+		t.Fatalf("err=%v after %v:\n%s", err, time.Since(start), out)
+	}
+	if st := e.states()["hang"]; !strings.HasPrefix(st, "failed") {
+		t.Fatalf("timed-out run: %s, want failed", st)
+	}
+}
+
 func TestCleanRunTempFilesRemoved(t *testing.T) {
 	e := newEnv(t)
 	tmp := t.TempDir()
