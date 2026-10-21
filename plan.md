@@ -1,7 +1,7 @@
 # CInema — MVP Build Plan
 
 > **Revision:** 1.0 — MVP cut, 2026-10-21
-> **Status:** Proposed; no code exists yet. Commands, schemas, and config keys are contracts to implement.
+> **Status:** P0–P2 implemented (see §16 checkboxes and [spikes/lab/RESULTS.md](spikes/lab/RESULTS.md)); `cinema analyze` started (P3). Commands, schemas, and config keys are contracts.
 > **Long-range design:** [vision.md](vision.md) (the full 0.2 enterprise spec, unchanged). Referenced below as `vision §N`.
 > **Positioning:** Record the checks you already run. Reuse what qualifies. Run only what remains.
 
@@ -10,7 +10,7 @@
 | Decision | Choice |
 |---|---|
 | Language | Go. One static binary: CLI, recorder, verifier, dashboard server. |
-| License | Open source. Pick Apache-2.0 or MIT before the first public commit. |
+| License | Apache-2.0. |
 | Audience | Anyone with a repo — public OSS, private-for-now, private-forever. Solo devs through large companies. No paid tier is planned. |
 | Trust mode | **Personal only** for the MVP: the repo owner trusts the keys they register. Managed/Verified modes are in `vision §7, §24–25`. |
 | Platform reuse | No guessed equivalence. A macOS result never satisfies a Linux task. Users who need Linux AMD64 results run `cinema` on a Linux box or VPS they control (§9). |
