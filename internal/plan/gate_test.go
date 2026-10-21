@@ -53,6 +53,8 @@ func TestGateTask(t *testing.T) {
 		{"from the future", tsk, []evidence.VerifiedStatement{stmt(func(p *evidence.Predicate) { p.Timing.StartedAt = now.Add(time.Hour) })}, nil, GateRun, ReceiptExpired},
 		{"another task's receipt", tsk, []evidence.VerifiedStatement{stmt(func(p *evidence.Predicate) { p.Task.ID = "other" })}, nil, GateRun, NoReceipt},
 		{"tampered-only evidence", tsk, nil, []string{SignatureInvalid}, GateRun, SignatureInvalid},
+		{"workspace receipt, clean required", tsk, []evidence.VerifiedStatement{stmt(func(p *evidence.Predicate) { p.Source.Capture = "workspace-observed" })}, nil, GateRun, WorkspaceEvidence},
+		{"workspace receipt, task opts in", workspaceTask(), []evidence.VerifiedStatement{stmt(func(p *evidence.Predicate) { p.Source.Capture = "workspace-observed" })}, nil, GateReuse, ""},
 		{"one good among bad", tsk, []evidence.VerifiedStatement{stmt(func(p *evidence.Predicate) { p.EnvDigest = dg("f") }), stmt(nil)}, []string{SignerNotAllowed}, GateReuse, ""},
 	} {
 		d := GateTask(tc.t, exp, tc.stmts, tc.rejected)
@@ -129,4 +131,10 @@ func TestGateProperties(t *testing.T) {
 	if GatePasses(nil, nil) {
 		t.Fatal("empty task set passed")
 	}
+}
+
+func workspaceTask() *task.Task {
+	t := tk("none", true)
+	t.Reuse.Capture = "workspace"
+	return t
 }

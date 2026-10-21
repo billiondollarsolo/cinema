@@ -95,17 +95,32 @@ func cmdRun(args []string) int {
 		}
 	}
 
+	failed := runTasks(ctx, w, todo)
+	if ctx.Err() != nil {
+		fmt.Fprintln(os.Stderr, "cinema run: interrupted")
+		return exitUnsatisfied
+	}
+	if len(todo) == 0 {
+		fmt.Println("nothing to run")
+	}
+	if failed > 0 {
+		return exitUnsatisfied
+	}
+	return 0
+}
+
+// runTasks runs each task's exact argv from its cwd in w, recording every run,
+// and prints one result line per task. Returns how many failed.
+func runTasks(ctx context.Context, w *repo, todo []*task.Task) int {
 	failed := 0
 	for _, t := range todo {
 		if ctx.Err() != nil {
-			fmt.Fprintln(os.Stderr, "cinema run: interrupted")
-			return exitUnsatisfied
+			break
 		}
 		fmt.Fprintf(os.Stderr, "▶ %s: %s\n", t.ID, strings.Join(t.Argv, " "))
-		tr := w.at(t.Cwd)
 		opts := record.Options{Argv: t.Argv, Dir: filepath.Join(w.root, filepath.FromSlash(t.Cwd)),
 			Stdout: os.Stdout, Stderr: os.Stderr}
-		res, _, state, src, match := execRecorded(ctx, opts, tr, nil)
+		res, _, state, src, match := execRecorded(ctx, opts, w.at(t.Cwd), nil)
 		mark, note := "✓", ""
 		switch {
 		case res.Start.IsZero():
@@ -116,6 +131,8 @@ func cmdRun(args []string) int {
 			mark, note = "!", "passed, but changed source files: not evidence"
 		case match.TaskID == "":
 			mark, note = "!", "passed, not recorded as task evidence (see warnings above)"
+		case match.Origin == "tool_cache" && !t.AcceptToolCache:
+			mark, note = "!", "passed from go test's cache: not fresh evidence"
 		case state == "":
 			mark, note = "!", "passed, not recorded"
 		}
@@ -124,13 +141,7 @@ func cmdRun(args []string) int {
 		}
 		fmt.Printf("%s %s  %s %s\n", mark, t.ID, res.Duration.Round(time.Millisecond), note)
 	}
-	if len(todo) == 0 {
-		fmt.Println("nothing to run")
-	}
-	if failed > 0 {
-		return exitUnsatisfied
-	}
-	return 0
+	return failed
 }
 
 // at is r positioned in a task's cwd, sharing the store and cache.

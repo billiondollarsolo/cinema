@@ -89,7 +89,7 @@ func (g *gateEnv) gate(t *testing.T, keys string, event map[string]any) (map[str
 
 func TestGateEndToEnd(t *testing.T) { // ACC-035, 031, 024, 028
 	g := newGateEnv(t)
-	g.cinema("run", "check")
+	g.cinema("run", "--commit", "HEAD", "check")
 
 	// ACC-031: notes not pushed yet → everything runs, gate still works.
 	g.git("push", "-q", g.bare, "HEAD:main")
@@ -139,7 +139,7 @@ func TestGateFailsWhenInlineRunFails(t *testing.T) { // ACC-037
 
 func TestGateWrongRepoAndForks(t *testing.T) { // ACC-025, ACC-041
 	g := newGateEnv(t)
-	g.cinema("run", "check")
+	g.cinema("run", "--commit", "HEAD", "check")
 	g.cinema("push")
 	// Receipts made for Example/Repo presented to Other/Repo.
 	ci := filepath.Join(t.TempDir(), "ci")
@@ -209,5 +209,30 @@ func TestGateBaseConfigFailsClosed(t *testing.T) {
 	g.git("push", "-q", g.bare, "HEAD:main")
 	if _, out, code := g.gate(t, g.keys, pr(noCfg)); code == 0 || !strings.Contains(out, "base branch has no") {
 		t.Fatalf("PR defined its own tasks: %d\n%s", code, out)
+	}
+}
+
+func TestGateRejectsWorkspaceEvidence(t *testing.T) { // ADR 0002
+	g := newGateEnv(t)
+	// Opt the task into workspace evidence to get a working-tree receipt signed...
+	g.write(".cinema/tasks.yaml", strings.Replace(gateTasks, "reuse: { allowed: true, max_age: 1h }\n  never", "reuse: { allowed: true, max_age: 1h, capture: workspace }\n  never", 1))
+	g.cinema("trust")
+	g.cinema("run", "check")
+	g.git("commit", "-qam", "workspace opt-in (local only)")
+	g.cinema("trust")
+	g.cinema("run", "check")
+	// One run covers every unpushed commit with the same tree (they differ only in
+	// tasks.yaml, which ADR 0001 leaves out of fingerprints).
+	if out, code := g.cinema("push"); !strings.Contains(out, " receipt(s) on ") {
+		t.Fatalf("push: exit %d\n%q", code, out)
+	}
+	// ...but the base branch still says clean: CI rejects it.
+	got, _, _ := g.gate(t, g.keys, map[string]any{
+		"repository": map[string]any{"full_name": "Example/Repo"},
+		"pull_request": map[string]any{"base": map[string]any{"sha": mustRun(t, g.repo, "git", "rev-parse", "HEAD~1")},
+			"head": map[string]any{"sha": g.headSHA(t), "repo": map[string]any{"full_name": "Example/Repo"}}},
+	})
+	if got["check"] != "RUN/WORKSPACE_EVIDENCE" {
+		t.Fatalf("workspace receipt under clean policy: %v", got)
 	}
 }

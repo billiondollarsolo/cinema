@@ -70,6 +70,15 @@ type Reuse struct {
 	Allowed bool          `yaml:"allowed"`
 	MaxAge  time.Duration `yaml:"-"`
 	RawAge  string        `yaml:"max_age"`
+	// Capture: which runs count for CI. "clean" (default): only clean-checkout
+	// runs (cinema run --commit), so ignored files can't leak in (ADR 0002).
+	// "workspace": also working-tree runs; an explicit claim nothing ignored matters.
+	Capture string `yaml:"capture"`
+}
+
+// AcceptsCapture reports whether a run captured this way may be CI evidence.
+func (r Reuse) AcceptsCapture(capture string) bool {
+	return capture == "clean" || capture == "clean-checkout" || r.Capture == "workspace"
 }
 
 var (
@@ -197,6 +206,13 @@ func (t *Task) validate() error {
 	}
 	if !t.AcceptToolCache && isGoTest(t.Argv) && !slices.ContainsFunc(t.Argv, disablesTestCache) {
 		return errors.New("go test may replay cached results: add -count=1 to argv, or set accept_tool_cache: true")
+	}
+	switch t.Reuse.Capture {
+	case "":
+		t.Reuse.Capture = "clean"
+	case "clean", "workspace":
+	default:
+		return errors.New(`reuse.capture must be "clean" or "workspace"`)
 	}
 	if t.Reuse.Allowed {
 		d, err := time.ParseDuration(t.Reuse.RawAge)

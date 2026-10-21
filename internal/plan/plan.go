@@ -28,7 +28,8 @@ const (
 	PolicyInvalid          = "POLICY_INVALID"
 	TransportUnavailable   = "TRANSPORT_UNAVAILABLE"
 	RunFailed              = "RUN_FAILED"
-	VCSMismatch            = "VCS_MISMATCH" // vcs_context: exact and the commit differs (or tree dirty)
+	VCSMismatch            = "VCS_MISMATCH"       // vcs_context: exact and the commit differs (or tree dirty)
+	WorkspaceEvidence      = "WORKSPACE_EVIDENCE" // receipt from a working tree; CI needs a clean checkout (ADR 0002)
 )
 
 // Local states for `cinema status` (plan §10.4). Kept separate from "accepted by CI".

@@ -211,6 +211,7 @@ Narrower per-task inputs are deliberately deferred (`vision §11.5, §12.5`). A 
 ### 5.2 Workspace-observed vs clean checkout
 
 - **Workspace-observed** (default for `exec`): runs in the dev's checkout. Fingerprint before and after; any difference = ineligible. A file changed and restored mid-run can't be detected, so this mode assumes an honest workstation. Personal mode accepts that.
+- **CI evidence comes from clean checkouts only** (ADR 0002, from a lab false green). Working-tree runs drive local `status`; `cinema push` signs clean-checkout runs, and the gate rejects others with `WORKSPACE_EVIDENCE`. Exception: tasks that opt in with `reuse: { capture: workspace }`. `cinema push --run` runs whatever lacks clean evidence for HEAD in a clean checkout first.
 - **Clean checkout** (`cinema run --commit <sha>`): `git clone --shared --no-checkout` into a temp dir, then a detached checkout of the commit. The real repo is only read: no worktree entry, no index or ref changes. Not `git archive`, because `export-ignore`/`export-subst` attributes would change the bytes. This is the stronger mode and the one the VPS flow uses (§9).
 
 ### 5.3 Before-commit reuse

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -78,6 +79,7 @@ func cmdPush(args []string) int {
 	remote := fs.String("remote", "origin", "git `REMOTE` to push to")
 	notesOnly := fs.Bool("notes-only", false, "push evidence only, not the branch (e.g. from a VPS)")
 	dryRun := fs.Bool("dry-run", false, "show what would be signed; push nothing")
+	runFirst := fs.Bool("run", false, "first run, in a clean checkout of HEAD, every task that lacks clean evidence for it")
 	var commits stringList
 	fs.Var(&commits, "commit", "sign evidence for `REV` (repeatable; default: the commits being pushed)")
 	if err := fs.Parse(args); err != nil {
@@ -113,6 +115,12 @@ func cmdPush(args []string) int {
 		}
 	}
 
+	if *runFirst && !*dryRun {
+		if code := runMissingClean(r); code != 0 {
+			return code
+		}
+	}
+
 	keyID := evidence.KeyID(priv.Public().(ed25519.PublicKey))
 	ref := transport.Ref(keyID)
 	blobs := snapshot.NewBlobCache()
@@ -122,9 +130,13 @@ func cmdPush(args []string) int {
 		if err != nil {
 			return fail(exitBadArgs, "unknown commit %q", rev)
 		}
-		envs, tasks, err := receiptsFor(r, sha, repoID, priv, blobs)
+		envs, tasks, workspaceOnly, err := receiptsFor(r, sha, repoID, priv, blobs)
 		if err != nil {
 			return fail(exitInternal, "%s: %v", sha[:12], err)
+		}
+		if len(workspaceOnly) > 0 {
+			fmt.Printf("%s  working-tree runs only (CI needs a clean checkout, ADR 0002): %s\n         run: cinema push --run   (or: cinema run --commit %s %s)\n",
+				sha[:12], strings.Join(workspaceOnly, ", "), sha[:12], strings.Join(workspaceOnly, " "))
 		}
 		if len(envs) == 0 {
 			fmt.Printf("%s  no qualifying runs\n", sha[:12])
@@ -154,7 +166,19 @@ func cmdPush(args []string) int {
 		}
 		branchSpec = "HEAD:refs/heads/" + branch
 	}
-	res := transport.Push(r.root, *remote, branchSpec, ref)
+	if _, err := gitOut(r.root, "rev-parse", "--verify", "--quiet", ref); err != nil {
+		ref = "" // nothing ever signed on this machine: no notes ref to push
+	}
+	var res transport.PushResult
+	switch {
+	case ref == "" && branchSpec == "":
+		// notes-only with nothing to send
+	case ref == "":
+		_, err := gitOut(r.root, "push", "--quiet", *remote, branchSpec)
+		res.BranchErr = err
+	default:
+		res = transport.Push(r.root, *remote, branchSpec, ref)
+	}
 	if branchSpec != "" {
 		if res.BranchErr != nil {
 			fmt.Printf("branch:   FAILED %v\n", res.BranchErr)
@@ -202,10 +226,10 @@ func commitsToPush(root, remote, branch string) ([]string, error) {
 	return list, nil
 }
 
-// receiptsFor signs one receipt per task that has a qualifying run for commit sha.
-func receiptsFor(r *repo, sha, repoID string, priv ed25519.PrivateKey, blobs *snapshot.BlobCache) ([]json.RawMessage, []string, error) {
-	var envs []json.RawMessage
-	var names []string
+// receiptsFor signs one receipt per task that has a qualifying run for commit
+// sha. workspaceOnly lists tasks whose only qualifying runs were in a working
+// tree, which CI won't accept (ADR 0002).
+func receiptsFor(r *repo, sha, repoID string, priv ed25519.PrivateKey, blobs *snapshot.BlobCache) (envs []json.RawMessage, names, workspaceOnly []string, err error) {
 	for _, id := range sortedIDs(r.cfg) {
 		t := r.cfg.Tasks[id]
 		if !t.Reuse.Allowed {
@@ -213,7 +237,7 @@ func receiptsFor(r *repo, sha, repoID string, priv ed25519.PrivateKey, blobs *sn
 		}
 		snap, err := snapshot.TakeCommit(r.root, sha, t.ExtraInputs, t.Outputs, blobs)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		contract, err := t.ContractDigest(r.root)
 		if err != nil {
@@ -221,10 +245,14 @@ func receiptsFor(r *repo, sha, repoID string, priv ed25519.PrivateKey, blobs *sn
 		}
 		runs, err := r.st.TaskRuns(r.id, t.ID, 50)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		run := qualifyingRun(t, runs, contract, snap.Digest, sha)
 		if run == nil {
+			continue
+		}
+		if !t.Reuse.AcceptsCapture(run.Capture) {
+			workspaceOnly = append(workspaceOnly, t.ID)
 			continue
 		}
 		vcs := ""
@@ -247,13 +275,55 @@ func receiptsFor(r *repo, sha, repoID string, priv ed25519.PrivateKey, blobs *sn
 		}
 		env, err := evidence.Sign(st, priv)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		b, _ := json.Marshal(env)
 		envs = append(envs, b)
 		names = append(names, t.ID)
 	}
-	return envs, names, nil
+	return envs, names, workspaceOnly, nil
+}
+
+// runMissingClean runs, in a clean checkout of HEAD, every reusable task this
+// machine can satisfy that has no clean-checkout evidence for HEAD yet.
+func runMissingClean(r *repo) int {
+	sha, err := gitOut(r.root, "rev-parse", "HEAD")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cinema push: %v\n", err)
+		return exitBadArgs
+	}
+	blobs := snapshot.NewBlobCache()
+	var todo []*task.Task
+	for _, id := range sortedIDs(r.cfg) {
+		t := r.cfg.Tasks[id]
+		if !t.Reuse.Allowed || (t.Platform != task.PlatformAny && t.Platform != task.Platform()) {
+			continue
+		}
+		snap, err := snapshot.TakeCommit(r.root, sha, t.ExtraInputs, t.Outputs, blobs)
+		contract, cerr := t.ContractDigest(r.root)
+		runs, rerr := r.st.TaskRuns(r.id, t.ID, 50)
+		if err != nil || cerr != nil || rerr != nil {
+			todo = append(todo, t)
+			continue
+		}
+		if run := qualifyingRun(t, runs, contract, snap.Digest, sha); run == nil || run.Capture != "clean" {
+			todo = append(todo, t)
+		}
+	}
+	if len(todo) == 0 {
+		return 0
+	}
+	sweepRunDirs()
+	cr, cleanup, err := cleanCheckout(r, sha)
+	defer cleanup()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "cinema push: %v\n", err)
+		return exitInternal
+	}
+	if failed := runTasks(context.Background(), cr, todo); failed > 0 {
+		fmt.Fprintf(os.Stderr, "cinema push: %d task(s) failed in the clean checkout; pushing anyway (CI will run them)\n", failed)
+	}
+	return 0
 }
 
 // qualifyingRun: newest passed, fresh run of exactly this contract on exactly

@@ -65,6 +65,8 @@ func GateTask(t *task.Task, exp Expected, stmts []evidence.VerifiedStatement, re
 			reason = Malformed // fields agree but the signed action key doesn't: never trust it
 		case p.Result.Origin != "fresh" && !(p.Result.Origin == "tool_cache" && t.AcceptToolCache):
 			reason = ToolCacheRejected
+		case !t.Reuse.AcceptsCapture(p.Source.Capture):
+			reason = WorkspaceEvidence
 		case exp.Now.Sub(started) > t.Reuse.MaxAge || started.After(exp.Now.Add(5*time.Minute)):
 			reason = ReceiptExpired
 		}
@@ -91,7 +93,7 @@ func GateTask(t *task.Task, exp Expected, stmts []evidence.VerifiedStatement, re
 // the closest miss first.
 func rank(reason string) int {
 	switch reason {
-	case ReceiptExpired, ToolCacheRejected:
+	case ReceiptExpired, ToolCacheRejected, WorkspaceEvidence:
 		return 0
 	case InputsChanged, VCSMismatch:
 		return 1

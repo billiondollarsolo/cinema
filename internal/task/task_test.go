@@ -77,6 +77,7 @@ func TestParseRejects(t *testing.T) {
 		"toolchain abs path":  task("    toolchain: [{cmd: [/tmp/v.sh]}]\n"),
 		"bad vcs":             task("    vcs_context: sometimes\n"),
 		"reuse without age":   task("    reuse: {allowed: true}\n"),
+		"bad capture":         task("    reuse: {allowed: true, max_age: 1h, capture: sometimes}\n"),
 		"go test cache":       "schema_version: 1\ntasks:\n  t: {argv: [go, test, ./...], platform: any}\n", // ACC-020
 		"null task":           "schema_version: 1\ntasks:\n  t:\n",
 		"not a mapping":       "- a\n- b\n",

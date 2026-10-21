@@ -388,10 +388,16 @@ func TestPushSignsAndPublishes(t *testing.T) { // §8.1
 	if _, code := e.cinema("keys", "init"); code == 0 {
 		t.Fatal("keys init replaced a key")
 	}
+	// A working-tree run is local feedback only: push signs nothing, says why (ADR 0002).
 	e.cinema("run", "check")
-
 	out, code := e.cinema("push", "--dry-run")
-	if code != 0 || !strings.Contains(out, "check") {
+	if code != 0 || !strings.Contains(out, "working-tree runs only") || !strings.Contains(out, "would sign 0") {
+		t.Fatalf("workspace-only dry run: %d\n%s", code, out)
+	}
+	e.cinema("run", "--commit", "HEAD", "check") // clean checkout: CI evidence
+
+	out, code = e.cinema("push", "--dry-run")
+	if code != 0 || !strings.Contains(out, "would sign 1") {
 		t.Fatalf("dry run: %d\n%s", code, out)
 	}
 	out, code = e.cinema("push")
@@ -449,5 +455,24 @@ func TestRepositoryID(t *testing.T) {
 		if _, err := repositoryID(bad); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
+	}
+}
+
+func TestPushRunMakesCleanEvidence(t *testing.T) { // ADR 0002: push --run
+	e := newEnv(t)
+	bare := filepath.Join(t.TempDir(), "remote.git")
+	exec.Command("git", "init", "-q", "--bare", bare).Run()
+	e.git("remote", "add", "origin", "https://github.com/Example/Repo.git")
+	e.git("config", "remote.origin.pushurl", bare)
+	e.cinema("trust")
+	e.cinema("keys", "init")
+	out, code := e.cinema("push", "--run")
+	if code != 0 || !strings.Contains(out, "✓ check") || !strings.Contains(out, "evidence: 1 receipt") {
+		t.Fatalf("push --run: %d\n%s", code, out)
+	}
+	// Nothing new to sign next time, and pushing works without errors.
+	out, code = e.cinema("push", "--notes-only")
+	if code != 0 {
+		t.Fatalf("second push: %d\n%s", code, out)
 	}
 }
