@@ -205,7 +205,7 @@ Narrower per-task inputs are deliberately deferred (`vision §11.5, §12.5`). A 
 ### 5.2 Workspace-observed vs clean checkout
 
 - **Workspace-observed** (default for `exec`): runs in the dev's checkout. Fingerprint before and after; any difference = ineligible. A file changed and restored mid-run can't be detected, so this mode assumes an honest workstation. Personal mode accepts that.
-- **Clean checkout** (`cinema run --commit <sha>`): `git worktree add` or `git archive` the commit into a temp dir and run there. This is the stronger mode and the one the VPS flow uses (§9).
+- **Clean checkout** (`cinema run --commit <sha>`): `git clone --shared --no-checkout` into a temp dir, then a detached checkout of the commit. The real repo is only read: no worktree entry, no index or ref changes. Not `git archive`, because `export-ignore`/`export-subst` attributes would change the bytes. This is the stronger mode and the one the VPS flow uses (§9).
 
 ### 5.3 Before-commit reuse
 
@@ -598,7 +598,7 @@ CInema leaves nothing behind that it no longer needs. No daemon, so every rule r
 | Leftover | Rule |
 |---|---|
 | Processes the command left running | When the child exits, SIGTERM its process group, then SIGKILL after the grace period; report it on stderr and in the run record. `setsid` escapees aren't touched, but the pipes they hold are dropped after the grace period. |
-| Clean-checkout dirs (`run --commit`) | `git archive` into `$TMPDIR/cinema-*`, never `git worktree add`, so `.git` is never modified. Remove on exit, including after a signal. On startup, sweep `cinema-*` dirs older than 1 h whose owner PID is gone. |
+| Clean-checkout dirs (`run --commit`) | Shared clone into `$TMPDIR/cinema-run-<pid>-*`, never `git worktree add`, so `.git` is never modified. Remove on exit, including after a signal. `run --commit` sweeps `cinema-run-*` dirs older than 1 min whose owner PID is gone. No fingerprint cache for them (it would be junk). |
 | Partial blob/DB writes | Temp file + rename. On startup, sweep `*.tmp` older than 1 h in the data dir. |
 | Fingerprint caches (`fscache/<repo>.gob`) | One file per repo, rewritten on use. The daily pass deletes caches unused for 90 days, and temp files older than 1 h. |
 | Old runs and logs | §13 retention. Applied by any command, at most once per 24 h (timestamp in `state.db`); one indexed `DELETE` plus blob unlink, under 50 ms. Blobs no longer referenced by any row are deleted in the same pass. `cinema gc` forces it. |
@@ -698,7 +698,7 @@ Report hashing and wrapper overhead separately, always.
 - [x] Whole-source fingerprint + metadata cache (§5) (exec in a 10k-file repo, before + after fingerprints, warm: p50 86 ms)
 - [x] `tasks.yaml` parser (strict), exact matcher, action key, environment fingerprint (§6)
 - [x] Mutation detection, tool-cache rejection (§4.4–4.5) (before/after recorded; `go test` without `-count` rejected at config load)
-- [ ] `cinema run [--commit]` with clean-checkout mode (§5.2)
+- [x] `cinema run [--commit]` with clean-checkout mode (§5.2); `--all` skips tasks already reusable
 - [x] `cinema status/explain --json`, reason codes (§10, §12), `cinema trust` for toolchain commands
 - [ ] `cinema dashboard`: one page, token auth, Host/Origin checks, SSE refresh, `--allow-host` (§10.4, §9.1)
 - [ ] `cinema init`: tasks skeleton from detected `go.mod` / `package.json`

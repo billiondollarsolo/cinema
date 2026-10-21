@@ -145,6 +145,13 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if v < 4 { // clean-checkout runs (plan §5.2)
+		if _, err := db.Exec(`
+			ALTER TABLE runs ADD COLUMN capture TEXT;  -- "workspace" | "clean"; NULL outside a repo
+			PRAGMA user_version = 4;`); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -168,6 +175,7 @@ func (s *Store) Trusted(root, digest string) bool {
 type Source struct {
 	RepoRoot, CwdRel string
 	Before, After    string
+	Capture          string // "workspace" (dev checkout) or "clean" (fresh checkout of a commit)
 }
 
 // Match is the task a run was matched to, with the digests captured when it ran.
@@ -209,12 +217,12 @@ func (s *Store) FinishRun(id string, r record.Result, src Source, m Match) (stri
 		canceled=?, leftovers=?, stdout_blob=?, stdout_total=?, stdout_truncated=?,
 		stderr_blob=?, stderr_total=?, stderr_truncated=?,
 		repo_root=?, cwd_rel=?, source_before=?, source_after=?,
-		task_id=?, contract_digest=?, env_digest=?, vcs=?, env_inputs=? WHERE id=? AND state=?`,
+		task_id=?, contract_digest=?, env_digest=?, vcs=?, env_inputs=?, capture=? WHERE id=? AND state=?`,
 		state, r.Path, r.Start.UnixMilli(), r.Duration.Milliseconds(), r.ExitCode, nullStr(r.Signal),
 		r.Canceled, r.Leftovers, outBlob, r.Stdout.Total, r.Stdout.Truncated,
 		errBlob, r.Stderr.Total, r.Stderr.Truncated,
 		nullStr(src.RepoRoot), nullStr(src.CwdRel), nullStr(src.Before), nullStr(src.After),
-		nullStr(m.TaskID), nullStr(m.ContractDigest), nullStr(m.EnvDigest), nullStr(m.VCS), jsonOrNull(m.EnvInputs), id, StateRecording)
+		nullStr(m.TaskID), nullStr(m.ContractDigest), nullStr(m.EnvDigest), nullStr(m.VCS), jsonOrNull(m.EnvInputs), nullStr(src.Capture), id, StateRecording)
 	if err != nil {
 		return "", err
 	}

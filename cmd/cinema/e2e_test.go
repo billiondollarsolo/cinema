@@ -5,7 +5,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 var bin string
@@ -182,4 +185,89 @@ func mustRead(t *testing.T, p string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func TestRun(t *testing.T) {
+	e := newEnv(t)
+	e.cinema("trust")
+	out, code := e.cinema("run", "--all")
+	if code != 0 || !strings.Contains(out, "✓ check") {
+		t.Fatalf("run --all: exit %d\n%s", code, out)
+	}
+	if got := e.states()["check"]; got != "reusable/" {
+		t.Fatalf("after run: %s", got)
+	}
+	out, _ = e.cinema("run", "--all")
+	if !strings.Contains(out, "- check  already reusable") || !strings.Contains(out, "nothing to run") {
+		t.Fatalf("second run --all should skip:\n%s", out)
+	}
+	if _, code := e.cinema("run", "nope"); code != 2 {
+		t.Fatal("unknown task accepted")
+	}
+	e.write("main.go", "package main\n// broken\n")
+	os.Remove(filepath.Join(e.repo, "main.go"))
+	if out, code := e.cinema("run", "check"); code != 1 || !strings.Contains(out, "✗ check") {
+		t.Fatalf("failing task: exit %d\n%s", code, out)
+	}
+}
+
+func TestRunCleanCheckout(t *testing.T) { // §5.2, CLEAN-002
+	e := newEnv(t)
+	e.cinema("trust")
+	before := gitState(t, e.repo)
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+
+	// A stale dir from a dead cinema (PID 999999999) gets swept; a live one doesn't.
+	stale := filepath.Join(tmp, "cinema-run-999999999-x")
+	live := filepath.Join(tmp, "cinema-run-"+strconv.Itoa(os.Getpid())+"-y")
+	for _, d := range []string{stale, live} {
+		os.MkdirAll(d, 0o755)
+		old := time.Now().Add(-time.Hour)
+		os.Chtimes(d, old, old)
+	}
+
+	// Dirty working tree: the clean run is evidence for HEAD's bytes, not these.
+	e.write("main.go", "package main\n// wip\n")
+	cmd := exec.Command(bin, "run", "--commit", "HEAD", "check")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data, "TMPDIR="+tmp)
+	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "✓ check") {
+		t.Fatalf("run --commit: %v\n%s", err, out)
+	}
+	if got := e.states()["check"]; got != "stale/INPUTS_CHANGED" {
+		t.Fatalf("dirty tree vs clean evidence: %s", got)
+	}
+	e.write("main.go", "package main\n") // back to HEAD's bytes
+	if got := e.states()["check"]; got != "reusable/" {
+		t.Fatalf("clean evidence should cover an identical working tree: %s", got)
+	}
+
+	if got := gitState(t, e.repo); got != before {
+		t.Fatalf("clean checkout modified the real repo:\nbefore %s\nafter  %s", before, got)
+	}
+	entries, _ := os.ReadDir(tmp)
+	for _, en := range entries {
+		if strings.HasPrefix(en.Name(), "cinema-run-") && filepath.Join(tmp, en.Name()) != live {
+			t.Errorf("left behind: %s", en.Name())
+		}
+	}
+	if _, err := os.Stat(live); err != nil {
+		t.Error("swept a dir whose owner is alive")
+	}
+	if _, code := e.cinema("run", "--commit", "no-such-rev", "check"); code != 2 {
+		t.Error("unknown rev accepted")
+	}
+}
+
+// gitState summarizes what a clean checkout must not touch.
+func gitState(t *testing.T, repo string) string {
+	var parts []string
+	for _, args := range [][]string{{"worktree", "list", "--porcelain"}, {"for-each-ref"}, {"status", "--porcelain"}, {"stash", "list"}} {
+		out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		parts = append(parts, string(out))
+	}
+	return strings.Join(parts, "|")
 }

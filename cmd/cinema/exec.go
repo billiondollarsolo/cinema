@@ -36,7 +36,9 @@ func cmdExec(args []string) int {
 	if fi, err := os.Stdin.Stat(); err == nil && fi.Mode()&os.ModeCharDevice == 0 {
 		opts.Stdin = os.Stdin // pipes and files pass through; a terminal does not (pipe mode, plan §4.1)
 	}
-	res, runID, state, src, match := execRecorded(ctx, opts)
+	r, repoErr := openRepo()
+	defer r.close()
+	res, runID, state, src, match := execRecorded(ctx, opts, r, repoErr)
 	if res.Start.IsZero() {
 		return 127 // shell convention for "command not found / not executable"
 	}
@@ -51,14 +53,14 @@ func cmdExec(args []string) int {
 // execRecorded runs argv under supervision and records it. Recording problems
 // are reported on stderr and never change the child's behavior or exit code
 // (plan §4.1, ACC-006). A zero res.Start means the child never started.
-func execRecorded(ctx context.Context, opts record.Options) (res record.Result, runID, state string, src store.Source, match store.Match) {
-	warn := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "cinema exec: "+format+"\n", a...) }
-	r, repoErr := openRepo()
-	defer r.close()
-
+func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr error) (res record.Result, runID, state string, src store.Source, match store.Match) {
+	warn := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "cinema: "+format+"\n", a...) }
 	recErr := r.stErr
 	if recErr == nil {
-		cwd, _ := os.Getwd()
+		cwd := opts.Dir
+		if cwd == "" {
+			cwd, _ = os.Getwd()
+		}
 		runID, recErr = r.st.BeginRun(opts.Argv, cwd)
 	}
 
@@ -74,7 +76,7 @@ func execRecorded(ctx context.Context, opts record.Options) (res record.Result, 
 		t = r.cfg.Match(opts.Argv, r.cwdRel)
 	}
 	if r.root != "" {
-		src = store.Source{RepoRoot: r.root, CwdRel: r.cwdRel}
+		src = store.Source{RepoRoot: r.id, CwdRel: r.cwdRel, Capture: r.capture}
 		var extra []string
 		if t != nil {
 			extra = t.ExtraInputs

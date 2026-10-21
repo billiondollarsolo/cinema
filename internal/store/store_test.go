@@ -242,7 +242,7 @@ func TestMigrateFromV1(t *testing.T) {
 	dir := t.TempDir()
 	s := open(t, dir)
 	// Rewind to a v1 database: drop the v2 columns' index and version.
-	if _, err := s.db.Exec(`DROP TABLE trusted_configs; ALTER TABLE runs DROP COLUMN env_inputs;
+	if _, err := s.db.Exec(`ALTER TABLE runs DROP COLUMN capture; DROP TABLE trusted_configs; ALTER TABLE runs DROP COLUMN env_inputs;
 		DROP INDEX runs_task; ALTER TABLE runs DROP COLUMN task_id;
 		ALTER TABLE runs DROP COLUMN contract_digest; ALTER TABLE runs DROP COLUMN env_digest;
 		ALTER TABLE runs DROP COLUMN vcs; PRAGMA user_version = 1;`); err != nil {
@@ -256,7 +256,7 @@ func TestMigrateFromV1(t *testing.T) {
 	}
 	var v int
 	s.db.QueryRow(`PRAGMA user_version`).Scan(&v)
-	if v != 3 {
+	if v != 4 {
 		t.Fatalf("user_version = %d", v)
 	}
 }

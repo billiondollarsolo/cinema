@@ -23,6 +23,8 @@ var errUntrusted = errors.New("tasks.yaml is not trusted: review it, then run `c
 // Fields are zero when unavailable; callers decide whether that's fatal.
 type repo struct {
 	root, cwdRel string
+	id           string // repo identity for records and trust: root, or the real repo for a clean checkout
+	capture      string // "workspace" or "clean" (plan §5.2)
 	cfg          *task.Config
 	cfgErr       error // task.ErrNoConfig, a parse error, or nil
 	st           *store.Store
@@ -33,16 +35,21 @@ type repo struct {
 }
 
 func openRepo() (*repo, error) {
-	r := &repo{snaps: map[string]string{}}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return &repo{snaps: map[string]string{}}, err
+	}
+	return openRepoAt(cwd)
+}
+
+// openRepoAt opens the repo containing dir, with cwdRel relative to its root.
+func openRepoAt(cwd string) (*repo, error) {
+	r := &repo{snaps: map[string]string{}, capture: "workspace"}
 	dataDir, err := store.DataDir()
 	if err != nil {
 		r.stErr = err
 	} else {
 		r.st, r.stErr = store.Open(dataDir)
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return r, err
 	}
 	root, err := snapshot.RepoRoot(cwd)
 	if err != nil {
@@ -56,7 +63,7 @@ func openRepo() (*repo, error) {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
 		return r, fmt.Errorf("can't place %s inside repo %s", cwd, root)
 	}
-	r.root, r.cwdRel = root, filepath.ToSlash(rel)
+	r.root, r.cwdRel, r.id = root, filepath.ToSlash(rel), root
 	r.cfg, r.cfgErr = task.Load(root)
 	if r.st != nil {
 		r.cachePath = snapshot.CachePath(dataDir, root)
@@ -92,7 +99,7 @@ func (r *repo) source(extra []string) (string, error) {
 func (r *repo) fresh() { r.snaps = map[string]string{} }
 
 func (r *repo) trusted() bool {
-	return r.cfg != nil && r.st != nil && r.st.Trusted(r.root, r.cfg.Digest)
+	return r.cfg != nil && r.st != nil && r.st.Trusted(r.id, r.cfg.TrustDigest(r.root))
 }
 
 // current computes everything a decision for t is made against.

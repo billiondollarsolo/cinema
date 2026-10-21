@@ -13,6 +13,7 @@ const usage = `usage: cinema <command> [args]
 
 commands:
   exec [--record-json PATH] [--timeout D] -- CMD [ARGS...]   record an arbitrary command
+  run [--commit REV] <task>... | --all [--force]           run tasks by name (clean checkout with --commit)
   status [--json]                                           per task: reusable / stale / missing + reason
   explain [--json] <task>                                   why a task is or isn't reusable
   trust                                                     allow the toolchain commands in .cinema/tasks.yaml
@@ -21,7 +22,7 @@ commands:
 func main() {
 	// ponytail: map + flag.FlagSet per verb; Cobra only if this stops being readable.
 	cmds := map[string]func([]string) int{
-		"exec": cmdExec, "status": cmdStatus, "explain": cmdExplain, "trust": cmdTrust,
+		"exec": cmdExec, "run": cmdRun, "status": cmdStatus, "explain": cmdExplain, "trust": cmdTrust,
 	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)

@@ -78,7 +78,7 @@ func loadForReport(cmd string, asJSON bool) (*repo, int) {
 func decide(r *repo, t *task.Task) (taskStatus, plan.Current, []store.TaskRun) {
 	ts := taskStatus{Platform: t.Platform, Local: t.Platform == task.PlatformAny || t.Platform == task.Platform()}
 	ts.Task = t.ID
-	runs, err := r.st.TaskRuns(r.root, t.ID, 50)
+	runs, err := r.st.TaskRuns(r.id, t.ID, 50)
 	if err != nil {
 		ts.State, ts.Reason, ts.Detail = stateUnknown, taskError, err.Error()
 		return ts, plan.Current{}, nil
@@ -283,7 +283,7 @@ func cmdTrust(args []string) int {
 			}
 		}
 	}
-	if err := r.st.TrustConfig(r.root, r.cfg.Digest); err != nil {
+	if err := r.st.TrustConfig(r.id, r.cfg.TrustDigest(r.root)); err != nil {
 		fmt.Fprintf(os.Stderr, "cinema trust: %v\n", err)
 		return exitInternal
 	}
@@ -291,7 +291,10 @@ func cmdTrust(args []string) int {
 	if len(cmds) > 0 {
 		fmt.Printf("cinema may now run these toolchain commands:\n%s\n", strings.Join(cmds, "\n"))
 	}
-	fmt.Println("any change to the file needs `cinema trust` again")
+	if sh := r.cfg.ShellToolchains(); len(sh) > 0 {
+		fmt.Printf("note: these run shell code; trust can't track files they read, so review them:\n  %s\n", strings.Join(sh, "\n  "))
+	}
+	fmt.Println("any change to the file, or to repo files those commands name, needs `cinema trust` again")
 	return 0
 }
 

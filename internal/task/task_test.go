@@ -56,28 +56,30 @@ func TestParseRejects(t *testing.T) {
 		return "schema_version: 1\ntasks:\n  t:\n    argv: [make]\n    platform: any\n" + body
 	}
 	for name, cfg := range map[string]string{
-		"unknown field":     task("    platfrom: any\n"),
-		"unknown top level": "schema_version: 1\nextra: 1\ntasks:\n  t: {argv: [make], platform: any}\n",
-		"duplicate task":    "schema_version: 1\ntasks:\n  t: {argv: [a], platform: any}\n  t: {argv: [b], platform: any}\n",
-		"duplicate key":     task("    cwd: a\n    cwd: b\n"),
-		"two documents":     task("") + "---\nschema_version: 1\n",
-		"no platform":       "schema_version: 1\ntasks:\n  t: {argv: [make]}\n",
-		"bad platform":      "schema_version: 1\ntasks:\n  t: {argv: [make], platform: macos}\n",
-		"wrong schema":      "schema_version: 2\ntasks:\n  t: {argv: [make], platform: any}\n",
-		"no tasks":          "schema_version: 1\ntasks: {}\n",
-		"empty argv":        "schema_version: 1\ntasks:\n  t: {argv: [], platform: any}\n",
-		"bad id":            "schema_version: 1\ntasks:\n  Bad_ID: {argv: [make], platform: any}\n",
-		"cwd escapes":       task("    cwd: ../other\n"),
-		"extra escapes":     task("    extra_inputs: [/etc/passwd]\n"),
-		"toolchain both":    task("    toolchain: [{cmd: [go, version], file: go.mod}]\n"),
-		"toolchain neither": task("    toolchain: [{}]\n"),
-		"bad env name":      task("    env: [\"A B\"]\n"),
-		"bad vcs":           task("    vcs_context: sometimes\n"),
-		"reuse without age": task("    reuse: {allowed: true}\n"),
-		"go test cache":     "schema_version: 1\ntasks:\n  t: {argv: [go, test, ./...], platform: any}\n", // ACC-020
-		"null task":         "schema_version: 1\ntasks:\n  t:\n",
-		"not a mapping":     "- a\n- b\n",
-		"oversized":         strings.Repeat("#", maxConfigSize+1),
+		"unknown field":       task("    platfrom: any\n"),
+		"unknown top level":   "schema_version: 1\nextra: 1\ntasks:\n  t: {argv: [make], platform: any}\n",
+		"duplicate task":      "schema_version: 1\ntasks:\n  t: {argv: [a], platform: any}\n  t: {argv: [b], platform: any}\n",
+		"duplicate key":       task("    cwd: a\n    cwd: b\n"),
+		"two documents":       task("") + "---\nschema_version: 1\n",
+		"no platform":         "schema_version: 1\ntasks:\n  t: {argv: [make]}\n",
+		"bad platform":        "schema_version: 1\ntasks:\n  t: {argv: [make], platform: macos}\n",
+		"wrong schema":        "schema_version: 2\ntasks:\n  t: {argv: [make], platform: any}\n",
+		"no tasks":            "schema_version: 1\ntasks: {}\n",
+		"empty argv":          "schema_version: 1\ntasks:\n  t: {argv: [], platform: any}\n",
+		"bad id":              "schema_version: 1\ntasks:\n  Bad_ID: {argv: [make], platform: any}\n",
+		"cwd escapes":         task("    cwd: ../other\n"),
+		"extra escapes":       task("    extra_inputs: [/etc/passwd]\n"),
+		"toolchain both":      task("    toolchain: [{cmd: [go, version], file: go.mod}]\n"),
+		"toolchain neither":   task("    toolchain: [{}]\n"),
+		"bad env name":        task("    env: [\"A B\"]\n"),
+		"toolchain repo path": task("    toolchain: [{cmd: [./scripts/v.sh]}]\n"),
+		"toolchain abs path":  task("    toolchain: [{cmd: [/tmp/v.sh]}]\n"),
+		"bad vcs":             task("    vcs_context: sometimes\n"),
+		"reuse without age":   task("    reuse: {allowed: true}\n"),
+		"go test cache":       "schema_version: 1\ntasks:\n  t: {argv: [go, test, ./...], platform: any}\n", // ACC-020
+		"null task":           "schema_version: 1\ntasks:\n  t:\n",
+		"not a mapping":       "- a\n- b\n",
+		"oversized":           strings.Repeat("#", maxConfigSize+1),
 	} {
 		if _, err := Parse([]byte(cfg)); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -168,7 +170,7 @@ func TestEnvFingerprint(t *testing.T) { // ACC-019
 	}
 	mk := func(platform string) *Task {
 		return mustParse(t, "schema_version: 1\ntasks:\n  t:\n    argv: [make]\n    platform: "+platform+
-			"\n    toolchain: [{cmd: [./tool.sh]}]\n    env: [CINEMA_TEST_VAR]\n").Tasks["t"]
+			"\n    toolchain: [{cmd: [sh, tool.sh]}]\n    env: [CINEMA_TEST_VAR]\n").Tasks["t"]
 	}
 	version("1.0")
 	native := mk(runtime.GOOS + "/" + runtime.GOARCH)
@@ -236,4 +238,19 @@ func FuzzParse(f *testing.F) {
 			}
 		}
 	})
+}
+
+func TestTrustDigestCoversNamedRepoFiles(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "scripts"), 0o755)
+	os.WriteFile(filepath.Join(root, "scripts/v.js"), []byte("console.log(1)"), 0o644)
+	c := mustParse(t, "schema_version: 1\ntasks:\n  t:\n    argv: [make]\n    platform: any\n    toolchain: [{cmd: [node, scripts/v.js]}, {cmd: [sh, -c, echo hi]}]\n")
+	a := c.TrustDigest(root)
+	os.WriteFile(filepath.Join(root, "scripts/v.js"), []byte("require('child_process')"), 0o644)
+	if c.TrustDigest(root) == a {
+		t.Fatal("editing a repo script named by a toolchain command didn't change the trust digest")
+	}
+	if got := c.ShellToolchains(); len(got) != 1 {
+		t.Fatalf("shell toolchains = %v", got)
+	}
 }

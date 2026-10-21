@@ -37,6 +37,53 @@ type Config struct {
 	Digest        string           `yaml:"-"` // sha256 of the raw bytes; what `cinema trust` approves
 }
 
+// TrustDigest is what `cinema trust` approves: the config bytes plus the
+// content of every repo file a toolchain command names as an argument (e.g.
+// [node, scripts/version.js]), so editing such a file requires re-trust.
+// Shell strings (sh -c "...") can still reach other files; ShellToolchains
+// lists them so `cinema trust` can say so.
+func (c *Config) TrustDigest(root string) string {
+	e := newEnc("cinema.trust.v1")
+	e.str(c.Digest)
+	ids := make([]string, 0, len(c.Tasks))
+	for id := range c.Tasks {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		for _, tc := range c.Tasks[id].Toolchain {
+			for _, arg := range tc.Cmd[min(1, len(tc.Cmd)):] {
+				rel, err := snapshot.CleanRel(arg)
+				if err != nil {
+					continue
+				}
+				b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+				if err != nil {
+					continue // not a repo file
+				}
+				e.str(rel)
+				e.str(string(b))
+			}
+		}
+	}
+	return e.sum()
+}
+
+// ShellToolchains returns toolchain commands that run shell code, whose
+// referenced files trust can't track.
+func (c *Config) ShellToolchains() []string {
+	var out []string
+	for id, t := range c.Tasks {
+		for _, tc := range t.Toolchain {
+			if len(tc.Cmd) > 1 && slices.Contains([]string{"sh", "bash", "zsh", "dash", "fish"}, tc.Cmd[0]) && slices.Contains(tc.Cmd, "-c") {
+				out = append(out, id+": "+strings.Join(tc.Cmd, " "))
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // RunsCommands reports whether computing t's environment executes commands
 // from the config (toolchain cmd entries). Those require a trusted config.
 func (t *Task) RunsCommands() bool {
@@ -152,6 +199,11 @@ func (t *Task) validate() error {
 	for i, tc := range t.Toolchain {
 		switch {
 		case len(tc.Cmd) > 0 && tc.File == "":
+			// A bare name resolves from PATH, never from the repo: a repo script
+			// could change after `cinema trust` without the config changing.
+			if tc.Cmd[0] == "" || strings.ContainsRune(tc.Cmd[0], '/') {
+				return fmt.Errorf("toolchain[%d]: cmd[0] must be a command name on PATH (got %q)", i, tc.Cmd[0])
+			}
 		case len(tc.Cmd) == 0 && tc.File != "":
 			c, err := snapshot.CleanRel(tc.File)
 			if err != nil {
