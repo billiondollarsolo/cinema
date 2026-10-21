@@ -4,6 +4,8 @@
 # no longer bundles corepack. Tasks install their own dependencies (clean checkout).
 # Node 14/16/18 prod cells rewrite the lockfile, and the Node 20 cell builds dist with
 # Node 22 but tests it with 20 (two runtimes in one job), so none of those are tasks.
+# Tests pin --maxWorkers=3, as on a 4-vCPU runner: with jest's default (cores - 1 = 15 on
+# the 16-core lab box) jest-light-runner/child-process deadlocks; with 3 it passes in 84 s.
 schema_version: 1
 tasks:
   # lint.yml Lint (Node 24): every step except actionlint (fetched from main),
@@ -29,7 +31,7 @@ tasks:
         -o,
         pipefail,
         -c,
-        "Y=$(ls .yarn/releases/yarn-*.cjs) && node $Y install --immutable && node $Y test",
+        "Y=$(ls .yarn/releases/yarn-*.cjs) && node $Y install --immutable && node $Y test --maxWorkers=3",
       ]
     platform: linux/amd64
     runtime: { node: 22.23.4 }
@@ -43,7 +45,7 @@ tasks:
         -o,
         pipefail,
         -c,
-        "export FULL_TEST=true ENABLE_CODE_COVERAGE=true; Y=$(ls .yarn/releases/yarn-*.cjs) && node $Y install --immutable && node $Y c8 node $Y test",
+        "export FULL_TEST=true ENABLE_CODE_COVERAGE=true; Y=$(ls .yarn/releases/yarn-*.cjs) && node $Y install --immutable && node $Y c8 node $Y test --maxWorkers=3",
       ]
     platform: linux/amd64
     runtime: { node: 26.12.1 }
@@ -57,7 +59,7 @@ tasks:
         -o,
         pipefail,
         -c,
-        "export FULL_TEST=true; Y=$(ls .yarn/releases/yarn-*.cjs) && node $Y install --immutable && node $Y build --clean && node $Y test:production && node $Y test:production-standalone",
+        "export FULL_TEST=true; Y=$(ls .yarn/releases/yarn-*.cjs) && node $Y install --immutable && node $Y build --clean && node $Y test:production --maxWorkers=3 && node $Y test:production-standalone --maxWorkers=3",
       ]
     platform: linux/amd64
     runtime: { node: 26.12.1 }
@@ -71,7 +73,7 @@ tasks:
         -o,
         pipefail,
         -c,
-        "Y=$(ls .yarn/releases/yarn-*.cjs) && node $Y install --immutable && node $Y build --clean && node $Y test:production && node $Y test:production-standalone",
+        "Y=$(ls .yarn/releases/yarn-*.cjs) && node $Y install --immutable && node $Y build --clean && node $Y test:production --maxWorkers=3 && node $Y test:production-standalone --maxWorkers=3",
       ]
     platform: linux/amd64
     runtime: { node: 24.22.1 }
@@ -85,7 +87,7 @@ tasks:
         -o,
         pipefail,
         -c,
-        "Y=$(ls .yarn/releases/yarn-*.cjs) && node $Y install --immutable && node $Y build --clean && node $Y test:production && node $Y test:production-standalone",
+        "Y=$(ls .yarn/releases/yarn-*.cjs) && node $Y install --immutable && node $Y build --clean && node $Y test:production --maxWorkers=3 && node $Y test:production-standalone --maxWorkers=3",
       ]
     platform: linux/amd64
     runtime: { node: 22.23.4 }
