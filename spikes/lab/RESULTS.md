@@ -143,6 +143,7 @@ Each finding came from a real project and was fixed with a test.
     - Notes are size-checked before they're read.
 31. **One task per upstream matrix leg, or near it.** The parallel gate's no-evidence wall time is its slowest task. A task that loops over a matrix upstream runs in parallel (traefik's 18 cross targets) turns minutes into an hour. Split such loops into several tasks. With evidence it makes no difference: the gate reused all 13 tasks in 36 s.
 32. **Container tasks can leave root-owned files in a checkout slot.** Then `git clean` can't reset the slot, and nothing can delete it without root. CInema now fails with the slot path, the `sudo rm -rf` to remove it, and the fix: run containers with `--user "$(id -u):$(id -g)"`. prometheus's crossbuild already does, and its outputs are user-owned.
+33. **CPU-saturating tasks make neighbours flaky.** prometheus's crossbuild (6 platforms, `--parallelism 6`, 13 min) ran under `-j 4` beside the race suites. test-race (`TestQueryConcurrency`), test-386 (tsdb) and forcedirectio-race (10 min test timeout) failed, all timing. That's a safe failure (no receipts) but costs a re-run. Heavy tasks get `exclusive: true`. It's a scheduling hint, not part of the contract, so existing receipts stay valid.
 
 ## The parallel gate with no evidence (fork-like): first runs
 

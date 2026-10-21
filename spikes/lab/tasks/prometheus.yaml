@@ -104,4 +104,5 @@ tasks:
     platform: linux/amd64
     toolchain: [{cmd: [go, version]}, {cmd: [node, --version]}, {image: quay.io/prometheus/golang-builder:1.27-base}]
     env: [GOFLAGS]
+    exclusive: true                 # saturates every core for ~13 min: timing-sensitive tsdb/promql tests fail beside it (finding 33)
     reuse: { allowed: true, max_age: 72h }
