@@ -92,6 +92,25 @@ Each PR appends a Go comment to the project's main entry point, so upstream's pa
 
 **No false greens:** upstream passed every Linux check on every commit where the gate passed (vite's only failure was Windows, which the gate never claims). Local evidence for vite takes 48–50 s with `-j 4`.
 
+**How savings are counted** (`ci-bill.py`)
+
+The first numbers in this file summed raw job time and counted Linux, Windows and macOS minutes the same. That overstated savings. GitHub [rounds each job up to a whole minute and prices by runner OS](https://docs.github.com/en/billing/reference/actions-runner-pricing): Linux $0.006, Windows $0.010, macOS $0.062 per minute on standard runners. The gate's own jobs cost at least 1 billed minute each. Recomputed on the same PR runs:
+
+| PR | Upstream billed min ($ if private) | Covered by reused tasks | Gate | **Net billed minutes saved** | **Net $ saved per push (private repo)** |
+|---|---|---|---|---|---|
+| traefik#3 | 144 ($0.91; incl. 12 Windows min) | 132 ($0.79) | 2 ($0.01) | **130 (90%)** | **$0.78 (86%)** |
+| prometheus#2 | 152 ($0.98; incl. 17 Windows) | 72 ($0.43) | 2 | **70 (46%)** | **$0.42 (43%)** |
+| prettier#1 | 109 ($2.51; 31 macOS min = $1.92) | 25 ($0.15) | 2 | **23 (21%)** | **$0.14 (6%)** |
+| eslint#1 | 85 ($0.69) | 19 ($0.11) | 2 | **17 (20%)** | **$0.10 (15%)** |
+
+Caveats:
+- **The mirrors are public, so GitHub bills them $0.** The timing API reports 0 billable ms. The $ column is what the same CI would cost in a private repo.
+- **Runner size:** public repos get 4-vCPU Linux runners and private ones 2-vCPU, so private jobs run longer. Absolute minutes are understated; percentages roughly hold.
+- **Minutes, not dollars, for macOS-heavy projects:** CInema replaces Linux jobs, and macOS is about 10× the price. That's why prettier saves 21% of minutes but only 6% of dollars.
+- **The compute moves.** Evidence runs on a machine you pay for (traefik: 23 min on the 16-core VPS). What's saved is hosted minutes, plus time-to-green when the critical path is covered.
+- **Hypothetical:** it assumes the covered upstream jobs are switched off and the gate replaces them. The mirrors run both.
+- **With misses,** each RUN matrix job adds at least a minute plus setup.
+
 **What it says about savings**
 - **Runner minutes:** the gate replaces whatever Linux work its tasks cover, at a fixed cost of about 25–50 s and 1 billed minute. Across 7 PRs in 6 projects that's 22–100% of upstream's runner-minutes. traefik (#3) is ~100% of its Linux CI, including the Docker integration suites. prometheus went from 29% to 49% once its Docker crossbuild became a task. The ceiling is set by what a Linux evidence machine can't or shouldn't claim: Windows/macOS legs, fuzzing, and jobs that test floating third-party versions (eslint's ecosystem plugins).
 - **Time to green improves only when the critical path is covered.** In these projects the slowest job is usually something a Linux box can't or shouldn't replace: Windows tests, fuzzing, Docker integration. The gate is never slower than upstream when evidence exists; without evidence the parallel gate is needed (finding 16).
@@ -160,6 +179,7 @@ Each finding came from a real project and was fixed with a test.
 | prettier | 5.2 min | 8 | 7.2 min |
 | eslint | 3.7 min | 6 | 12.6 min |
 | traefik ([#2](https://github.com/mjtechguy/cinema-lab-traefik/pull/2)) | **72 min** (12 of 13 jobs done in ≤ 12 min; `build-cross` 71 min) | 13 | 9.1 min (same PR, 115 runner-min) |
+| traefik ([#4](https://github.com/mjtechguy/cinema-lab-traefik/pull/4), `build-cross` split into 6) | **14.3 min** (critical path integration-docker 13.6) | 18 | 17.2 min (same PR; both competed for the 20-concurrent-job limit) |
 
 With no receipts, the gate is no longer a regression *when each task is about one upstream job*: each matrix job runs one task. traefik's `build-cross` packs 18 upstream matrix legs into one task, and so it ran 71 min serially on a 4-vCPU runner versus 4.6 min per upstream leg (finding 31). It is now 6 tasks of 3 targets, about 12 min each, the same as the longest integration group. (Three task jobs failed on these first runs because of task-definition and formatting issues, findings 25–26. They were fixed before the evidence runs.)
 
