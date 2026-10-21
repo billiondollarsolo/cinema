@@ -1,7 +1,8 @@
 # P0 spikes (plan.md §16)
 
 Throwaway code. It answers the feasibility questions and then gets deleted; none of it is the product.
-GitHub spikes ran on 2026-10-21 in the private throwaway repos `mjtechguy/cinema-p0{,-goapi,-webapp}`, using the workflows in `workflows/`.
+GitHub spikes ran on 2026-10-21 in private throwaway repos `mjtechguy/cinema-p0{,-goapi,-webapp}` (since deleted), using the workflows in `workflows/`.
+The same code now lives in public test beds: `mjtechguy/cinema-test-gate`, `cinema-test-goapi`, `cinema-test-webapp` (free Actions minutes).
 
 ## Findings that change the plan
 
