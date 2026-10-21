@@ -163,6 +163,33 @@ Each finding came from a real project and was fixed with a test.
 
 With no receipts, the gate is no longer a regression *when each task is about one upstream job*: each matrix job runs one task. traefik's `build-cross` packs 18 upstream matrix legs into one task, and so it ran 71 min serially on a 4-vCPU runner versus 4.6 min per upstream leg (finding 31). It is now 6 tasks of 3 targets, about 12 min each, the same as the longest integration group. (Three task jobs failed on these first runs because of task-definition and formatting issues, findings 25–26. They were fixed before the evidence runs.)
 
+## `cinema analyze` against the mirrors
+
+Deterministic drafts from each project's `.github/workflows`, one per Linux job and matrix combination:
+
+| Project | task | review | skip |
+|---|---:|---:|---:|
+| eslint | 17 | 10 | 6 |
+| traefik | 7 | 2 | 58 |
+| prettier | 4 | 4 | 26 |
+| cli | 2 | 2 | 7 |
+| vite | 2 | 9 | 4 |
+| prometheus | 0 | 35 | 9 |
+
+- **Before version handling:** 4 jobs in total were "task".
+- **Version files** (`.go-version`, `go.mod`, `.nvmrc`; ~74 jobs) and **ranges** resolved to today's release (`1.26` → 1.26.10, `22` → 22.23.4) made most of the difference.
+- **Matrix-only `if:` evaluation** fixed prettier's per-Node conditionals.
+- **What remains review or skip:** jobs built from actions (goreleaser, golangci-lint-action, prometheus's `promci`, test-splitting, docker login/buildx), other OSes, secrets, and artifacts passed between jobs. Those are what I translated by hand in the lab.
+
+**traefik's 7 drafts, run unmodified in a clean checkout:**
+- **Passed (4):** build, test-ui-unit, validate-generate, test-unit.
+- **Didn't pass (3):**
+  - **validate** needs `shellcheck`, which is on the GitHub runner image and not the VPS. It also pipes an installer fetched from `HEAD` into `sh` (now flagged).
+  - **The two gateway-conformance jobs** regenerate a tracked report. That's correct behavior, but it makes them not evidence until it's declared in `outputs:`. `cinema run` now names the changed files.
+  - **merged conformance under `-j 3`:** it failed, apparently colliding with the other conformance job's cluster. It passed alone, so those two need `exclusive`.
+
+**So:** a draft is a starting point. The verification run is what tells you what to fix. That's the planned next step, "verification mode": run every draft and compare with the same commit's CI.
+
 ## Local runs (`run-lab.sh`, VPS, root pass)
 
 | Project | Tasks run | Result | Notes |
