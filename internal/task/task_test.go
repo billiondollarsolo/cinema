@@ -197,7 +197,7 @@ func TestEnvFingerprint(t *testing.T) { // ACC-019
 	if b, _ := mk(other).EnvFingerprint(root); b.Digest != a.Digest || b.Inputs[0] != "platform="+Platform() {
 		t.Fatalf("foreign-platform task: %v", b.Inputs)
 	}
-	if b, _ := mk("any").EnvFingerprint(root); b.Digest == a.Digest || b.Inputs[0] != "platform=any" {
+	if b, _ := mk("any").EnvFingerprint(root); b.Digest == a.Digest || b.Inputs[0] != "platform=any" || !strings.HasPrefix(b.Inputs[1], "user=") {
 		t.Fatal("platform any should be machine-independent")
 	}
 	for _, in := range a.Inputs {

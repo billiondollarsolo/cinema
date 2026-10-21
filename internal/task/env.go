@@ -27,7 +27,8 @@ type Env struct {
 }
 
 // EnvFingerprint computes the environment digest for t on this machine
-// (plan §6.2): platform, toolchain outputs and allowlisted env vars. For
+// (plan §6.2): platform, whether it runs as root, toolchain outputs and
+// allowlisted env vars. For
 // platform "any" the platform is the literal "any", so results from any OS
 // match; otherwise it's the real GOOS/GOARCH, so a macOS run never matches a
 // Linux task.
@@ -42,6 +43,14 @@ func (t *Task) EnvFingerprint(root string) (Env, error) {
 	}
 	e.str(platform)
 	env.Inputs = append(env.Inputs, "platform="+platform)
+	// Root changes results: permission tests fail (or skip, i.e. pass) as root.
+	// GitHub's runners are non-root, container jobs often root; they must match.
+	user := "user=nonroot"
+	if os.Geteuid() == 0 {
+		user = "user=root"
+	}
+	e.str(user)
+	env.Inputs = append(env.Inputs, user)
 
 	dir := filepath.Join(root, filepath.FromSlash(t.Cwd))
 	e.u64(uint64(len(t.Toolchain)))
