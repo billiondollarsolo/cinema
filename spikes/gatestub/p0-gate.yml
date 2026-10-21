@@ -1,0 +1,21 @@
+# P0-1: copy to <target-repo>/.github/workflows/p0-gate.yml (see spikes/README.md).
+# Measures the floor cost of a fully reused PR: runner + checkout + binary download + one verify.
+name: p0-gate
+on:
+  pull_request: {}
+  workflow_dispatch: {}
+permissions: { contents: read }
+jobs:
+  cinema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0, persist-credentials: false }
+      - name: install gatestub
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release download p0-gatestub -R "$GITHUB_REPOSITORY" -p gatestub-linux-amd64 -O /usr/local/bin/gatestub
+          chmod +x /usr/local/bin/gatestub
+      - name: verify
+        env: { CINEMA_TRUSTED_KEYS: "${{ vars.CINEMA_TRUSTED_KEYS }}" }
+        run: time gatestub verify "$CINEMA_TRUSTED_KEYS" .cinema/p0-envelope.json
