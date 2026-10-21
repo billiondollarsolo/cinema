@@ -53,8 +53,8 @@ func TestCancelKillsGrandchildren(t *testing.T) { // ACC-004
 	start := time.Now()
 	// The grandchild ignores SIGTERM, so only the group SIGKILL can stop it.
 	r := run(t, ctx, Options{Argv: sh(`sh -c 'trap "" TERM; sleep 60' & echo $! > ` + pidfile + `; wait`)})
-	if !r.Canceled || r.ExitCode == 0 {
-		t.Fatalf("canceled=%v exit=%d", r.Canceled, r.ExitCode)
+	if !r.Canceled || !r.TimedOut || r.ExitCode == 0 {
+		t.Fatalf("canceled=%v timed_out=%v exit=%d", r.Canceled, r.TimedOut, r.ExitCode)
 	}
 	if d := time.Since(start); d > 3*time.Second {
 		t.Fatalf("took %v", d)

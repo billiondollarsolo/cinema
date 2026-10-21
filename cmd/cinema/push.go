@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/billiondollarsolo/cinema/internal/evidence"
 	"github.com/billiondollarsolo/cinema/internal/snapshot"
@@ -300,6 +302,8 @@ func receiptsFor(r *repo, sha, repoID string, priv ed25519.PrivateKey, blobs *sn
 // runMissingClean runs, in a clean checkout of HEAD, every reusable task this
 // machine can satisfy that has no clean-checkout evidence for HEAD yet.
 func runMissingClean(r *repo, jobs int) int {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 	sha, err := gitOut(r.root, "rev-parse", "HEAD")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cinema push: %v\n", err)
@@ -328,7 +332,7 @@ func runMissingClean(r *repo, jobs int) int {
 	}
 	var failed int
 	if jobs > 1 {
-		failed = runParallel(context.Background(), r, sha, todo, jobs)
+		failed = runParallel(ctx, r, sha, todo, jobs)
 	} else {
 		sweepRunDirs()
 		cr, cleanup, err := cleanCheckout(r, sha)
@@ -337,7 +341,11 @@ func runMissingClean(r *repo, jobs int) int {
 			fmt.Fprintf(os.Stderr, "cinema push: %v\n", err)
 			return exitInternal
 		}
-		failed = runTasks(context.Background(), cr, todo)
+		failed = runTasks(ctx, cr, todo)
+	}
+	if ctx.Err() != nil {
+		fmt.Fprintln(os.Stderr, "cinema push: interrupted; nothing pushed")
+		return exitUnsatisfied
 	}
 	if failed > 0 {
 		fmt.Fprintf(os.Stderr, "cinema push: %d task(s) failed in the clean checkout; pushing anyway (CI will run them)\n", failed)
@@ -352,6 +360,9 @@ func qualifyingRun(t *task.Task, runs []store.TaskRun, contract, source, sha str
 	for i := range runs {
 		r := &runs[i]
 		sameInputs := r.Contract == contract && r.SourceBefore == source
+		if r.State == store.StateInterrupted {
+			continue
+		}
 		if r.State != store.StatePassed {
 			if sameInputs {
 				return nil // a failure on these inputs outweighs older passes

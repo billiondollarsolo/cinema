@@ -23,10 +23,11 @@ import (
 
 // Run states. Only StatePassed can ever be signed (plan §7.2).
 const (
-	StateRecording  = "recording"  // started; not yet durable
-	StatePassed     = "passed"     // exit 0, not signaled, not canceled, output stored
-	StateFailed     = "failed"     // anything else that finished
-	StateIncomplete = "incomplete" // recorder died mid-run (RECORDING_INCOMPLETE)
+	StateRecording   = "recording"   // started; not yet durable
+	StatePassed      = "passed"      // exit 0, not signaled, not canceled, output stored
+	StateFailed      = "failed"      // anything else that finished
+	StateIncomplete  = "incomplete"  // recorder died mid-run (RECORDING_INCOMPLETE)
+	StateInterrupted = "interrupted" // stopped by the user (Ctrl-C, SIGTERM): says nothing about the check
 )
 
 type Store struct {
@@ -218,7 +219,10 @@ func (s *Store) FinishRun(id string, r record.Result, src Source, m Match) (stri
 		return "", err
 	}
 	state := StateFailed
-	if r.ExitCode == 0 && r.Signal == "" && !r.Canceled {
+	switch {
+	case r.Canceled && !r.TimedOut: // a timeout is a hang, i.e. a real failure
+		state = StateInterrupted
+	case r.ExitCode == 0 && r.Signal == "":
 		state = StatePassed
 	}
 	res, err := s.db.Exec(`UPDATE runs SET state=?, path=?, started_at=?, duration_ms=?, exit_code=?, signal=?,

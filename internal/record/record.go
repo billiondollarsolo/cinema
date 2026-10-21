@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -35,11 +36,12 @@ type Result struct {
 	Argv      []string      `json:"argv"`
 	Path      string        `json:"path"` // resolved executable
 	Start     time.Time     `json:"start"`
-	Duration  time.Duration `json:"-"`                // monotonic; serialized by callers in their own unit
-	ExitCode  int           `json:"exit_code"`        // 128+signo when signaled (shell convention)
-	Signal    string        `json:"signal,omitempty"` // set when the child died from a signal
-	Canceled  bool          `json:"canceled"`         // context ended before the child did
-	Leftovers bool          `json:"leftovers"`        // child left processes running; they were stopped
+	Duration  time.Duration `json:"-"`                   // monotonic; serialized by callers in their own unit
+	ExitCode  int           `json:"exit_code"`           // 128+signo when signaled (shell convention)
+	Signal    string        `json:"signal,omitempty"`    // set when the child died from a signal
+	Canceled  bool          `json:"canceled"`            // context ended (or the user signaled us) before the child did
+	TimedOut  bool          `json:"timed_out,omitempty"` // canceled by its deadline: a hang is the check's own failure
+	Leftovers bool          `json:"leftovers"`           // child left processes running; they were stopped
 	Stdout    Capture       `json:"stdout"`
 	Stderr    Capture       `json:"stderr"`
 }
@@ -109,10 +111,12 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	copies.Go(func() { _, _ = io.Copy(tee{o.Stderr, &res.Stderr, nil}, errR) })
 	pgid := cmd.Process.Pid
 	done := make(chan struct{})
+	var interrupted atomic.Bool
 	go func() {
 		for {
 			select {
 			case s := <-sigs:
+				interrupted.Store(true) // the user stopped us: not the child's own failure
 				_ = syscall.Kill(-pgid, s.(syscall.Signal))
 			case <-done:
 				return
@@ -123,7 +127,8 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	waitErr := cmd.Wait()
 	close(done)
 	res.Duration = time.Since(res.Start)
-	res.Canceled = ctx.Err() != nil
+	res.Canceled = ctx.Err() != nil || interrupted.Load()
+	res.TimedOut = errors.Is(ctx.Err(), context.DeadlineExceeded)
 	res.Leftovers = reapGroup(pgid, o.Grace)
 
 	// Pipes reach EOF once every writer is gone. A process that escaped the group

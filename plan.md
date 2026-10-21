@@ -625,7 +625,7 @@ $XDG_DATA_HOME/cinema/  (macOS: ~/Library/Application Support/cinema/)
 Tables: `repos`, `tasks` (by contract digest), `runs`, `snapshots` (digest + manifest blob), `receipts` (signed bytes), `pushes`.
 
 - Short write transactions, `busy_timeout`, bounded retry. Concurrent `cinema exec` calls must not corrupt anything (ACC-051).
-- A run becomes `PASSED` only after its record and blobs are durable. Crashes leave `RECORDING_INCOMPLETE`, which is never signable.
+- A run becomes `PASSED` only after its record and blobs are durable. Crashes leave `RECORDING_INCOMPLETE`, which is never signable. A run the user stops (Ctrl-C, SIGTERM to cinema) is `interrupted`: never signable, and unlike a failure it doesn't block reuse of a pass on the same inputs. A timeout is a failure (a hang is a real bug).
 - Retention defaults: run metadata 90 days, passing logs 7 days, failing logs 30 days.
 - Nothing lives under the repo except `.cinema/tasks.yaml`.
 

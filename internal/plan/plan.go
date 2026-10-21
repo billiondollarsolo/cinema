@@ -79,6 +79,9 @@ func Local(t *task.Task, cur Current, runs []Run) Decision {
 	bestReason := ""
 	for i := range runs {
 		r := &runs[i]
+		if r.State == "interrupted" {
+			continue // stopped by the user: neither evidence nor a failure
+		}
 		if r.State != "passed" {
 			// A failure on these exact inputs outweighs any pass: reusing the pass
 			// would hide a flaky or broken check. Failures elsewhere don't count.
@@ -96,7 +99,7 @@ func Local(t *task.Task, cur Current, runs []Run) Decision {
 		}
 	}
 	switch {
-	case runs[0].State != "passed": // latest attempt failed, on some other tree
+	case runs[0].State != "passed" && runs[0].State != "interrupted": // latest attempt failed, on some other tree
 		d.State, d.Reason, d.RunID = Failed, RunFailed, runs[0].ID
 	case best != nil:
 		d.State, d.Reason, d.RunID = Stale, bestReason, best.ID

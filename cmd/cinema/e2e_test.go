@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -596,6 +597,39 @@ tasks:
 	t.Cleanup(func() { exec.Command("chmod", "-R", "u+w", e.data).Run() })
 	if out := run(); len(slots) != 1 || !strings.Contains(out, "sudo rm -rf "+slots[0]) {
 		t.Fatalf("no actionable error for an undeletable slot:\n%s", out)
+	}
+}
+
+// Stopping cinema (Ctrl-C, SIGTERM) mid-task is not a test failure: the run is
+// recorded as interrupted and must not block reuse of a later pass (lab:
+// killing a hung push marked 4 tasks failed on those exact inputs).
+func TestInterruptedRunIsNotAFailure(t *testing.T) {
+	e := newEnv(t)
+	started := filepath.Join(t.TempDir(), "started")
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  slow: {argv: [sh, -c, "touch `+started+`; sleep 30"], platform: any, reuse: {allowed: true, max_age: 1h}}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	cmd := exec.Command(bin, "run", "slow")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cmd.Process.Signal(syscall.SIGTERM)
+	if err := cmd.Wait(); err == nil {
+		t.Fatal("interrupted run exited 0")
+	}
+	if st := e.states()["slow"]; !strings.HasPrefix(st, "missing") {
+		t.Fatalf("interrupted run: state %q, want missing (neither failed nor reusable)", st)
 	}
 }
 
