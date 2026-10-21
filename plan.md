@@ -659,7 +659,7 @@ Report hashing and wrapper overhead separately, always.
 - [x] **P0-2 Git notes round trip.** (private repos need a token for the notes fetch; fork case untested) Push `refs/notes/cinema/v1/*` to GitHub; fetch in Actions with `actions/checkout` + `git fetch origin 'refs/notes/cinema/*:refs/notes/cinema/*'`; confirm `--atomic`; test two machines pushing different refs; test a fork PR (expect: no notes; that's fine).
 - [x] **P0-3 Merge-commit fingerprint.** (match only when base hasn't moved) For a PR, compare the tree fingerprint of PR head vs `GITHUB_SHA` merge commit across: base unchanged, base changed in unrelated file, base changed in task input. Confirms how often head receipts can match in practice.
 - [x] **P0-4 Hashing cost.** (results: spikes/README.md) Fingerprint 1k / 10k / 100k-file repos, cold and warm.
-- [~] **P0-5 Reuse estimate.** (done on made-up repos; real up-to-date rate pending) Take 2–3 of your own repos: list CI checks, mark which could honestly be `platform: any`, estimate the hit rate.
+- [x] **P0-5 Reuse estimate.** (test-bed CI 140 s → 9–50 s; only 30–95% of real PRs are up to date at merge, which caps whole-source reuse) Take 2–3 of your own repos: list CI checks, mark which could honestly be `platform: any`, estimate the hit rate.
 - [~] **P0-6 License + predicate domain.** (Apache-2.0 chosen; domain open) Pick license; reserve a domain/URI for `predicateType`.
 
 **Exit:** P0-1 shows a clear time win when everything is reused, and P0-2 works on github.com.
