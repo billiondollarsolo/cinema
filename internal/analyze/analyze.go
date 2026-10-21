@@ -5,6 +5,8 @@
 package analyze
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -99,12 +101,47 @@ func Repo(root string) ([]Job, error) {
 		}
 		out = append(out, jobs...)
 	}
+	uniqueIDs(out)
 	return out, nil
+}
+
+// uniqueIDs makes proposal ids valid task ids (at most 64 characters: long ones
+// keep a hash of the full id) and distinct: a job whose id is taken by a
+// different script gets its workflow's name appended, then a counter.
+func uniqueIDs(jobs []Job) {
+	fit := func(id string) string {
+		if len(id) <= 64 {
+			return id
+		}
+		sum := sha256.Sum256([]byte(id))
+		return strings.TrimRight(id[:55], "-.") + "-" + hex.EncodeToString(sum[:4])
+	}
+	body := map[string]string{}
+	for _, j := range jobs {
+		p := j.Proposal
+		if p == nil {
+			continue
+		}
+		id := fit(p.ID)
+		if b, ok := body[id]; ok && b != p.Body {
+			stem := strings.TrimSuffix(strings.TrimSuffix(j.Workflow, ".yml"), ".yaml")
+			base := fit(taskID(p.ID+"-"+stem, nil))
+			id = base
+			for n := 2; body[id] != "" && body[id] != p.Body; n++ {
+				id = fit(fmt.Sprintf("%s-%d", base, n))
+			}
+		}
+		p.ID, body[id] = id, p.Body
+	}
 }
 
 // Workflow analyzes one workflow file's jobs. Workflows that don't run on
 // push or pull_request (releases, schedules, issue bots) are not CI checks.
-func Workflow(name string, src []byte) ([]Job, error) { return workflowAt("", name, src) }
+func Workflow(name string, src []byte) ([]Job, error) {
+	jobs, err := workflowAt("", name, src)
+	uniqueIDs(jobs)
+	return jobs, err
+}
 
 // workflowAt is Workflow with the repo root, so version files can be read.
 func workflowAt(root, name string, src []byte) ([]Job, error) {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -236,5 +237,32 @@ func TestGitHubEnvEmulated(t *testing.T) {
 	b, _ := os.ReadFile(filepath.Join(d, "envfile"))
 	if _, err := os.Stat(strings.TrimSpace(string(b))); !os.IsNotExist(err) {
 		t.Errorf("temp file %s left behind", b)
+	}
+}
+
+func TestUniqueIDs(t *testing.T) {
+	long := strings.Repeat("packages/eslint-config-", 4)
+	jobs := []Job{
+		{Workflow: "a.yml", Proposal: &Proposal{ID: "verify", Body: "x"}},
+		{Workflow: "a.yml", Proposal: &Proposal{ID: "verify", Body: "x"}}, // same task twice: kept as one
+		{Workflow: "b.yml", Proposal: &Proposal{ID: "verify", Body: "y"}},
+		{Workflow: "c.yml", Proposal: &Proposal{ID: taskID("types", map[string]string{"dir": long}), Body: "z"}},
+		{Workflow: "c.yml", Proposal: &Proposal{ID: taskID("types", map[string]string{"dir": long + "x"}), Body: "w"}},
+	}
+	uniqueIDs(jobs)
+	valid := regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	seen := map[string]string{}
+	for _, j := range jobs {
+		id := j.Proposal.ID
+		if !valid.MatchString(id) {
+			t.Errorf("invalid id %q", id)
+		}
+		if b, ok := seen[id]; ok && b != j.Proposal.Body {
+			t.Errorf("id %q shared by different scripts", id)
+		}
+		seen[id] = j.Proposal.Body
+	}
+	if jobs[2].Proposal.ID != "verify-b" || len(seen) != 4 {
+		t.Errorf("ids: %v", seen)
 	}
 }
