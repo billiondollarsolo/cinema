@@ -146,6 +146,27 @@ func runTasks(ctx context.Context, w *repo, todo []*task.Task) int {
 // rev, so parallel tasks never see each other's tree writes. Task output goes to
 // the run record (dashboard, explain), not the terminal; failures print a tail.
 func runParallel(ctx context.Context, r *repo, rev string, todo []*task.Task, j int) int {
+	// Exclusive tasks (fixed ports, a fixed docker network) run alone, after the
+	// parallel-safe ones, one at a time.
+	var shared, alone []*task.Task
+	for _, t := range todo {
+		if t.Exclusive {
+			alone = append(alone, t)
+		} else {
+			shared = append(shared, t)
+		}
+	}
+	failed := runPool(ctx, r, rev, shared, j)
+	if len(alone) > 0 && ctx.Err() == nil {
+		failed += runPool(ctx, r, rev, alone, 1)
+	}
+	return failed
+}
+
+func runPool(ctx context.Context, r *repo, rev string, todo []*task.Task, j int) int {
+	if len(todo) == 0 {
+		return 0
+	}
 	sweepRunDirs()
 	queue := make(chan *task.Task)
 	var mu sync.Mutex

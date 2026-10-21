@@ -56,7 +56,11 @@ type Task struct {
 	Outputs         []string    `yaml:"outputs"`      // files/dirs the task writes; left out of its fingerprint (an explicit claim, like platform: any)
 	VCSContext      string      `yaml:"vcs_context"`  // "none" (default) | "exact"
 	AcceptToolCache bool        `yaml:"accept_tool_cache"`
-	Reuse           Reuse       `yaml:"reuse"`
+	// Exclusive: never run alongside other tasks locally (-j), e.g. tests that
+	// bind fixed ports or create a fixed docker network. Scheduling only: not
+	// part of the contract digest.
+	Exclusive bool  `yaml:"exclusive"`
+	Reuse     Reuse `yaml:"reuse"`
 }
 
 // Toolchain is one environment input: a command whose output identifies a tool

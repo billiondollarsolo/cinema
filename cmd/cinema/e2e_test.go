@@ -593,3 +593,19 @@ tasks:
 		t.Fatalf("task TMPDIR %s not removed", where)
 	}
 }
+
+func TestRunParallelExclusive(t *testing.T) {
+	e := newEnv(t)
+	lock := filepath.Join(t.TempDir(), "port")
+	// Each task takes a "port" (a lock dir); two holders at once means a collision.
+	take := func(id string) string {
+		return id + `: {argv: [sh, -c, "mkdir ` + lock + ` || exit 7; sleep 1; rmdir ` + lock + `"], platform: any, exclusive: true, reuse: {allowed: true, max_age: 1h}}`
+	}
+	e.write(".cinema/tasks.yaml", "schema_version: 1\ntasks:\n  "+take("x")+"\n  "+take("y")+"\n  "+take("z")+"\n")
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	if out, code := e.cinema("run", "--commit", "HEAD", "-j", "3", "--all"); code != 0 {
+		t.Fatalf("exclusive tasks collided under -j: %d\n%s", code, out)
+	}
+}
