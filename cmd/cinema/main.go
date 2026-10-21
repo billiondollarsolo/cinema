@@ -14,16 +14,17 @@ const usage = `usage: cinema <command> [args]
 commands:
   init                                                      write a .cinema/tasks.yaml skeleton
   exec [--record-json PATH] [--timeout D] -- CMD [ARGS...]   record an arbitrary command
-  run [--commit REV] <task>... | --all [--force]           run tasks by name (clean checkout with --commit)
+  run [--config FILE] [--commit REV] <task>... | --all     run tasks by name (clean checkout with --commit)
   status [--json]                                           per task: reusable / stale / missing + reason
   explain [--json] <task>                                   why a task is or isn't reusable
   log [--failed] <task | run-id>                            a recorded run's captured output
-  trust                                                     allow the toolchain commands in .cinema/tasks.yaml
+  trust [--config FILE]                                     allow the toolchain commands in .cinema/tasks.yaml
   dashboard [--port N] [--allow-host H] [--no-open]         local web page: checks, runs, logs
   keys init | export                                        this machine's signing key
   push [--remote R] [--notes-only] [--commit REV]...        sign evidence for pushed commits, push branch + notes
   verify --event FILE [--execute] [--report FILE]           the CI gate: reuse verified receipts, run the rest
-  analyze [--yaml | --json]                                 propose tasks from .github/workflows (advisory)
+  analyze [--yaml | --json]                                 propose tasks from .github/workflows (advisory;
+                                                            check a draft: run --config draft.yaml --commit HEAD --all)
 `
 
 func main() {

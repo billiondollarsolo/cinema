@@ -31,12 +31,14 @@ func cmdRun(args []string) int {
 	all := fs.Bool("all", false, "run every task this machine can satisfy that isn't already reusable")
 	force := fs.Bool("force", false, "with --all: rerun tasks that are already reusable")
 	commit := fs.String("commit", "", "run in a clean checkout of `REV` instead of the working tree")
+	cfgPath := configFlag(fs)
 	jobs := fs.Int("j", 1, "with --commit: run up to `N` tasks at once, each in its own clean checkout")
 	if err := fs.Parse(args); err != nil {
 		return exitBadArgs
 	}
+	useConfig(*cfgPath)
 	if *all == (fs.NArg() > 0) || *jobs < 1 {
-		fmt.Fprintln(os.Stderr, "usage: cinema run [--commit REV [-j N]] <task>... | --all [--force]")
+		fmt.Fprintln(os.Stderr, "usage: cinema run [--config FILE] [--commit REV [-j N]] <task>... | --all [--force]")
 		return exitBadArgs
 	}
 	if *jobs > 1 && *commit == "" {

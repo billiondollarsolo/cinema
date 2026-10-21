@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -17,6 +18,25 @@ import (
 
 // errUntrusted: the task's environment needs commands from a tasks.yaml the
 // user hasn't trusted (plan §6, `cinema trust`).
+// configOverride, set by --config, replaces .cinema/tasks.yaml for this
+// process (e.g. an analyzer draft), in the working tree and clean checkouts.
+// Trust is still per file digest.
+var configOverride string
+
+// configFlag registers --config on fs; call useConfig after fs.Parse.
+func configFlag(fs *flag.FlagSet) *string {
+	return fs.String("config", "", "use tasks from `FILE` instead of .cinema/tasks.yaml (e.g. a `cinema analyze --yaml` draft)")
+}
+
+func useConfig(path string) {
+	if path != "" {
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
+		}
+	}
+	configOverride = path
+}
+
 var errUntrusted = errors.New("tasks.yaml is not trusted: review it, then run `cinema trust`")
 
 // repo is the enclosing git repo, its config, and the local store.
@@ -66,6 +86,9 @@ func openRepoAt(cwd string) (*repo, error) {
 	}
 	r.root, r.cwdRel, r.id = root, filepath.ToSlash(rel), root
 	r.cfg, r.cfgErr = task.Load(root)
+	if configOverride != "" {
+		r.cfg, r.cfgErr = task.LoadFile(configOverride)
+	}
 	if r.st != nil {
 		r.cachePath = snapshot.CachePath(dataDir, root)
 		r.dataDir = dataDir

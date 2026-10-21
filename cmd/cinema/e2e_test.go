@@ -709,6 +709,33 @@ tasks:
 	}
 }
 
+// --config runs tasks from another file (an analyzer draft) in a clean
+// checkout, without touching the repo's tasks.yaml, and needs its own trust.
+func TestRunWithConfigFile(t *testing.T) {
+	e := newEnv(t)
+	e.write(".cinema/tasks.yaml", "schema_version: 1\ntasks:\n  real: {argv: [\"true\"], platform: any, reuse: {allowed: true, max_age: 1h}}\n")
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	draft := filepath.Join(t.TempDir(), "draft.yaml")
+	os.WriteFile(draft, []byte("schema_version: 1\ntasks:\n  drafted: {argv: [sh, -c, \"test -f .cinema/tasks.yaml\"], platform: any, toolchain: [{cmd: [git, --version]}], reuse: {allowed: true, max_age: 1h}}\n"), 0o644)
+	run := func(args ...string) string {
+		cmd := exec.Command(bin, args...)
+		cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+		out, _ := cmd.CombinedOutput()
+		return string(out)
+	}
+	if out := run("run", "--config", draft, "--commit", "HEAD", "drafted"); !strings.Contains(out, "not trusted") {
+		t.Fatalf("untrusted draft ran:\n%s", out)
+	}
+	run("trust", "--config", draft)
+	if out := run("run", "--config", draft, "--commit", "HEAD", "drafted"); !strings.Contains(out, "✓ drafted") {
+		t.Fatalf("draft didn't run:\n%s", out)
+	}
+	if b, _ := os.ReadFile(filepath.Join(e.repo, ".cinema/tasks.yaml")); strings.Contains(string(b), "drafted") {
+		t.Fatal("repo config was modified")
+	}
+}
+
 func TestCleanRunTempFilesRemoved(t *testing.T) {
 	e := newEnv(t)
 	tmp := t.TempDir()

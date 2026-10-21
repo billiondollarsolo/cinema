@@ -105,8 +105,11 @@ var (
 )
 
 // Load reads and validates root/.cinema/tasks.yaml.
-func Load(root string) (*Config, error) {
-	f, err := os.Open(filepath.Join(root, ConfigPath))
+func Load(root string) (*Config, error) { return LoadFile(filepath.Join(root, ConfigPath)) }
+
+// LoadFile reads and validates a config at path.
+func LoadFile(path string) (*Config, error) {
+	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrNoConfig
 	}

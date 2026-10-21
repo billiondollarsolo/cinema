@@ -267,9 +267,11 @@ func hintFor(ts taskStatus, t *task.Task) string {
 
 func cmdTrust(args []string) int {
 	fs := flag.NewFlagSet("trust", flag.ContinueOnError)
+	cfgPath := configFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return exitBadArgs
 	}
+	useConfig(*cfgPath)
 	r, code := loadForReport("trust", false)
 	defer r.close()
 	if code != 0 {
