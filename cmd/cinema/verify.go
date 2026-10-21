@@ -246,6 +246,13 @@ func executeGateTask(root string, t *task.Task, tr *gateTaskReport) {
 		ctx, cancel = context.WithTimeout(ctx, t.Timeout)
 		defer cancel()
 	}
+	if env == nil {
+		env = os.Environ()
+	}
+	if tmp, err := os.MkdirTemp("", "cinema-task-*"); err == nil {
+		defer os.RemoveAll(tmp)
+		env = task.PrivateGlobals(env, tmp)
+	}
 	res, err := record.Run(ctx, record.Options{Argv: t.Argv, Env: env,
 		Dir: filepath.Join(root, filepath.FromSlash(t.Cwd)), Stdout: os.Stdout, Stderr: os.Stderr})
 	fmt.Println("::endgroup::")

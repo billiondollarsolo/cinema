@@ -130,3 +130,16 @@ func TestGoRuntimeAndValidation(t *testing.T) {
 		t.Fatal("runtime version must be part of the contract")
 	}
 }
+
+func TestPrivateGlobals(t *testing.T) {
+	env := PrivateGlobals([]string{"PATH=/usr/bin", "NPM_CONFIG_PREFIX=/shared"}, "/s")
+	want := map[string]bool{"NPM_CONFIG_PREFIX=/s/npm-global": true, "PNPM_HOME=/s/pnpm-home": true, "PATH=/s/npm-global/bin:/s/pnpm-home:/usr/bin": true}
+	if len(env) != 3 {
+		t.Fatalf("%q", env)
+	}
+	for _, kv := range env {
+		if !want[kv] {
+			t.Errorf("unexpected %q", kv)
+		}
+	}
+}

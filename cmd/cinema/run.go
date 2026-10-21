@@ -241,7 +241,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex) (ba
 		// cinema's own checkouts; `cinema exec` keeps the caller's environment.
 		if tmp, err := os.MkdirTemp("", "cinema-task-*"); err == nil {
 			defer os.RemoveAll(tmp)
-			opts.Env = append(opts.Env, "TMPDIR="+tmp)
+			opts.Env = task.PrivateGlobals(append(opts.Env, "TMPDIR="+tmp), tmp)
 		}
 	}
 	if printMu == nil {

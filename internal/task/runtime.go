@@ -71,6 +71,24 @@ func (t *Task) RuntimeEnv(dataDir string) ([]string, error) {
 	return env, nil
 }
 
+// PrivateGlobals points global package installs (`npm i -g pnpm`, `pnpm add -g`,
+// common in CI scripts) at dir, a per-run scratch directory, and puts their bin
+// dirs first on PATH. Otherwise they land in the shared provisioned runtime,
+// where concurrent tasks race on them and later runs inherit them (lab: eslint).
+// Evidence runs and gate runs both use it, so they behave alike.
+func PrivateGlobals(env []string, dir string) []string {
+	npm, pnpm := filepath.Join(dir, "npm-global"), filepath.Join(dir, "pnpm-home")
+	path := ""
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			path = v
+		}
+	}
+	env = setEnv(env, "NPM_CONFIG_PREFIX", npm)
+	env = setEnv(env, "PNPM_HOME", pnpm)
+	return setEnv(env, "PATH", strings.Join([]string{filepath.Join(npm, "bin"), pnpm, path}, string(os.PathListSeparator)))
+}
+
 func setEnv(env []string, k, v string) []string {
 	out := make([]string, 0, len(env)+1)
 	for _, kv := range env {
