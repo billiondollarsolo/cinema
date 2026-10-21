@@ -1,40 +1,47 @@
-# traefik CI (PR, ubuntu) → CInema tasks. Go 1.26.x like CI (lab: GOTOOLCHAIN=go1.26.10);
+# traefik CI (PR, ubuntu) → CInema tasks. Go pinned with runtime: {go: 1.26.10}, provisioned
+# identically on the evidence machine and in the gate (no check-latest drift);
 # yarn's version is pinned by webui/package.json (in the source fingerprint), so it isn't probed.
 schema_version: 1
 tasks:
   test-unit:                      # test-unit.yaml
     argv: [go, test, -count=1, -parallel, "8", ./cmd/..., ./pkg/...]
     platform: linux/amd64
+    runtime: { go: 1.26.10 }
     toolchain: [{cmd: [go, version]}, {file: go.sum}]
     env: [CGO_ENABLED, GOFLAGS, GOEXPERIMENT]
     reuse: { allowed: true, max_age: 72h }
   lint:                           # validate.yaml lint (golangci-lint v2.13.2)
     argv: [bash, -o, pipefail, -c, "set -e; v=2.13.2; d=$HOME/.cache/cinema-lab-tools/golangci-lint-$v; if [ ! -x $d/golangci-lint ]; then mkdir -p $d; t=$(mktemp); curl -sSfL -o $t https://github.com/golangci/golangci-lint/releases/download/v$v/golangci-lint-$v-linux-amd64.tar.gz; echo \"2277d43b98ec0054280f2ac26b53268bae97682444678a59a657dd565da021d6  $t\" | sha256sum -c --quiet; tar -xzf $t -C $d --strip-components=1; rm -f $t; fi; GOLANGCI_LINT_CACHE=$d/cache $d/golangci-lint run"]
     platform: linux/amd64
+    runtime: { go: 1.26.10 }
     toolchain: [{cmd: [go, version]}, {file: .golangci.yml}, {file: go.sum}]
     env: [GOFLAGS, CGO_ENABLED]
     reuse: { allowed: true, max_age: 72h }
   validate-vendor:                # validate.yaml validate (part)
     argv: [./script/validate-vendor.sh]
     platform: any
+    runtime: { go: 1.26.10 }
     toolchain: [{cmd: [go, version]}]
     env: [GOFLAGS]
     reuse: { allowed: true, max_age: 72h }
   validate-generate:              # validate.yaml validate-generate (part)
     argv: [bash, -o, pipefail, -c, "go generate && git diff --exit-code"]
     platform: linux/amd64
+    runtime: { go: 1.26.10 }
     toolchain: [{cmd: [go, version]}]
     env: [GOFLAGS]
     reuse: { allowed: true, max_age: 72h }
   build-linux-amd64:              # build.yaml build (linux/amd64 leg)
     argv: [env, CGO_ENABLED=0, GOOS=linux, GOARCH=amd64, go, build, -ldflags, "-s -w", -installsuffix, nocgo, -o, /dev/null, ./cmd/traefik]
     platform: linux/amd64
+    runtime: { go: 1.26.10 }
     toolchain: [{cmd: [go, version]}]
     env: [GOFLAGS]
     reuse: { allowed: true, max_age: 72h }
   build-cross:                    # build.yaml build (other 18 legs; cross-compiles are host-independent but the toolchain is linux here)
     argv: [bash, -o, pipefail, -c, "set -e; for t in darwin/amd64/ darwin/arm64/ freebsd/amd64/ freebsd/arm64/ linux/arm64/ openbsd/amd64/ openbsd/arm64/ windows/amd64/ windows/arm64/ freebsd/386/ linux/386/ linux/arm/6 linux/arm/7 linux/ppc64le/ linux/riscv64/ linux/s390x/ openbsd/386/ windows/386/; do IFS=/ read -r os arch arm <<< \"$t\"; CGO_ENABLED=0 GOOS=$os GOARCH=$arch GOARM=$arm go build -ldflags '-s -w' -installsuffix nocgo -o /dev/null ./cmd/traefik; done"]
     platform: linux/amd64
+    runtime: { go: 1.26.10 }
     toolchain: [{cmd: [go, version]}]
     env: [GOFLAGS]
     reuse: { allowed: true, max_age: 72h }
@@ -61,6 +68,7 @@ tasks:
     argv: [bash, -o, pipefail, -c, "export CGO_ENABLED=0; touch webui/static/index.html && make binary-linux-amd64 && go test ./integration -count=1 -test.timeout=60m -run '^(TestK8sSuite|TestGatewayAPISuite)$'"]
     platform: linux/amd64
     exclusive: true
+    runtime: { go: 1.26.10 }
     toolchain: [{cmd: [go, version]}]
     env: [GOFLAGS]
     reuse: { allowed: true, max_age: 24h }
@@ -68,6 +76,7 @@ tasks:
     argv: [bash, -o, pipefail, -c, "export CGO_ENABLED=0; touch webui/static/index.html && make binary-linux-amd64 && go test ./integration -count=1 -test.timeout=60m -run '^(TestConsulSuite|TestConsulCatalogSuite|TestEtcdSuite|TestRedisSuite|TestRedisSentinelSuite|TestZookeeperSuite)$'"]
     platform: linux/amd64
     exclusive: true
+    runtime: { go: 1.26.10 }
     toolchain: [{cmd: [go, version]}]
     env: [GOFLAGS]
     reuse: { allowed: true, max_age: 24h }
@@ -75,6 +84,7 @@ tasks:
     argv: [bash, -o, pipefail, -c, "export CGO_ENABLED=0; touch webui/static/index.html && make binary-linux-amd64 && go test ./integration -count=1 -test.timeout=60m -run '^(TestDockerSuite|TestDockerComposeSuite|TestTracingSuite|TestAcmeSuite)$'"]
     platform: linux/amd64
     exclusive: true
+    runtime: { go: 1.26.10 }
     toolchain: [{cmd: [go, version]}]
     env: [GOFLAGS]
     reuse: { allowed: true, max_age: 24h }
@@ -82,6 +92,7 @@ tasks:
     argv: [bash, -o, pipefail, -c, "export CGO_ENABLED=0; touch webui/static/index.html && make binary-linux-amd64 && go test ./integration -count=1 -test.timeout=60m -run '^(TestAccessLogSuite|TestDualLoggingSuite|TestErrorPagesSuite|TestFileSuite|TestGRPCSuite|TestHeadersSuite|TestHealthCheckSuite|TestHostResolverSuite|TestHTTPSSuite|TestHTTPSuite|TestKeepAliveSuite|TestLogRotationSuite)$'"]
     platform: linux/amd64
     exclusive: true
+    runtime: { go: 1.26.10 }
     toolchain: [{cmd: [go, version]}]
     env: [GOFLAGS]
     reuse: { allowed: true, max_age: 24h }
@@ -89,6 +100,7 @@ tasks:
     argv: [bash, -o, pipefail, -c, "export CGO_ENABLED=0; touch webui/static/index.html && make binary-linux-amd64 && go test ./integration -count=1 -test.timeout=60m -run '^(TestProxyProtocolSuite|TestRateLimitSuite|TestRestSuite|TestRetrySuite|TestRoutingSuite|TestSimpleSuite|TestTCPHealthCheckSuite|TestTCPSuite|TestThrottlingSuite|TestTimeoutSuite|TestTLSClientHeadersSuite|TestUDPSuite|TestWebsocketSuite)$'"]
     platform: linux/amd64
     exclusive: true
+    runtime: { go: 1.26.10 }
     toolchain: [{cmd: [go, version]}]
     env: [GOFLAGS]
     reuse: { allowed: true, max_age: 24h }

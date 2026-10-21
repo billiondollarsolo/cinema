@@ -95,3 +95,13 @@ tasks:
     outputs: [.tarballs]
     toolchain: [{cmd: [go, version]}, {cmd: [node, --version]}]
     reuse: { allowed: true, max_age: 72h }
+  # build job ("Build Prometheus for common architectures", 3 shards upstream): promu
+  # crossbuild of 6 platforms inside golang-builder. The image is pulled by a floating
+  # tag, so it's fingerprinted by its resolved digest (image: entry). UI assets are
+  # built first (upstream restores them from the UI job's artifact).
+  crossbuild:
+    argv: [bash, -o, pipefail, -c, "export CI=true; make promu && make assets && $(go env GOPATH)/bin/promu crossbuild -v --parallelism 6 -p linux/amd64 -p windows/amd64 -p linux/arm64 -p darwin/amd64 -p darwin/arm64 -p linux/386"]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}, {cmd: [node, --version]}, {image: quay.io/prometheus/golang-builder:1.27-base}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }

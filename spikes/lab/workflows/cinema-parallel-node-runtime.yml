@@ -1,0 +1,68 @@
+# CInema gate, parallel form: plan (verify receipts) → one matrix job per task that
+# must RUN → gate (the single required check). Fully reused: plan + gate only.
+# No setup-node: every task pins its Node with runtime:, and cinema provisions it. Binary comes from this repo's "cinema-lab" release.
+name: cinema
+on:
+  pull_request: {}
+  push: { branches: [trunk, main, master] }
+permissions: { contents: read }
+concurrency:
+  group: cinema-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.verify.outputs.run_tasks }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0, persist-credentials: false }
+      - name: install cinema
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release download cinema-lab -R "$GITHUB_REPOSITORY" -p cinema-linux-amd64 -O "$RUNNER_TEMP/cinema"
+          chmod +x "$RUNNER_TEMP/cinema" && sudo mv "$RUNNER_TEMP/cinema" /usr/local/bin/cinema
+      - id: verify
+        name: verify receipts
+        env:
+          CINEMA_TRUSTED_KEYS: "${{ vars.CINEMA_TRUSTED_KEYS }}"
+          CINEMA_FETCH_TOKEN: "${{ github.token }}"
+        run: cinema verify --event "$GITHUB_EVENT_PATH" --report gate-report.json
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: cinema-gate-report, path: gate-report.json, retention-days: 7 }
+  run:
+    needs: plan
+    if: needs.plan.outputs.run != '[]' && needs.plan.outputs.run != ''
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        task: ${{ fromJSON(needs.plan.outputs.run) }}
+    name: run ${{ matrix.task }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0, persist-credentials: false }
+      - name: install cinema
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release download cinema-lab -R "$GITHUB_REPOSITORY" -p cinema-linux-amd64 -O "$RUNNER_TEMP/cinema"
+          chmod +x "$RUNNER_TEMP/cinema" && sudo mv "$RUNNER_TEMP/cinema" /usr/local/bin/cinema
+      - name: run task
+        env:
+          TASK: ${{ matrix.task }}
+          CINEMA_TRUSTED_KEYS: "${{ vars.CINEMA_TRUSTED_KEYS }}"
+        run: cinema verify --event "$GITHUB_EVENT_PATH" --execute --task "$TASK"
+  gate:
+    needs: [plan, run]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: every task reused or passed
+        env:
+          PLAN: ${{ needs.plan.result }}
+          RUN: ${{ needs.run.result }}
+        run: |
+          echo "plan=$PLAN run=$RUN"
+          [ "$PLAN" = success ] || exit 1
+          case "$RUN" in success|skipped) ;; *) exit 1 ;; esac
