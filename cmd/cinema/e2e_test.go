@@ -41,7 +41,7 @@ tasks:
   check:
     argv: [sh, -c, "test -f main.go"]
     platform: any
-    toolchain: [{cmd: [sh, -c, "echo tool 1"]}]
+    toolchain: [{cmd: [git, --version]}]
     reuse: { allowed: true, max_age: 1h }
   other-os:
     argv: [make]
@@ -292,5 +292,18 @@ func TestInit(t *testing.T) {
 	}
 	if _, code := e.cinema("init"); code != 2 {
 		t.Error("init overwrote an existing config")
+	}
+}
+
+func TestInitRefusesSymlinks(t *testing.T) {
+	e := newEnv(t)
+	outside := t.TempDir()
+	os.RemoveAll(filepath.Join(e.repo, ".cinema"))
+	os.Symlink(outside, filepath.Join(e.repo, ".cinema"))
+	if _, code := e.cinema("init"); code == 0 {
+		t.Fatal("init wrote through a symlinked .cinema")
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Fatal("file created outside the repo")
 	}
 }

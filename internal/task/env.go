@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -55,12 +57,10 @@ func (t *Task) EnvFingerprint(root string) (Env, error) {
 			env.Inputs = append(env.Inputs, strings.Join(tc.Cmd, " ")+" → "+firstLine(out))
 			continue
 		}
-		b, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(tc.File)))
+		d, err := hashRegularFile(filepath.Join(root, filepath.FromSlash(tc.File)))
 		if err != nil {
-			return Env{}, fmt.Errorf("toolchain file: %w", err)
+			return Env{}, fmt.Errorf("toolchain file %s: %w", tc.File, err)
 		}
-		h := sha256.Sum256(b)
-		d := hex.EncodeToString(h[:])
 		e.str("file")
 		e.str(tc.File)
 		e.str(d)
@@ -100,4 +100,30 @@ func toolOutput(dir string, argv []string) (string, error) {
 func firstLine(s string) string {
 	s, _, _ = strings.Cut(strings.TrimSpace(s), "\n")
 	return s
+}
+
+const maxToolchainFile = 64 << 20
+
+// hashRegularFile hashes a regular, non-symlink file of bounded size: a symlink
+// to /dev/zero or a file outside the repo must not hang or leak (fail closed).
+func hashRegularFile(path string) (string, error) {
+	// O_NOFOLLOW refuses a symlink; O_NONBLOCK keeps a FIFO from blocking the open.
+	// The type check is on the opened file, so nothing can be swapped in between.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return "", fmt.Errorf("%w (symlinks aren't followed)", err)
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return "", fmt.Errorf("not a regular file")
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, io.LimitReader(f, maxToolchainFile+1))
+	if err != nil {
+		return "", err
+	}
+	if n > maxToolchainFile {
+		return "", fmt.Errorf("larger than %d bytes", maxToolchainFile)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

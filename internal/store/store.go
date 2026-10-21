@@ -272,6 +272,88 @@ func (s *Store) TaskRuns(root, taskID string, limit int) ([]TaskRun, error) {
 	return out, rows.Err()
 }
 
+// RunRow is one run as the dashboard lists it (any run in the repo, task or not).
+type RunRow struct {
+	ID         string    `json:"id"`
+	State      string    `json:"state"`
+	TaskID     string    `json:"task_id,omitempty"`
+	Argv       []string  `json:"argv"`
+	CwdRel     string    `json:"cwd"`
+	Started    time.Time `json:"started_at"`
+	DurationMS int64     `json:"duration_ms"`
+	ExitCode   int       `json:"exit_code"`
+	Signal     string    `json:"signal,omitempty"`
+	Capture    string    `json:"capture,omitempty"`
+	Mutated    bool      `json:"changed_source"` // source_before != source_after
+	Source     string    `json:"source,omitempty"`
+
+	stdoutBlob, stderrBlob string
+	StdoutTotal            int64 `json:"stdout_total"`
+	StderrTotal            int64 `json:"stderr_total"`
+	StdoutTruncated        bool  `json:"stdout_truncated"`
+	StderrTruncated        bool  `json:"stderr_truncated"`
+}
+
+const runRowCols = `id, state, coalesce(task_id,''), argv, coalesce(cwd_rel,''), started_at,
+	coalesce(duration_ms,0), coalesce(exit_code,-1), coalesce(signal,''), coalesce(capture,''),
+	coalesce(source_before,'') != coalesce(source_after,''), coalesce(source_before,''),
+	coalesce(stdout_blob,''), coalesce(stderr_blob,''), coalesce(stdout_total,0), coalesce(stderr_total,0),
+	coalesce(stdout_truncated,0), coalesce(stderr_truncated,0)`
+
+func scanRunRow(sc interface{ Scan(...any) error }) (RunRow, error) {
+	var r RunRow
+	var argv string
+	var started int64
+	err := sc.Scan(&r.ID, &r.State, &r.TaskID, &argv, &r.CwdRel, &started, &r.DurationMS, &r.ExitCode,
+		&r.Signal, &r.Capture, &r.Mutated, &r.Source, &r.stdoutBlob, &r.stderrBlob,
+		&r.StdoutTotal, &r.StderrTotal, &r.StdoutTruncated, &r.StderrTruncated)
+	r.Started = time.UnixMilli(started)
+	_ = json.Unmarshal([]byte(argv), &r.Argv)
+	return r, err
+}
+
+// RecentRuns lists the newest runs recorded in repo root.
+func (s *Store) RecentRuns(root string, limit int) ([]RunRow, error) {
+	rows, err := s.db.Query(`SELECT `+runRowCols+` FROM runs WHERE repo_root=?
+		ORDER BY started_at DESC, id DESC LIMIT ?`, root, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RunRow
+	for rows.Next() {
+		r, err := scanRunRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// Run returns one run of repo root with its captured output ("" when expired or empty).
+func (s *Store) Run(root, id string) (r RunRow, stdout, stderr []byte, err error) {
+	r, err = scanRunRow(s.db.QueryRow(`SELECT `+runRowCols+` FROM runs WHERE repo_root=? AND id=?`, root, id))
+	if err != nil {
+		return r, nil, nil, err
+	}
+	if r.stdoutBlob != "" {
+		stdout, _ = s.Blob(r.stdoutBlob)
+	}
+	if r.stderrBlob != "" {
+		stderr, _ = s.Blob(r.stderrBlob)
+	}
+	return r, stdout, stderr, nil
+}
+
+// Signature changes whenever a run in root starts, finishes, or is cleaned up.
+func (s *Store) Signature(root string) string {
+	var n, recording, last int64
+	_ = s.db.QueryRow(`SELECT count(*), coalesce(sum(state=?),0), coalesce(max(started_at),0) FROM runs WHERE repo_root=?`,
+		StateRecording, root).Scan(&n, &recording, &last)
+	return fmt.Sprintf("%d/%d/%d", n, recording, last)
+}
+
 // AbortRun deletes a run whose child never started (e.g. command not found).
 func (s *Store) AbortRun(id string) error {
 	_, err := s.db.Exec(`DELETE FROM runs WHERE id=? AND state=?`, id, StateRecording)

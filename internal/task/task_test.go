@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -164,13 +165,11 @@ func TestContractDigest(t *testing.T) { // ACC-017
 
 func TestEnvFingerprint(t *testing.T) { // ACC-019
 	root := t.TempDir()
-	tool := filepath.Join(root, "tool.sh")
-	version := func(v string) {
-		os.WriteFile(tool, []byte("#!/bin/sh\necho tool "+v+"\n"), 0o755)
-	}
+	tool := filepath.Join(root, "tool.txt")
+	version := func(v string) { os.WriteFile(tool, []byte("tool "+v), 0o644) }
 	mk := func(platform string) *Task {
 		return mustParse(t, "schema_version: 1\ntasks:\n  t:\n    argv: [make]\n    platform: "+platform+
-			"\n    toolchain: [{cmd: [sh, tool.sh]}]\n    env: [CINEMA_TEST_VAR]\n").Tasks["t"]
+			"\n    toolchain: [{file: tool.txt}]\n    env: [CINEMA_TEST_VAR]\n").Tasks["t"]
 	}
 	version("1.0")
 	native := mk(runtime.GOOS + "/" + runtime.GOARCH)
@@ -240,17 +239,36 @@ func FuzzParse(f *testing.F) {
 	})
 }
 
-func TestTrustDigestCoversNamedRepoFiles(t *testing.T) {
-	root := t.TempDir()
-	os.MkdirAll(filepath.Join(root, "scripts"), 0o755)
-	os.WriteFile(filepath.Join(root, "scripts/v.js"), []byte("console.log(1)"), 0o644)
-	c := mustParse(t, "schema_version: 1\ntasks:\n  t:\n    argv: [make]\n    platform: any\n    toolchain: [{cmd: [node, scripts/v.js]}, {cmd: [sh, -c, echo hi]}]\n")
-	a := c.TrustDigest(root)
-	os.WriteFile(filepath.Join(root, "scripts/v.js"), []byte("require('child_process')"), 0o644)
-	if c.TrustDigest(root) == a {
-		t.Fatal("editing a repo script named by a toolchain command didn't change the trust digest")
+func TestToolchainProbesOnly(t *testing.T) {
+	cfg := func(cmd string) string {
+		return "schema_version: 1\ntasks:\n  t:\n    argv: [make]\n    platform: any\n    toolchain: [{cmd: " + cmd + "}]\n"
 	}
-	if got := c.ShellToolchains(); len(got) != 1 {
-		t.Fatalf("shell toolchains = %v", got)
+	for _, ok := range []string{"[go, version]", "[node, --version]", "[go, env, GOVERSION]", "[rustc, -V]", "[npm, --version]", "[python3, -VV]"} {
+		if _, err := Parse([]byte(cfg(ok))); err != nil {
+			t.Errorf("%s rejected: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"[./v.sh]", "[/usr/bin/env, node]", "[node, scripts/v.js]", "[node, v.js]", "[python3, -c, print]",
+		"[sh, -c, echo]", "[node, -e, x]", "[go, run, x]", "[make, version]", "[npm, test]", "[yarn, lint]",
+		"[\"go version\"]", "[go, \"version --x\"]", "[\"\"]",
+	} {
+		if _, err := Parse([]byte(cfg(bad))); err == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+}
+
+func TestToolchainFileSafety(t *testing.T) {
+	root := t.TempDir()
+	os.Symlink("/dev/zero", filepath.Join(root, "zero"))
+	os.WriteFile(filepath.Join(root, "real"), []byte("x"), 0o644)
+	os.Symlink("real", filepath.Join(root, "link"))
+	syscall.Mkfifo(filepath.Join(root, "fifo"), 0o644)
+	for _, f := range []string{"zero", "link", "fifo"} {
+		tk := mustParse(t, "schema_version: 1\ntasks:\n  t: {argv: [make], platform: any, toolchain: [{file: "+f+"}]}\n").Tasks["t"]
+		if _, err := tk.EnvFingerprint(root); err == nil {
+			t.Errorf("toolchain file %s (symlink) was read", f)
+		}
 	}
 }

@@ -99,7 +99,7 @@ func (r *repo) source(extra []string) (string, error) {
 func (r *repo) fresh() { r.snaps = map[string]string{} }
 
 func (r *repo) trusted() bool {
-	return r.cfg != nil && r.st != nil && r.st.Trusted(r.id, r.cfg.TrustDigest(r.root))
+	return r.cfg != nil && r.st != nil && r.st.Trusted(r.id, r.cfg.Digest)
 }
 
 // current computes everything a decision for t is made against.

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/billiondollarsolo/cinema/internal/task"
 )
@@ -32,8 +33,13 @@ func cmdInit(args []string) int {
 		return exitBadArgs
 	}
 	path := filepath.Join(r.root, task.ConfigPath)
-	if _, err := os.Stat(path); err == nil {
+	if _, err := os.Lstat(path); err == nil {
 		fmt.Fprintf(os.Stderr, "cinema init: %s already exists; not touching it\n", task.ConfigPath)
+		return exitBadArgs
+	}
+	// Never follow a symlinked .cinema out of the repo.
+	if fi, err := os.Lstat(filepath.Dir(path)); err == nil && !fi.IsDir() {
+		fmt.Fprintf(os.Stderr, "cinema init: %s is not a plain directory; not writing through it\n", filepath.Dir(task.ConfigPath))
 		return exitBadArgs
 	}
 
@@ -77,11 +83,19 @@ tasks:
 		fmt.Fprintf(os.Stderr, "cinema init: generated an invalid config (bug): %v\n%s", err, b.String())
 		return exitInternal
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Dir(path), 0o755); err != nil && !errors.Is(err, os.ErrExist) {
 		fmt.Fprintf(os.Stderr, "cinema init: %v\n", err)
 		return exitInternal
 	}
-	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+	// O_EXCL|O_NOFOLLOW: fail rather than overwrite or write through a symlink.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o644)
+	if err == nil {
+		_, err = f.WriteString(b.String())
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "cinema init: %v\n", err)
 		return exitInternal
 	}

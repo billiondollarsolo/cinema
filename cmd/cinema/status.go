@@ -283,7 +283,7 @@ func cmdTrust(args []string) int {
 			}
 		}
 	}
-	if err := r.st.TrustConfig(r.id, r.cfg.TrustDigest(r.root)); err != nil {
+	if err := r.st.TrustConfig(r.id, r.cfg.Digest); err != nil {
 		fmt.Fprintf(os.Stderr, "cinema trust: %v\n", err)
 		return exitInternal
 	}
@@ -291,10 +291,7 @@ func cmdTrust(args []string) int {
 	if len(cmds) > 0 {
 		fmt.Printf("cinema may now run these toolchain commands:\n%s\n", strings.Join(cmds, "\n"))
 	}
-	if sh := r.cfg.ShellToolchains(); len(sh) > 0 {
-		fmt.Printf("note: these run shell code; trust can't track files they read, so review them:\n  %s\n", strings.Join(sh, "\n  "))
-	}
-	fmt.Println("any change to the file, or to repo files those commands name, needs `cinema trust` again")
+	fmt.Println("any change to the file needs `cinema trust` again")
 	return 0
 }
 
