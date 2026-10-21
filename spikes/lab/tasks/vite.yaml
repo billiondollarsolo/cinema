@@ -1,0 +1,41 @@
+# vite CI (PR, ubuntu, node-24 cell) → CInema tasks. Tests read packages/*/dist,
+# which is gitignored (not fingerprinted), so each test task builds first:
+# a stale dist must never let a test pass for new source.
+schema_version: 1
+tasks:
+  build:
+    argv: [pnpm, run, build]
+    platform: linux/amd64
+    toolchain: [{cmd: [node, --version]}, {cmd: [pnpm, --version]}, {file: pnpm-lock.yaml}]
+    env: [CI, NODE_OPTIONS]
+    reuse: { allowed: true, max_age: 72h }
+  lint:
+    argv: [pnpm, run, lint]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {cmd: [pnpm, --version]}, {file: pnpm-lock.yaml}]
+    env: [CI]
+    reuse: { allowed: true, max_age: 72h }
+  format-check:
+    argv: [bash, -o, pipefail, -c, "pnpm format && git diff --exit-code"]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {cmd: [pnpm, --version]}, {file: pnpm-lock.yaml}]
+    env: [CI]
+    reuse: { allowed: true, max_age: 72h }
+  typecheck:
+    argv: [bash, -o, pipefail, -c, "pnpm run build && pnpm run typecheck"]
+    platform: linux/amd64
+    toolchain: [{cmd: [node, --version]}, {cmd: [pnpm, --version]}, {file: pnpm-lock.yaml}]
+    env: [CI, NODE_OPTIONS]
+    reuse: { allowed: true, max_age: 72h }
+  test-docs:
+    argv: [bash, -o, pipefail, -c, "pnpm run build && pnpm run test-docs"]
+    platform: linux/amd64
+    toolchain: [{cmd: [node, --version]}, {cmd: [pnpm, --version]}, {file: pnpm-lock.yaml}]
+    env: [CI, NODE_OPTIONS]
+    reuse: { allowed: true, max_age: 72h }
+  test-unit:
+    argv: [bash, -o, pipefail, -c, "pnpm run build && pnpm run test-unit"]
+    platform: linux/amd64
+    toolchain: [{cmd: [node, --version]}, {cmd: [pnpm, --version]}, {file: pnpm-lock.yaml}]
+    env: [CI, NODE_OPTIONS, VITEST_SEGFAULT_RETRY]
+    reuse: { allowed: true, max_age: 72h }

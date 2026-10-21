@@ -23,6 +23,7 @@ type Options struct {
 	Env          []string  // nil = inherit
 	Stdin        io.Reader // nil = no stdin
 	Stdout       io.Writer // terminal passthrough; nil = discard
+	Watch        io.Writer // sees every stdout byte, uncapped (e.g. tool-cache detection); nil = none
 	Stderr       io.Writer
 	CaptureLimit int64         // 0 = DefaultCaptureLimit
 	Grace        time.Duration // SIGTERM → SIGKILL delay, and pipe drain bound; 0 = 5s
@@ -95,8 +96,8 @@ func Run(ctx context.Context, o Options) (Result, error) {
 		return Result{Argv: o.Argv}, startErr // zero Start: the child never ran
 	}
 	var copies sync.WaitGroup
-	copies.Go(func() { _, _ = io.Copy(tee{o.Stdout, &res.Stdout}, outR) })
-	copies.Go(func() { _, _ = io.Copy(tee{o.Stderr, &res.Stderr}, errR) })
+	copies.Go(func() { _, _ = io.Copy(tee{o.Stdout, &res.Stdout, o.Watch}, outR) })
+	copies.Go(func() { _, _ = io.Copy(tee{o.Stderr, &res.Stderr, nil}, errR) })
 	pgid := cmd.Process.Pid
 	done := make(chan struct{})
 	go func() {
@@ -170,13 +171,17 @@ func reapGroup(pgid int, grace time.Duration) bool {
 // detached tty) are ignored: the child must never block on a full pipe because
 // nobody is reading.
 type tee struct {
-	term io.Writer
-	c    *Capture
+	term  io.Writer
+	c     *Capture
+	watch io.Writer
 }
 
 func (t tee) Write(p []byte) (int, error) {
 	if t.term != nil {
 		_, _ = t.term.Write(p)
+	}
+	if t.watch != nil {
+		_, _ = t.watch.Write(p)
 	}
 	return t.c.Write(p)
 }

@@ -307,3 +307,66 @@ func TestInitRefusesSymlinks(t *testing.T) {
 		t.Fatal("file created outside the repo")
 	}
 }
+
+func TestToolCacheReplayRejected(t *testing.T) { // §4.5: a wrapper hides `go test` from the config check
+	e := newEnv(t)
+	// Prints exactly what go test prints for a replayed package. (Making go's own
+	// cache replay deterministically inside a test is environment-dependent; the
+	// detector's parsing is unit-tested in package task.)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  unit:
+    argv: [sh, -c, "printf 'ok  \\tgithub.com/x/y\\t(cached)\\n'"]
+    platform: any
+    reuse: { allowed: true, max_age: 1h }
+`)
+	e.cinema("trust")
+	e.cinema("run", "unit")
+	if got := e.states()["unit"]; got != "stale/TOOL_CACHE_REJECTED" {
+		t.Fatalf("replayed run: %s", got)
+	}
+	if o := e.lastRunOrigin(t); o != "tool_cache" {
+		t.Fatalf("origin = %q", o)
+	}
+}
+
+func TestDeclaredOutputsKeepTaskReusable(t *testing.T) {
+	e := newEnv(t)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  cover:
+    argv: [sh, -c, "date > cover-profile.out"]
+    platform: any
+    outputs: [cover-profile.out]
+    reuse: { allowed: true, max_age: 1h }
+  undeclared:
+    argv: [sh, -c, "date > other.out"]
+    platform: any
+    reuse: { allowed: true, max_age: 1h }
+`)
+	e.cinema("trust")
+	e.cinema("run", "cover")
+	if got := e.states()["cover"]; got != "reusable/" {
+		t.Fatalf("declared output: %s", got)
+	}
+	e.cinema("run", "undeclared")
+	if got := e.states()["undeclared"]; got != "stale/SOURCE_CHANGED_DURING_RUN" {
+		t.Fatalf("undeclared output: %s", got)
+	}
+}
+
+// lastRunOrigin reads the newest run's result_origin via run --record-json-free path: the store.
+func (e *env) lastRunOrigin(t *testing.T) string {
+	t.Helper()
+	t.Setenv("CINEMA_DATA_DIR", e.data)
+	r, err := openRepoAt(e.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.close()
+	runs, err := r.st.TaskRuns(r.id, "unit", 1)
+	if err != nil || len(runs) == 0 {
+		t.Fatalf("runs: %v", err)
+	}
+	return runs[0].Origin
+}

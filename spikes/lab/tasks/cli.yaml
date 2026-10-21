@@ -1,0 +1,44 @@
+# cli/cli CI (PR, ubuntu) → CInema tasks. Integration-tagged tests hit live Sigstore/GitHub: short max_age.
+schema_version: 1
+tasks:
+  test:                           # go.yml build: go test -race -tags=integration ./...
+    argv: [env, -u, GH_TOKEN, -u, GITHUB_TOKEN, -u, GH_ENTERPRISE_TOKEN, -u, GITHUB_ENTERPRISE_TOKEN, -u, GH_HOST, -u, GH_CONFIG_DIR, go, test, -count=1, -race, -tags=integration, ./...]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}, {cmd: [git, --version]}, {file: go.sum}]
+    env: [CGO_ENABLED, GOFLAGS, GOEXPERIMENT]
+    reuse: { allowed: true, max_age: 24h }
+  build:                          # go.yml build: go build -v ./cmd/gh
+    argv: [go, build, -v, -o, /dev/null, ./cmd/gh]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}]
+    env: [CGO_ENABLED, GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  go-mod-tidy:                    # lint.yml lint (part)
+    argv: [go, mod, tidy, -diff]
+    platform: any
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  go-fix:                         # lint.yml lint (part)
+    argv: [go, fix, -diff, ./...]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  lint:                           # lint.yml lint (golangci-lint v2.15.0)
+    argv: [go, run, github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0, run]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}, {file: .golangci.yml}, {file: go.sum}]
+    env: [GOFLAGS, CGO_ENABLED]
+    reuse: { allowed: true, max_age: 72h }
+  licenses-check:                 # lint.yml lint (part)
+    argv: [bash, -o, pipefail, -c, "export GOROOT=$(go env GOROOT) && export PATH=$GOROOT/bin:$PATH && make licenses-check"]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}, {file: go.sum}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  govulncheck:                    # lint.yml govulncheck: depends on a live vuln DB → never reused
+    argv: [bash, -o, pipefail, -c, "v=$(grep -E '^v[0-9]+\\.[0-9]+\\.[0-9]+$' .github/govulncheck-version) && go run \"golang.org/x/vuln/cmd/govulncheck@$v\" ./..."]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}]
+    reuse: { allowed: false }

@@ -186,6 +186,12 @@ Formatters, `--fix` linters, and code generators can be recorded, but they never
 
 `go test` may replay cached results. Task contracts declare `accept_tool_cache: true|false`. If `false`, the task argv must disable the cache (e.g. `-count=1`), and the matcher rejects runs that don't. Never relabel an unknown cached result as fresh.
 
+Two layers enforce it. Config load rejects a bare `go test` argv without a cache-disabling flag. At runtime, CInema watches every stdout byte (independent of the bounded capture) for go test's `(cached)` marker. That catches wrappers like `env … go test`, `bash -c` and `make`. A replayed run is recorded with `result_origin: tool_cache`, and `TOOL_CACHE_REJECTED` disqualifies it.
+
+### 4.6 Declared outputs
+
+`outputs: [cover-profile.out, coverage]` lists files or directories a task writes into the tree that aren't gitignored. They're left out of that task's fingerprint and mutation check. Like `platform: any`, this is an explicit, reviewable claim: a path a task both reads and writes must not be declared. Outputs may not overlap `extra_inputs`.
+
 ---
 
 ## 5. Source identity

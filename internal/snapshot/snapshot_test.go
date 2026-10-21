@@ -45,7 +45,7 @@ func write(t *testing.T, dir, rel, content string) {
 
 func take(t *testing.T, dir string, extra ...string) string {
 	t.Helper()
-	s, err := Take(dir, extra, nil)
+	s, err := Take(dir, extra, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestExtraInputs(t *testing.T) {
 		t.Error("declared ignored input not fingerprinted")
 	}
 	for _, bad := range []string{"../x", "/etc/passwd", "a/../../x", ".git/config", ".", ""} {
-		if _, err := Take(dir, []string{bad}, nil); err == nil {
+		if _, err := Take(dir, []string{bad}, nil, nil); err == nil {
 			t.Errorf("extra input %q accepted", bad)
 		}
 	}
@@ -160,7 +160,7 @@ func TestSubmodule(t *testing.T) { // ACC-013
 	// pick up the parent's HEAD, so a new parent commit leaves it unchanged.
 	clone := t.TempDir()
 	mustGit(t, clone, "clone", "-q", dir, ".")
-	s1, err := Take(clone, nil, nil)
+	s1, err := Take(clone, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,10 +199,10 @@ func TestCache(t *testing.T) {
 		os.Chtimes(filepath.Join(dir, f), old, old)
 	}
 	c := LoadCache(path)
-	cold, _ := Take(dir, nil, c)
+	cold, _ := Take(dir, nil, nil, c)
 	c.Save(path)
 	c = LoadCache(path)
-	warm, _ := Take(dir, nil, c)
+	warm, _ := Take(dir, nil, nil, c)
 	if warm.Digest != cold.Digest || warm.Hashed != 0 || cold.Hashed != 3 {
 		t.Fatalf("cold hashed=%d warm hashed=%d equal=%v", cold.Hashed, warm.Hashed, warm.Digest == cold.Digest)
 	}
@@ -210,7 +210,7 @@ func TestCache(t *testing.T) {
 	// Same size, mtime forced back: ctime still changes, so the edit is seen.
 	write(t, dir, "main.go", "package mian\n")
 	os.Chtimes(filepath.Join(dir, "main.go"), old, old)
-	if s, _ := Take(dir, nil, c); s.Digest == cold.Digest {
+	if s, _ := Take(dir, nil, nil, c); s.Digest == cold.Digest {
 		t.Fatal("same-size edit with restored mtime was served from cache")
 	}
 }
@@ -218,8 +218,8 @@ func TestCache(t *testing.T) {
 func TestRacyEntryNotTrusted(t *testing.T) {
 	dir := gitRepo(t)
 	c := LoadCache(filepath.Join(t.TempDir(), "c.gob"))
-	Take(dir, nil, c) // files were just written: inside the racy window
-	if s, _ := Take(dir, nil, c); s.Hashed == 0 {
+	Take(dir, nil, nil, c) // files were just written: inside the racy window
+	if s, _ := Take(dir, nil, nil, c); s.Hashed == 0 {
 		t.Fatal("freshly modified files were trusted from cache")
 	}
 }
@@ -238,4 +238,63 @@ func FuzzCleanRel(f *testing.F) {
 			t.Fatalf("CleanRel(%q) = %q escapes", p, c)
 		}
 	})
+}
+
+// The equality the whole push → gate flow depends on: a clean working tree and
+// the commit it's at have the same fingerprint.
+func TestCommitMatchesCleanTree(t *testing.T) {
+	dir := gitRepo(t)
+	os.Symlink("main.go", filepath.Join(dir, "link"))
+	os.Chmod(filepath.Join(dir, "lib/util.go"), 0o755)
+	write(t, dir, ".cinema/tasks.yaml", "schema_version: 1\n") // excluded in both
+	write(t, dir, "deep/a/b/c.txt", strings.Repeat("x", 100000))
+	mustGit(t, dir, "add", "-A")
+	commit(t, dir)
+	blobs := NewBlobCache()
+	for _, extra := range [][]string{nil, {".env.test"}} {
+		wt, err := Take(dir, extra, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := TakeCommit(dir, "HEAD", extra, nil, blobs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if wt.Digest != c.Digest {
+			t.Fatalf("extra=%v: working tree %s != commit %s", extra, wt.Digest, c.Digest)
+		}
+	}
+	// Warm blob cache: nothing re-read except symlink targets.
+	c, _ := TakeCommit(dir, "HEAD", nil, nil, blobs)
+	if c.Hashed != 1 {
+		t.Fatalf("warm: hashed %d, want 1 (the symlink)", c.Hashed)
+	}
+	// A different commit has a different fingerprint.
+	write(t, dir, "main.go", "package main // v2\n")
+	mustGit(t, dir, "commit", "-qam", "v2")
+	c2, _ := TakeCommit(dir, "HEAD", nil, nil, blobs)
+	prev, _ := TakeCommit(dir, "HEAD~1", nil, nil, blobs)
+	if c2.Digest == prev.Digest {
+		t.Fatal("commits with different content share a fingerprint")
+	}
+}
+
+func TestExcludeOutputs(t *testing.T) {
+	dir := gitRepo(t)
+	base := take(t, dir)
+	write(t, dir, "cover-profile.out", "mode: set\n")
+	write(t, dir, "coverage/a/b.html", "x")
+	got, err := Take(dir, nil, []string{"cover-profile.out", "coverage"}, nil)
+	if err != nil || got.Digest != base {
+		t.Fatalf("declared outputs still affect the fingerprint: %v", err)
+	}
+	if take(t, dir) == base {
+		t.Fatal("undeclared, unignored files must still count")
+	}
+	if g, _ := Take(dir, nil, []string{"cover"}, nil); g.Digest == base {
+		t.Fatal("exclude must match whole path components, not prefixes")
+	}
+	if _, err := Take(dir, nil, []string{"../x"}, nil); err == nil {
+		t.Fatal("exclude escaping the root accepted")
+	}
 }

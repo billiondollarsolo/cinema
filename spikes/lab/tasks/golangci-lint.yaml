@@ -1,0 +1,21 @@
+# golangci-lint CI (PR, ubuntu, Go 1.27.0 cell) → CInema tasks.
+schema_version: 1
+tasks:
+  go-mod-tidy-diff:               # pr-checks go-mod
+    argv: [go, mod, tidy, --diff]
+    platform: any
+    toolchain: [{cmd: [go, version]}]
+    env: [GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  self-lint:                      # pr-tests tests-on-unix: make test step 1
+    argv: [bash, -o, pipefail, -c, "set -e; go build -o golangci-lint ./cmd/golangci-lint; GL_TEST_RUN=1 ./golangci-lint run -v"]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}, {file: .golangci.yml}]
+    env: [CGO_ENABLED, GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }
+  test:                           # pr-tests tests-on-unix: make test step 2
+    argv: [bash, -o, pipefail, -c, "set -e; go build -o golangci-lint ./cmd/golangci-lint; GL_TEST_RUN=1 GOLANGCI_LINT_INSTALLED=true go test -count=1 -parallel 2 ./..."]
+    platform: linux/amd64
+    toolchain: [{cmd: [go, version]}, {cmd: [gcc, --version]}]
+    env: [CGO_ENABLED, GOFLAGS]
+    reuse: { allowed: true, max_age: 72h }

@@ -77,12 +77,12 @@ func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr err
 	}
 	if r.root != "" {
 		src = store.Source{RepoRoot: r.id, CwdRel: r.cwdRel, Capture: r.capture}
-		var extra []string
+		var extra, outputs []string
 		if t != nil {
-			extra = t.ExtraInputs
+			extra, outputs = t.ExtraInputs, t.Outputs
 		}
 		var err error
-		if src.Before, err = r.source(extra); err != nil {
+		if src.Before, err = r.source(extra, outputs); err != nil {
 			warn("fingerprint: %v", err)
 		}
 		if t != nil && src.Before != "" {
@@ -96,7 +96,19 @@ func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr err
 		}
 	}
 
+	detector := &task.CacheDetector{}
+	opts.Watch = detector
 	res, err := record.Run(ctx, opts)
+	detector.Done()
+	if match.TaskID != "" {
+		match.Origin = "fresh"
+		if detector.Cached {
+			match.Origin = "tool_cache"
+			if t != nil && !t.AcceptToolCache {
+				warn("go test replayed cached results; this run can't count as a fresh %s (add -count=1)", t.ID)
+			}
+		}
+	}
 	if err != nil && res.Start.IsZero() {
 		if runID != "" {
 			_ = r.st.AbortRun(runID)
@@ -114,11 +126,11 @@ func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr err
 	}
 	if r.root != "" {
 		r.fresh()
-		var extra []string
+		var extra, outputs []string
 		if t != nil {
-			extra = t.ExtraInputs
+			extra, outputs = t.ExtraInputs, t.Outputs
 		}
-		if src.After, err = r.source(extra); err != nil {
+		if src.After, err = r.source(extra, outputs); err != nil {
 			warn("fingerprint: %v", err)
 		}
 		if src.Before != "" && src.After != "" && src.Before != src.After {

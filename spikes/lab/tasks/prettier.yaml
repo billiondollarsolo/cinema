@@ -1,0 +1,56 @@
+# prettier CI (PR, ubuntu) → CInema tasks. Lint job runs on Node 24; prod Node-24 test cell.
+# prod tasks build first: tests read dist/, which is gitignored (not fingerprinted).
+schema_version: 1
+tasks:
+  lint.deps:
+    argv: [yarn, run, "lint:deps"]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: yarn.lock}, {file: .yarnrc.yml}]
+    reuse: { allowed: true, max_age: 72h }
+  lint.typecheck:
+    argv: [yarn, run, "lint:typecheck"]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: yarn.lock}, {file: .yarnrc.yml}]
+    reuse: { allowed: true, max_age: 72h }
+  lint.eslint:
+    argv: [yarn, run, "lint:eslint"]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: yarn.lock}, {file: .yarnrc.yml}]
+    reuse: { allowed: true, max_age: 72h }
+  lint.prettier:
+    argv: [yarn, run, "lint:prettier"]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: yarn.lock}, {file: .yarnrc.yml}]
+    reuse: { allowed: true, max_age: 72h }
+  lint.spellcheck:
+    argv: [yarn, run, "lint:spellcheck"]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: yarn.lock}, {file: .yarnrc.yml}]
+    reuse: { allowed: true, max_age: 72h }
+  lint.changelog:
+    argv: [yarn, run, "lint:changelog"]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: yarn.lock}, {file: .yarnrc.yml}]
+    reuse: { allowed: true, max_age: 72h }
+  lint.format-test:
+    argv: [yarn, run, "lint:format-test"]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: yarn.lock}, {file: .yarnrc.yml}]
+    reuse: { allowed: true, max_age: 72h }
+  lint.knip:
+    argv: [yarn, run, "lint:knip"]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: yarn.lock}, {file: .yarnrc.yml}]
+    reuse: { allowed: true, max_age: 72h }
+  lint.docs-code-blocks:
+    argv: [yarn, prettier, "{docs,website/versioned_docs/version-stable}/**/*.md", --check]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: yarn.lock}, {file: .yarnrc.yml}]
+    env: [PRETTIER_DEBUG]
+    reuse: { allowed: true, max_age: 72h }
+  prod.test:
+    argv: [bash, -o, pipefail, -c, 'yarn build --clean && yarn test:production && yarn test:production-standalone']
+    platform: linux/amd64
+    toolchain: [{cmd: [node, --version]}, {file: yarn.lock}, {file: .yarnrc.yml}]
+    env: [CI, FULL_TEST, NODE_OPTIONS]
+    reuse: { allowed: true, max_age: 72h }

@@ -46,11 +46,15 @@ type Snapshot struct {
 }
 
 // Take fingerprints the working tree at root. extra are repo-relative paths of
-// ignored files a task declares it reads. cache may be nil.
-func Take(root string, extra []string, cache *Cache) (*Snapshot, error) {
+// ignored files a task declares it reads; exclude are paths (files or whole
+// directories) a task declares it writes, left out entirely. cache may be nil.
+func Take(root string, extra, exclude []string, cache *Cache) (*Snapshot, error) {
 	start := time.Now()
 	paths, err := listFiles(root)
 	if err != nil {
+		return nil, err
+	}
+	if paths, err = dropExcluded(paths, exclude); err != nil {
 		return nil, err
 	}
 	seen := make(map[string]bool, len(paths))
@@ -147,12 +151,16 @@ func Take(root string, extra []string, cache *Cache) (*Snapshot, error) {
 		return nil, firstErr
 	}
 
-	slices.SortFunc(entries, func(a, b Entry) int { return strings.Compare(a.Path, b.Path) })
+	sortEntries(entries)
 	return &Snapshot{Root: root, Digest: "sha256:" + manifestDigest(entries), Entries: entries, Hashed: len(toHash)}, nil
 }
 
 // ErrNotRepo: dir is not inside a git working tree.
 var ErrNotRepo = errors.New("snapshot: not inside a git repository")
+
+func sortEntries(entries []Entry) {
+	slices.SortFunc(entries, func(a, b Entry) int { return strings.Compare(a.Path, b.Path) })
+}
 
 // RepoRoot returns the top of the git working tree containing dir, with
 // symlinks resolved. Walks up looking for .git (a dir, or a file for worktrees
@@ -191,6 +199,32 @@ func CleanRel(p string) (string, error) {
 		return "", fmt.Errorf("snapshot: path %q is inside .git", p)
 	}
 	return c, nil
+}
+
+// dropExcluded removes paths equal to, or under, any excluded path.
+func dropExcluded(paths, exclude []string) ([]string, error) {
+	if len(exclude) == 0 {
+		return paths, nil
+	}
+	ex := make([]string, len(exclude))
+	for i, p := range exclude {
+		c, err := CleanRel(p)
+		if err != nil {
+			return nil, err
+		}
+		ex[i] = c
+	}
+	return slices.DeleteFunc(paths, func(p string) bool { return IsUnder(p, ex) }), nil
+}
+
+// IsUnder reports whether path equals one of dirs or lies beneath it.
+func IsUnder(path string, dirs []string) bool {
+	for _, d := range dirs {
+		if path == d || strings.HasPrefix(path, d+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // excluded is the task config: what matters in it for a task is in that task's

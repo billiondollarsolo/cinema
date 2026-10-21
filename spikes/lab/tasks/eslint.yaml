@@ -1,0 +1,62 @@
+# eslint CI (PR, ubuntu, Node 24 cells) → CInema tasks. No lockfile upstream: the
+# installed tree (node_modules/.package-lock.json) is a toolchain input, so floating
+# dependency versions can't make local and CI results silently differ.
+schema_version: 1
+tasks:
+  lint:
+    argv: [node, Makefile, lint]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: node_modules/.package-lock.json}]
+    reuse: { allowed: true, max_age: 72h }
+  lint.rule-files:
+    argv: [node, Makefile, checkRuleFiles]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: node_modules/.package-lock.json}]
+    reuse: { allowed: true, max_age: 72h }
+  lint.licenses:
+    argv: [node, Makefile, checkLicenses]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: node_modules/.package-lock.json}]
+    reuse: { allowed: true, max_age: 72h }
+  lint.docs-js:
+    argv: [node, Makefile, lintDocsJS]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: node_modules/.package-lock.json}]
+    reuse: { allowed: true, max_age: 72h }
+  lint.rule-examples:
+    argv: [node, Makefile, checkRuleExamples]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: node_modules/.package-lock.json}]
+    reuse: { allowed: true, max_age: 72h }
+  lint.rule-types:
+    argv: [npm, run, "lint:rule-types"]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: node_modules/.package-lock.json}]
+    reuse: { allowed: true, max_age: 72h }
+  lint.unused:
+    argv: [npm, run, "lint:unused"]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: node_modules/.package-lock.json}]
+    reuse: { allowed: true, max_age: 72h }
+  fmt.check:
+    argv: [npm, run, "fmt:check"]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: node_modules/.package-lock.json}]
+    reuse: { allowed: true, max_age: 72h }
+  types.eslint:
+    argv: [npx, tsc, -p, tests/lib/types/tsconfig.json]
+    platform: any
+    toolchain: [{cmd: [node, --version]}, {file: node_modules/.package-lock.json}]
+    reuse: { allowed: true, max_age: 72h }
+  test.mocha:
+    argv: [node, Makefile, mocha]
+    platform: linux/amd64
+    toolchain: [{cmd: [node, --version]}, {file: node_modules/.package-lock.json}]
+    env: [CI, NODE_OPTIONS, ESLINT_MOCHA_TIMEOUT]
+    reuse: { allowed: true, max_age: 72h }
+  test.fuzz:
+    argv: [node, Makefile, fuzz]
+    platform: linux/amd64
+    toolchain: [{cmd: [node, --version]}, {file: node_modules/.package-lock.json}]
+    env: [CI]
+    reuse: { allowed: false }

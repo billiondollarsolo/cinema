@@ -152,6 +152,13 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if v < 5 { // tool-cache detection (plan §4.5)
+		if _, err := db.Exec(`
+			ALTER TABLE runs ADD COLUMN result_origin TEXT;  -- fresh | tool_cache; NULL = unknown (never eligible)
+			PRAGMA user_version = 5;`); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -183,6 +190,7 @@ type Source struct {
 type Match struct {
 	TaskID, ContractDigest, EnvDigest, VCS string
 	EnvInputs                              []string // human-readable, for explain; never env values
+	Origin                                 string   // fresh | tool_cache
 }
 
 // BeginRun records that a run is starting. Until FinishRun commits, the row is
@@ -217,12 +225,12 @@ func (s *Store) FinishRun(id string, r record.Result, src Source, m Match) (stri
 		canceled=?, leftovers=?, stdout_blob=?, stdout_total=?, stdout_truncated=?,
 		stderr_blob=?, stderr_total=?, stderr_truncated=?,
 		repo_root=?, cwd_rel=?, source_before=?, source_after=?,
-		task_id=?, contract_digest=?, env_digest=?, vcs=?, env_inputs=?, capture=? WHERE id=? AND state=?`,
+		task_id=?, contract_digest=?, env_digest=?, vcs=?, env_inputs=?, capture=?, result_origin=? WHERE id=? AND state=?`,
 		state, r.Path, r.Start.UnixMilli(), r.Duration.Milliseconds(), r.ExitCode, nullStr(r.Signal),
 		r.Canceled, r.Leftovers, outBlob, r.Stdout.Total, r.Stdout.Truncated,
 		errBlob, r.Stderr.Total, r.Stderr.Truncated,
 		nullStr(src.RepoRoot), nullStr(src.CwdRel), nullStr(src.Before), nullStr(src.After),
-		nullStr(m.TaskID), nullStr(m.ContractDigest), nullStr(m.EnvDigest), nullStr(m.VCS), jsonOrNull(m.EnvInputs), nullStr(src.Capture), id, StateRecording)
+		nullStr(m.TaskID), nullStr(m.ContractDigest), nullStr(m.EnvDigest), nullStr(m.VCS), jsonOrNull(m.EnvInputs), nullStr(src.Capture), nullStr(m.Origin), id, StateRecording)
 	if err != nil {
 		return "", err
 	}
@@ -241,13 +249,14 @@ type TaskRun struct {
 	Contract, Env, VCS        string
 	SourceBefore, SourceAfter string
 	EnvInputs                 []string
+	Origin                    string
 }
 
 // TaskRuns returns the newest runs of taskID in repo root.
 func (s *Store) TaskRuns(root, taskID string, limit int) ([]TaskRun, error) {
 	rows, err := s.db.Query(`SELECT id, state, started_at, coalesce(duration_ms,0), coalesce(exit_code,-1),
 		coalesce(contract_digest,''), coalesce(env_digest,''), coalesce(vcs,''),
-		coalesce(source_before,''), coalesce(source_after,''), coalesce(env_inputs,'')
+		coalesce(source_before,''), coalesce(source_after,''), coalesce(env_inputs,''), coalesce(result_origin,'')
 		FROM runs WHERE repo_root=? AND task_id=? AND state != ? ORDER BY started_at DESC, id DESC LIMIT ?`,
 		root, taskID, StateRecording, limit)
 	if err != nil {
@@ -260,7 +269,7 @@ func (s *Store) TaskRuns(root, taskID string, limit int) ([]TaskRun, error) {
 		var started int64
 		var inputs string
 		if err := rows.Scan(&r.ID, &r.State, &started, &r.DurationMS, &r.ExitCode, &r.Contract, &r.Env,
-			&r.VCS, &r.SourceBefore, &r.SourceAfter, &inputs); err != nil {
+			&r.VCS, &r.SourceBefore, &r.SourceAfter, &inputs, &r.Origin); err != nil {
 			return nil, err
 		}
 		r.Started = time.UnixMilli(started)

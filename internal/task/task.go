@@ -51,6 +51,7 @@ type Task struct {
 	Toolchain       []Toolchain `yaml:"toolchain"`
 	Env             []string    `yaml:"env"`          // allowlisted env var names that are inputs
 	ExtraInputs     []string    `yaml:"extra_inputs"` // ignored files the task reads
+	Outputs         []string    `yaml:"outputs"`      // files/dirs the task writes; left out of its fingerprint (an explicit claim, like platform: any)
 	VCSContext      string      `yaml:"vcs_context"`  // "none" (default) | "exact"
 	AcceptToolCache bool        `yaml:"accept_tool_cache"`
 	Reuse           Reuse       `yaml:"reuse"`
@@ -177,6 +178,16 @@ func (t *Task) validate() error {
 		}
 		t.ExtraInputs[i] = c
 	}
+	for i, p := range t.Outputs {
+		c, err := snapshot.CleanRel(p)
+		if err != nil {
+			return fmt.Errorf("outputs: %w", err)
+		}
+		if snapshot.IsUnder(c, t.ExtraInputs) || slices.ContainsFunc(t.ExtraInputs, func(x string) bool { return snapshot.IsUnder(x, []string{c}) }) {
+			return fmt.Errorf("outputs: %q overlaps extra_inputs", c)
+		}
+		t.Outputs[i] = c
+	}
 	switch t.VCSContext {
 	case "":
 		t.VCSContext = "none"
@@ -272,6 +283,7 @@ func (t *Task) ContractDigest(root string) (string, error) {
 	}
 	e.list(sorted(t.Env))
 	e.list(sorted(t.ExtraInputs))
+	e.list(sorted(t.Outputs))
 	e.str(t.VCSContext)
 	e.bool(t.AcceptToolCache)
 	e.str(script)

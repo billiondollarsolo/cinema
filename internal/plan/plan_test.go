@@ -18,7 +18,7 @@ var cur = Current{Contract: "C", Source: "S", Env: "E", VCS: "abc", Now: now}
 
 func good(id string) Run {
 	return Run{ID: id, State: "passed", Started: now.Add(-time.Hour),
-		Contract: "C", Env: "E", VCS: "abc", SourceBefore: "S", SourceAfter: "S"}
+		Contract: "C", Env: "E", VCS: "abc", SourceBefore: "S", SourceAfter: "S", Origin: "fresh"}
 }
 
 func with(r Run, f func(*Run)) Run { f(&r); return r }
@@ -44,6 +44,8 @@ func TestLocal(t *testing.T) {
 		{"vcs exact, dirty", tk("exact", true), []Run{with(good("a"), func(r *Run) { r.VCS = "dirty" })}, Stale, VCSMismatch},
 		{"vcs none ignores commit", tk("none", true), []Run{with(good("a"), func(r *Run) { r.VCS = "def" })}, Reusable, ""},
 		{"incomplete record", tk("none", true), []Run{with(good("a"), func(r *Run) { r.Env = "" })}, Stale, NoReceipt},
+		{"go test cache replay", tk("none", true), []Run{with(good("a"), func(r *Run) { r.Origin = "tool_cache" })}, Stale, ToolCacheRejected},
+		{"unknown origin", tk("none", true), []Run{with(good("a"), func(r *Run) { r.Origin = "" })}, Stale, ToolCacheRejected},
 		{"fail on same inputs beats older pass", tk("none", true),
 			[]Run{with(good("f"), func(r *Run) { r.State = "failed" }), good("a")}, Failed, RunFailed},
 		{"fail on other tree doesn't block a qualifying pass", tk("none", true),
@@ -75,7 +77,7 @@ func TestNeverFalseReusable(t *testing.T) {
 				ID: string(rune('a' + i)), State: pick("passed", "passed", "failed", "incomplete"),
 				Started:  now.Add(time.Duration(rng.IntN(200)-100) * time.Hour),
 				Contract: pick("C", "C2", ""), Env: pick("E", "E2", ""), VCS: pick("abc", "def", "dirty", ""),
-				SourceBefore: pick("S", "S2", ""), SourceAfter: pick("S", "S2", ""),
+				SourceBefore: pick("S", "S2", ""), SourceAfter: pick("S", "S2", ""), Origin: pick("fresh", "fresh", "tool_cache", ""),
 			}
 		}
 		d := Local(tsk, c, runs)
@@ -90,7 +92,7 @@ func TestNeverFalseReusable(t *testing.T) {
 			}
 		}
 		age := now.Sub(r.Started)
-		ok := tsk.Reuse.Allowed && r.State == "passed" && r.Contract == c.Contract && r.Env == c.Env &&
+		ok := tsk.Reuse.Allowed && r.State == "passed" && r.Origin == "fresh" && r.Contract == c.Contract && r.Env == c.Env &&
 			r.SourceBefore == c.Source && r.SourceAfter == c.Source && age <= tsk.Reuse.MaxAge && age >= -time.Minute &&
 			(tsk.VCSContext != "exact" || (r.VCS == c.VCS && r.VCS != "dirty" && r.VCS != ""))
 		for _, ahead := range runs[:idx] {

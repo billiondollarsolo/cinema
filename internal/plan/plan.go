@@ -52,6 +52,7 @@ type Run struct {
 	Started                   time.Time
 	Contract, Env, VCS        string
 	SourceBefore, SourceAfter string
+	Origin                    string // "fresh" | "tool_cache" (plan §4.5)
 }
 
 type Decision struct {
@@ -112,6 +113,8 @@ func disqualify(t *task.Task, cur Current, r *Run) string {
 		return NoReceipt // incomplete record: never evidence
 	case r.SourceBefore != r.SourceAfter:
 		return SourceChangedDuringRun
+	case r.Origin != "fresh" && !(r.Origin == "tool_cache" && t.AcceptToolCache):
+		return ToolCacheRejected // replayed (or unknown) results never pass as fresh
 	case r.Contract != cur.Contract:
 		return TaskDefinitionChanged
 	case r.Env != cur.Env:

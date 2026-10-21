@@ -322,7 +322,7 @@ func (d *dashSrv) signature() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.r.fresh()
-	tree, _ := d.r.source(nil)
+	tree, _ := d.r.source(nil, nil)
 	cfg, _ := os.ReadFile(d.r.root + "/" + task.ConfigPath)
 	d.smu.Lock()
 	n := len(d.running)

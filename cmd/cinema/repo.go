@@ -83,12 +83,12 @@ func (r *repo) close() {
 
 // source is the whole-source fingerprint including extra inputs. Memoized:
 // call fresh() to drop memos after something may have changed the tree.
-func (r *repo) source(extra []string) (string, error) {
-	key := strings.Join(extra, "\x00")
+func (r *repo) source(extra, exclude []string) (string, error) {
+	key := strings.Join(extra, "\x00") + "\x01" + strings.Join(exclude, "\x00")
 	if d, ok := r.snaps[key]; ok {
 		return d, nil
 	}
-	s, err := snapshot.Take(r.root, extra, r.cache)
+	s, err := snapshot.Take(r.root, extra, exclude, r.cache)
 	if err != nil {
 		return "", err
 	}
@@ -117,7 +117,7 @@ func (r *repo) current(t *task.Task) (plan.Current, task.Env, error) {
 		return cur, env, err
 	}
 	cur.Env = env.Digest
-	if cur.Source, err = r.source(t.ExtraInputs); err != nil {
+	if cur.Source, err = r.source(t.ExtraInputs, t.Outputs); err != nil {
 		return cur, env, err
 	}
 	if t.VCSContext == "exact" {
@@ -150,7 +150,7 @@ func toPlanRuns(rs []store.TaskRun) []plan.Run {
 	out := make([]plan.Run, len(rs))
 	for i, r := range rs {
 		out[i] = plan.Run{ID: r.ID, State: r.State, Started: r.Started, Contract: r.Contract,
-			Env: r.Env, VCS: r.VCS, SourceBefore: r.SourceBefore, SourceAfter: r.SourceAfter}
+			Env: r.Env, VCS: r.VCS, SourceBefore: r.SourceBefore, SourceAfter: r.SourceAfter, Origin: r.Origin}
 	}
 	return out
 }
