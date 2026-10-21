@@ -211,7 +211,11 @@ var (
 )
 
 func validateProbe(cmd []string) error {
-	if len(cmd) == 2 && probeNameRE.MatchString(cmd[0]) && (cmd[1] == "--version" || probeExceptions[cmd[0]] == cmd[1]) {
+	if len(cmd) != 2 || !probeNameRE.MatchString(cmd[0]) {
+		return fmt.Errorf("toolchain cmd must be [tool, --version] (or [go, version], [java, -version]); got %q", cmd)
+	}
+	// Two-value lookup: a missing key yields "", which must not match an empty argument.
+	if exc, ok := probeExceptions[cmd[0]]; cmd[1] == "--version" || (ok && cmd[1] == exc) {
 		return nil
 	}
 	return fmt.Errorf("toolchain cmd must be [tool, --version] (or [go, version], [java, -version]); got %q", cmd)

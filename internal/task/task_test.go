@@ -252,7 +252,8 @@ func TestToolchainProbesOnly(t *testing.T) {
 		"[./v.sh, --version]", "[/usr/bin/node, --version]", "[node]", "[node, v.js]", "[node, scripts/v.js]",
 		"[python3, -mfoo]", "[python3, script]", "[python3, -c, print]", "[sh, -c, echo]", "[node, --require=x]",
 		"[go, run, x]", "[make, version, x]", "[env, make]", "[make, version]", "[npm, version]", "[ninja, -v]",
-		"[rustc, -V]", "[node, version]", "[java, version]", "[go, env, GOVERSION]", "[\"go version\", -v]", "[\"\", -v]",
+		"[rustc, -V]", "[node, version]", "[java, version]",
+		"[make, \"\"]", "[python3, \"\"]", "[go, \"\"]", "[go, env, GOVERSION]", "[\"go version\", -v]", "[\"\", -v]",
 	} {
 		if _, err := Parse([]byte(cfg(bad))); err == nil {
 			t.Errorf("%s accepted", bad)
