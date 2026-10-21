@@ -98,6 +98,22 @@ func Fetch(root, remote, token string) error {
 	return err
 }
 
+// FetchOwn brings the remote's copy of one ref into the local ref before new
+// notes are added, so a fresh clone (or a rebuilt machine) holding the same key
+// extends what's published instead of force-pushing over it. A ref the remote
+// doesn't have yet is not an error.
+func FetchOwn(root, remote, ref string) error {
+	out, err := git(root, nil, "ls-remote", remote, ref)
+	if err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(out)) == 0 {
+		return nil
+	}
+	_, err = git(root, nil, "fetch", "--quiet", "--no-tags", remote, "+"+ref+":"+ref)
+	return err
+}
+
 // Refs lists local cinema notes refs.
 func Refs(root string) ([]string, error) {
 	out, err := git(root, nil, "for-each-ref", "--format=%(refname)", RefPrefix)

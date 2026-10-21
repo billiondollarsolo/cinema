@@ -116,3 +116,30 @@ func TestAtomicFallback(t *testing.T) { // ACC-033
 		t.Fatal("branch not pushed by fallback")
 	}
 }
+
+func TestFreshCloneKeepsPublishedNotes(t *testing.T) {
+	remote, a, b, head := repos(t)
+	ref := Ref("same-key")
+	Write(a, ref, head, []json.RawMessage{env("from-a")})
+	Squash(a, ref)
+	if r := Push(a, "origin", "", ref); r.EvidenceErr != nil {
+		t.Fatal(r.EvidenceErr)
+	}
+	// b holds the same key but never fetched notes: it must build on the remote.
+	if err := FetchOwn(b, "origin", ref); err != nil {
+		t.Fatal(err)
+	}
+	old, _ := Read(b, ref, head)
+	Write(b, ref, head, append(old, env("from-b")))
+	Squash(b, ref)
+	if r := Push(b, "origin", "", ref); r.EvidenceErr != nil {
+		t.Fatal(r.EvidenceErr)
+	}
+	got, err := Read(remote, ref, head)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("remote after second clone: %v %v", got, err)
+	}
+	if err := FetchOwn(b, "origin", Ref("never-pushed")); err != nil {
+		t.Fatalf("missing remote ref: %v", err)
+	}
+}

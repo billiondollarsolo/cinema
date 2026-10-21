@@ -123,6 +123,18 @@ func cmdPush(args []string) int {
 
 	keyID := evidence.KeyID(priv.Public().(ed25519.PublicKey))
 	ref := transport.Ref(keyID)
+	if !*dryRun {
+		// Read from where we push (pushurl may differ from the fetch URL).
+		pushURL, err := gitOut(r.root, "remote", "get-url", "--push", "--", *remote)
+		if err != nil {
+			return fail(exitBadArgs, "no remote %q", *remote)
+		}
+		if err := transport.FetchOwn(r.root, pushURL, ref); err != nil {
+			// Without the published copy, pushing would replace receipts already
+			// there. Stop rather than risk that.
+			return fail(4, "fetching published evidence: %v", err)
+		}
+	}
 	blobs := snapshot.NewBlobCache()
 	signed := 0
 	for _, rev := range commits {
