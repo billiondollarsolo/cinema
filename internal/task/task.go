@@ -197,33 +197,20 @@ func (t *Task) validate() error {
 	return nil
 }
 
-// Toolchain commands identify tool versions; they must not run repo code.
-// Fail closed: a bare command from PATH, plain flag/word arguments only (no
-// paths, dots or spaces, so no script files), no eval flags or code-running
-// subcommands, and script runners (which read targets from repo files) get
-// flags only. `cinema trust` still gates running them at all.
+// Toolchain commands identify tool versions and must not run repo code. Fail
+// closed with an allowlist instead of a denylist: a bare command name from PATH
+// plus exactly one version invocation. Anything else (scripts, interpreters
+// with arguments, wrappers) can't be expressed. `cinema trust` still gates
+// running them at all; a tool that needs more belongs in a `file:` entry.
 var (
-	probeArgRE    = regexp.MustCompile(`^-{0,2}[A-Za-z0-9][A-Za-z0-9_=-]*$`)
-	probeEvalArgs = []string{"-c", "-e", "-p", "-r", "-m", "-x", "-E", "--eval", "--print", "--require", "--exec", "--command"}
-	probeRunWords = []string{"run", "exec", "eval", "x", "dlx", "tool", "generate", "test", "build", "start", "install", "i", "ci", "script", "shell"}
-	scriptRunners = []string{"make", "gmake", "just", "task", "rake", "npm", "npx", "pnpm", "yarn", "bun", "bunx", "deno",
-		"gradle", "gradlew", "mvn", "mvnw", "mise", "cargo", "sbt", "ant", "invoke", "nox", "tox"}
+	probeNameRE  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
+	versionFlags = []string{"--version", "-version", "-v", "-V", "-VV", "version"}
 )
 
 func validateProbe(cmd []string) error {
-	if !envNameRE.MatchString(strings.ReplaceAll(strings.ReplaceAll(cmd[0], "-", "_"), ".", "_")) || strings.ContainsRune(cmd[0], '/') {
-		return fmt.Errorf("cmd[0] must be a command name on PATH, like go or node (got %q)", cmd[0])
-	}
-	runner := slices.Contains(scriptRunners, cmd[0])
-	for _, a := range cmd[1:] {
-		switch {
-		case !probeArgRE.MatchString(a):
-			return fmt.Errorf("argument %q: version probes take plain flags and words only (no paths, dots or spaces)", a)
-		case slices.Contains(probeEvalArgs, a), slices.Contains(probeRunWords, a):
-			return fmt.Errorf("argument %q would run code; toolchain commands only report versions", a)
-		case runner && !strings.HasPrefix(a, "-"):
-			return fmt.Errorf("%s reads targets from repo files; use flags only (e.g. %s --version)", cmd[0], cmd[0])
-		}
+	if len(cmd) != 2 || !probeNameRE.MatchString(cmd[0]) || !slices.Contains(versionFlags, cmd[1]) {
+		return fmt.Errorf("toolchain cmd must be [tool, version-flag], e.g. [go, version] or [node, --version] "+
+			"(flag one of %s); got %q", strings.Join(versionFlags, " "), cmd)
 	}
 	return nil
 }

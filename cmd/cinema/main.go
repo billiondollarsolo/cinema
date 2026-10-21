@@ -18,12 +18,13 @@ commands:
   status [--json]                                           per task: reusable / stale / missing + reason
   explain [--json] <task>                                   why a task is or isn't reusable
   trust                                                     allow the toolchain commands in .cinema/tasks.yaml
+  dashboard [--port N] [--allow-host H] [--no-open]         local web page: checks, runs, logs
 `
 
 func main() {
 	// ponytail: map + flag.FlagSet per verb; Cobra only if this stops being readable.
 	cmds := map[string]func([]string) int{
-		"init": cmdInit, "exec": cmdExec, "run": cmdRun, "status": cmdStatus, "explain": cmdExplain, "trust": cmdTrust,
+		"init": cmdInit, "exec": cmdExec, "run": cmdRun, "status": cmdStatus, "explain": cmdExplain, "trust": cmdTrust, "dashboard": cmdDashboard,
 	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)

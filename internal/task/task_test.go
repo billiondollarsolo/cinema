@@ -243,15 +243,15 @@ func TestToolchainProbesOnly(t *testing.T) {
 	cfg := func(cmd string) string {
 		return "schema_version: 1\ntasks:\n  t:\n    argv: [make]\n    platform: any\n    toolchain: [{cmd: " + cmd + "}]\n"
 	}
-	for _, ok := range []string{"[go, version]", "[node, --version]", "[go, env, GOVERSION]", "[rustc, -V]", "[npm, --version]", "[python3, -VV]"} {
+	for _, ok := range []string{"[go, version]", "[node, --version]", "[rustc, -V]", "[npm, -v]", "[python3.12, -VV]", "[java, -version]"} {
 		if _, err := Parse([]byte(cfg(ok))); err != nil {
 			t.Errorf("%s rejected: %v", ok, err)
 		}
 	}
 	for _, bad := range []string{
-		"[./v.sh]", "[/usr/bin/env, node]", "[node, scripts/v.js]", "[node, v.js]", "[python3, -c, print]",
-		"[sh, -c, echo]", "[node, -e, x]", "[go, run, x]", "[make, version]", "[npm, test]", "[yarn, lint]",
-		"[\"go version\"]", "[go, \"version --x\"]", "[\"\"]",
+		"[./v.sh, --version]", "[/usr/bin/node, --version]", "[node]", "[node, v.js]", "[node, scripts/v.js]",
+		"[python3, -mfoo]", "[python3, script]", "[python3, -c, print]", "[sh, -c, echo]", "[node, --require=x]",
+		"[go, run, x]", "[make, version, x]", "[env, make]", "[go, env, GOVERSION]", "[\"go version\", -v]", "[\"\", -v]",
 	} {
 		if _, err := Parse([]byte(cfg(bad))); err == nil {
 			t.Errorf("%s accepted", bad)

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cinema</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <h1 id="repo">cinema</h1>
+  <p class="where">
+    <span id="head"></span>
+    <span id="dirty" class="dirty" hidden>uncommitted changes</span>
+    <span id="platform"></span>
+    <span id="live" class="live" data-on="false">connecting</span>
+  </p>
+</header>
+
+<main>
+  <section aria-labelledby="checks-h">
+    <h2 id="checks-h">Checks for this tree</h2>
+    <p class="lede">A check is reusable when a passing run covers exactly these files, this task definition and this toolchain. Each strip shows a check's recent runs, newest first; the ringed frame is the one that covers this tree.</p>
+    <div id="config-error" class="notice" role="alert" hidden></div>
+    <div class="table-wrap">
+      <table id="checks">
+        <thead>
+          <tr>
+            <th scope="col">Check</th>
+            <th scope="col">For this tree</th>
+            <th scope="col">Why</th>
+            <th scope="col">Recent runs</th>
+            <th scope="col">Accepted by CI</th>
+            <th scope="col"><span class="sr">Action</span></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="split" aria-label="Runs">
+    <div>
+      <h2>Runs</h2>
+      <ol id="runs" class="runs"></ol>
+      <p id="no-runs" class="empty" hidden>No runs yet. Run a check with <code>cinema run --all</code>, or with the Run buttons above.</p>
+    </div>
+    <article id="detail" class="detail" aria-live="polite">
+      <p class="empty">Select a run to see its command and output.</p>
+    </article>
+  </section>
+</main>
+
+<div id="auth" class="notice auth" role="alert" hidden>
+  This page needs the link <code>cinema dashboard</code> printed in your terminal. It carries a one-time token. Run it again if you lost the link.
+</div>
+</body>
+</html>

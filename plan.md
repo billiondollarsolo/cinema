@@ -605,6 +605,7 @@ CInema leaves nothing behind that it no longer needs. No daemon, so every rule r
 | Data dir size | Hard cap (default 2 GiB). Past it, delete oldest passing logs first, then failing logs. Run metadata goes last. |
 | Notes, local | `git notes prune` on our refs during the daily pass (notes for commits that no longer exist). |
 | Notes, remote | Per-key refs only grow by one commit per push. `cinema push` squashes our own ref to a single commit holding only notes for reachable commits newer than `max_age`, and force-pushes it with `--force-with-lease`. Safe because only this key writes this ref. |
+| Dashboard | Nothing persisted: token and sessions live in memory. Runs started from the page get SIGTERM on shutdown, and the server waits for their cleanup. |
 | CI artifacts | `gate-report.json` uploads with `retention-days: 7`. |
 | Everything | `cinema uninstall [--remote]` removes the data dir, keys (keychain + file), local notes refs, remote notes refs (with `--remote`), and prints the workflow / branch-protection lines to remove. It never edits workflows itself. |
 
@@ -700,7 +701,7 @@ Report hashing and wrapper overhead separately, always.
 - [x] Mutation detection, tool-cache rejection (§4.4–4.5) (before/after recorded; `go test` without `-count` rejected at config load)
 - [x] `cinema run [--commit]` with clean-checkout mode (§5.2); `--all` skips tasks already reusable
 - [x] `cinema status/explain --json`, reason codes (§10, §12), `cinema trust` for toolchain commands
-- [ ] `cinema dashboard`: one page, token auth, Host/Origin checks, SSE refresh, `--allow-host` (§10.4, §9.1)
+- [x] `cinema dashboard`: one page, token auth, Host/Origin checks, SSE refresh, `--allow-host` (§10.4, §9.1); Run buttons (POST + Origin + CSRF)
 - [x] `cinema init`: tasks skeleton from detected `go.mod` / `package.json` (npm/pnpm/yarn; never writes `platform: any`; prints the AGENTS.md paragraph)
 - [ ] Tests: ACC-001…021, 047, 048, 051, 066; parser fuzzers
 
