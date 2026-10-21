@@ -212,20 +212,35 @@ func cmdVerify(args []string) int {
 	return 0
 }
 
-// baseConfig loads tasks.yaml as of base. If base has none (CInema is being
-// introduced by this change), the candidate's tasks are used and all of them
-// run: nothing can be reused until the config exists on the base branch.
+// baseConfig loads tasks.yaml as of base. Fail closed: a base commit missing
+// from the checkout is an error (never fall back to the candidate's config,
+// which the PR controls). Only when base positively has no config AND the
+// candidate is the base itself (a push introducing CInema) are the candidate's
+// tasks used, and then every one of them runs.
 func baseConfig(root, base, candidate string) (*task.Config, string, error) {
-	b, err := gitOut(root, "show", base+":"+task.ConfigPath)
-	if err == nil {
+	if _, err := gitOut(root, "cat-file", "-e", base+"^{commit}"); err != nil {
+		return nil, "", fmt.Errorf("base commit %s is not in the checkout (use actions/checkout with fetch-depth: 0)", short(base))
+	}
+	listed, err := gitOut(root, "ls-tree", "--name-only", base, "--", task.ConfigPath)
+	if err != nil {
+		return nil, "", err
+	}
+	if listed != "" {
+		b, err := gitOut(root, "show", base+":"+task.ConfigPath)
+		if err != nil {
+			return nil, "", err
+		}
 		cfg, err := task.Parse([]byte(b + "\n"))
 		return cfg, "", err
+	}
+	if base != candidate {
+		return nil, "", fmt.Errorf("the base branch has no %s: merge it there first; a change can't define its own required tasks", task.ConfigPath)
 	}
 	cfg, err := task.Load(root)
 	if err != nil {
 		return nil, "", err
 	}
-	return cfg, "no " + task.ConfigPath + " on the base branch yet: every task runs", nil
+	return cfg, "no " + task.ConfigPath + " before this commit: every task runs", nil
 }
 
 // collectReceipts verifies envelopes from every cinema notes ref on the

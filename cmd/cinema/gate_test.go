@@ -185,3 +185,29 @@ func TestGateTasksComeFromBase(t *testing.T) { // ACC-041: a PR can't drop or we
 func (g *gateEnv) headSHA(t *testing.T) string {
 	return mustRun(t, g.repo, "git", "rev-parse", "HEAD")
 }
+
+func TestGateBaseConfigFailsClosed(t *testing.T) {
+	g := newGateEnv(t)
+	g.git("push", "-q", g.bare, "HEAD:main")
+	head := g.headSHA(t)
+	pr := func(base string) map[string]any {
+		return map[string]any{
+			"repository":   map[string]any{"full_name": "Example/Repo"},
+			"pull_request": map[string]any{"base": map[string]any{"sha": base}, "head": map[string]any{"sha": head, "repo": map[string]any{"full_name": "Example/Repo"}}},
+		}
+	}
+	// Base commit not in the checkout (shallow clone, unknown SHA): fail, don't use the PR's config.
+	if _, out, code := g.gate(t, g.keys, pr(strings.Repeat("a", 40))); code == 0 || !strings.Contains(out, "not in the checkout") {
+		t.Fatalf("missing base passed: %d\n%s", code, out)
+	}
+	// Base exists but has no config: a PR can't bootstrap its own required tasks.
+	g.git("rm", "-q", ".cinema/tasks.yaml")
+	g.git("commit", "-qm", "no config")
+	noCfg := g.headSHA(t)
+	g.git("revert", "--no-edit", "HEAD")
+	head = g.headSHA(t)
+	g.git("push", "-q", g.bare, "HEAD:main")
+	if _, out, code := g.gate(t, g.keys, pr(noCfg)); code == 0 || !strings.Contains(out, "base branch has no") {
+		t.Fatalf("PR defined its own tasks: %d\n%s", code, out)
+	}
+}

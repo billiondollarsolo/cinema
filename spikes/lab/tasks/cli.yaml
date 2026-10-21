@@ -4,7 +4,7 @@ tasks:
   test:                           # go.yml build: go test -race -tags=integration ./...
     argv: [env, -u, GH_TOKEN, -u, GITHUB_TOKEN, -u, GH_ENTERPRISE_TOKEN, -u, GITHUB_ENTERPRISE_TOKEN, -u, GH_HOST, -u, GH_CONFIG_DIR, go, test, -count=1, -race, -tags=integration, ./...]
     platform: linux/amd64
-    toolchain: [{cmd: [go, version]}, {cmd: [git, --version]}, {file: go.sum}]
+    toolchain: [{cmd: [go, version]}, {file: go.sum}]
     env: [CGO_ENABLED, GOFLAGS, GOEXPERIMENT]
     reuse: { allowed: true, max_age: 24h }
   build:                          # go.yml build: go build -v ./cmd/gh
