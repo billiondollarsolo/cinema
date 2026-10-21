@@ -443,10 +443,11 @@ cinema trust                    allow the toolchain commands in this exact tasks
 cinema keys init|export|list
 cinema verify --event FILE      the CI gate (§11)
 cinema dashboard [--port N] [--allow-host H]
+cinema analyze [--yaml|--json]  propose tasks from .github/workflows (advisory, deterministic; §16 P3)
 cinema gc                       apply retention
 ```
 
-Deferred: `plan`/`readiness` as separate verbs (`status` covers them), `analyze`, `optimize`, `mcp`, `ai`, `auth`, `enroll` (`vision §19`).
+Deferred: `plan`/`readiness` as separate verbs (`status` covers them), `optimize`, `mcp`, `ai`, `auth`, `enroll` (`vision §19`).
 
 ### 10.2 Exit codes (everything except `exec`, which returns the child's code)
 
@@ -767,6 +768,7 @@ Report hashing and wrapper overhead separately, always.
 
 ### P3+ — Next, in rough order (details in vision.md)
 
+0. **Started:** `cinema analyze` reads GitHub workflows and drafts tasks per Linux job and matrix combination. It handles the run steps (one subshell per step, like Actions), literal env, matrix substitution, a matrix-only subset of `if:`, and exact runtimes from setup-go/setup-node, version files, or ranges resolved to today's release. It never writes tasks.yaml. Jobs it can't express (other OSes, secrets, services, artifacts from other jobs, unknown actions) come out as review or skip with the reason. Next: run each draft in a clean checkout and compare with the same commit's CI result (a verification mode), and translations for common actions (golangci-lint-action, pnpm setup).
 1. GitLab: same `cinema verify`, GitLab adapter (`vision §16`)
 2. Parallel matrix for slow suites (`vision §15.5`)
 3. `cinema remote run <host>` wrapper for the VPS flow
