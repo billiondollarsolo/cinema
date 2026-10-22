@@ -46,6 +46,8 @@ type Proposal struct {
 	Go   string `json:"go,omitempty"`   // exact versions only (runtime:)
 	Node string `json:"node,omitempty"` // exact versions only (runtime:)
 	Body string `json:"script"`         // bash script; each step in its own subshell
+	// Outputs: paths the job uploads as artifacts, so it writes them (outputs:).
+	Outputs []string `json:"outputs,omitempty"`
 }
 
 type workflow struct {
@@ -249,8 +251,15 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 			skip("checks out another repository (" + sub(str(s.With["repository"])) + "): tests code outside this commit")
 		case action == "actions/checkout" && str(s.With["path"]) != "":
 			review("checks out into path: " + str(s.With["path"]) + "; cinema runs at the repository root: adjust working directories")
+		case strings.Contains(action, "artifact") && (strings.Contains(action, "upload") || strings.Contains(action, "save")):
+			for _, path := range strings.Split(sub(str(s.With["path"]))+"\n"+sub(str(s.With["directory"])), "\n") {
+				path = strings.TrimSpace(path)
+				if path != "" && filepath.IsLocal(path) && !strings.ContainsAny(path, "*?[!$") && !slices.Contains(p.Outputs, path) {
+					p.Outputs = append(p.Outputs, path)
+				}
+			}
 		case action == "actions/checkout", action == "actions/cache", strings.HasPrefix(action, "actions/cache/"),
-			action == "actions/upload-artifact", strings.HasSuffix(action, "/harden-runner"):
+			strings.HasSuffix(action, "/harden-runner"):
 			// checkout: cinema runs in a clean checkout; caches and uploads don't change results
 		case action == "actions/download-artifact",
 			strings.Contains(action, "artifact") && !strings.Contains(action, "upload") && !strings.Contains(action, "save"):
@@ -769,8 +778,11 @@ func (p *ifParser) or() string {
 	l := p.and()
 	for p.peek() == "||" {
 		p.i++
+		ok := p.ok
 		r := p.and()
-		if !truthy(l) {
+		if truthy(l) {
+			p.ok = ok // short-circuit: true || anything, even what we can't evaluate
+		} else {
 			l = r
 		}
 	}
@@ -781,9 +793,12 @@ func (p *ifParser) and() string {
 	l := p.cmp()
 	for p.peek() == "&&" {
 		p.i++
+		ok := p.ok
 		r := p.cmp()
 		if truthy(l) {
 			l = r
+		} else {
+			p.ok = ok // short-circuit: false && anything (if: failure() && steps.x.outcome == ...)
 		}
 	}
 	return l

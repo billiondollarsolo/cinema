@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -356,5 +357,42 @@ jobs:
 		if j.Verdict != Skip {
 			t.Errorf("%s: want skip, got %s %q", j.ID, j.Verdict, j.Reasons)
 		}
+	}
+}
+
+func TestShortCircuitAndOutputs(t *testing.T) {
+	if v, ok := evalIf("failure() && steps.zizmor.outcome == 'failure'", nil); !ok || v {
+		t.Errorf("false && unknown: %v ok=%v, want false", v, ok)
+	}
+	if v, ok := evalIf("always() || steps.x.outputs.y", nil); !ok || !v {
+		t.Errorf("true || unknown: %v ok=%v, want true", v, ok)
+	}
+	if _, ok := evalIf("success() && steps.x.outputs.y", nil); ok {
+		t.Error("true && unknown evaluated")
+	}
+	src := `on: pull_request
+jobs:
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - run: make tarball
+      - uses: prometheus/promci-artifacts/save@v1
+        with: {directory: .tarballs}
+      - uses: actions/upload-artifact@v4
+        with:
+          path: |
+            coverage
+            /tmp/abs
+            dist/*.tgz
+      - if: failure()
+        run: echo only on failure
+`
+	jobs, err := Workflow("ci.yml", []byte(src))
+	if err != nil || len(jobs) != 1 || jobs[0].Proposal == nil {
+		t.Fatalf("%v %+v", err, jobs)
+	}
+	p := jobs[0].Proposal
+	if !slices.Equal(p.Outputs, []string{".tarballs", "coverage"}) || strings.Contains(p.Body, "only on failure") {
+		t.Errorf("outputs %q, body %q", p.Outputs, p.Body)
 	}
 }
