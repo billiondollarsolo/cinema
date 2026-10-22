@@ -281,8 +281,9 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex) (ba
 	say("%s %s  %s %s\n%s", mark, t.ID, res.Duration.Round(time.Millisecond), note, tail)
 	if w.capture == "clean" {
 		// A task that writes into the tree (a build deleting a tracked file, a
-		// declared output) must not change what the next task sees. Ignored
-		// files (dependency installs, build caches) are kept.
+		// declared output, node_modules, dist/) must not change what the next
+		// task sees: each starts like a CI job, from a fresh checkout. Keeping
+		// ignored files let a task pass on another task's build (lab: eslint).
 		if err := restoreTree(w.root); err != nil {
 			fmt.Fprintf(os.Stderr, "cinema run: restoring the clean checkout: %v\n", err)
 			return bad, true // can't trust anything after this
@@ -301,13 +302,13 @@ func lastLines(b []byte, n int) string {
 }
 
 // restoreTree resets a clean checkout to its commit: tracked files restored,
-// untracked unignored files removed, ignored files kept. Only ever called on
-// cinema's own temp checkouts, never on a user's working tree.
+// untracked and ignored files removed. Only ever called on cinema's own
+// checkouts, never on a user's working tree.
 func restoreTree(root string) error {
 	if _, err := gitOut(root, "checkout", "-q", "--", "."); err != nil {
 		return err
 	}
-	_, err := gitOut(root, "clean", "-fdq")
+	_, err := gitOut(root, "clean", "-ffdxq")
 	return err
 }
 

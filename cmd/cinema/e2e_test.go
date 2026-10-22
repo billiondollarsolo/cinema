@@ -565,6 +565,10 @@ tasks:
 	if out := run("needs-fresh"); !strings.Contains(out, "✓ needs-fresh") {
 		t.Fatalf("ignored file from the previous run leaked into the slot:\n%s", out)
 	}
+	// Nor from an earlier task of the same run: CI jobs each start fresh.
+	if out := run("-j", "1", "make-artifact", "needs-fresh"); !strings.Contains(out, "✓ needs-fresh") {
+		t.Fatalf("ignored file from an earlier task leaked into the next one:\n%s", out)
+	}
 	slots, _ := filepath.Glob(filepath.Join(e.data, "checkouts", "*", "0"))
 	if len(slots) != 1 {
 		t.Fatalf("expected one reused slot, got %v", slots)
