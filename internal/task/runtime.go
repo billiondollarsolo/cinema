@@ -86,7 +86,7 @@ func PrivateGlobals(env []string, dir string) []string {
 	}
 	env = setEnv(env, "NPM_CONFIG_PREFIX", npm)
 	env = setEnv(env, "PNPM_HOME", pnpm)
-	return setEnv(env, "PATH", strings.Join([]string{filepath.Join(npm, "bin"), pnpm, path}, string(os.PathListSeparator)))
+	return setEnv(env, "PATH", strings.Join([]string{filepath.Join(npm, "bin"), pnpm, filepath.Join(pnpm, "bin"), path}, string(os.PathListSeparator)))
 }
 
 func setEnv(env []string, k, v string) []string {

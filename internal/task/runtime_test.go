@@ -133,7 +133,7 @@ func TestGoRuntimeAndValidation(t *testing.T) {
 
 func TestPrivateGlobals(t *testing.T) {
 	env := PrivateGlobals([]string{"PATH=/usr/bin", "NPM_CONFIG_PREFIX=/shared"}, "/s")
-	want := map[string]bool{"NPM_CONFIG_PREFIX=/s/npm-global": true, "PNPM_HOME=/s/pnpm-home": true, "PATH=/s/npm-global/bin:/s/pnpm-home:/usr/bin": true}
+	want := map[string]bool{"NPM_CONFIG_PREFIX=/s/npm-global": true, "PNPM_HOME=/s/pnpm-home": true, "PATH=/s/npm-global/bin:/s/pnpm-home:/s/pnpm-home/bin:/usr/bin": true}
 	if len(env) != 3 {
 		t.Fatalf("%q", env)
 	}
