@@ -66,7 +66,7 @@ No false greens: upstream passed every Linux check wherever the gate passed. The
 ## Commands
 
 ```
-init · exec · run · status · explain · log · trust · dashboard · keys · push · verify · analyze
+init · exec · run · status · explain · log · doctor · trust · dashboard · keys · push · verify · analyze
 ```
 
 `cinema <command> -h` for flags. `--json` on reporting commands, for agents ([plan §10.3](plan.md)).

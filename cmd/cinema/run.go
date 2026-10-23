@@ -274,6 +274,9 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex) (ba
 		mark, note = "!", "passed, not recorded"
 	}
 	bad = mark == "✗"
+	if bad {
+		note += missingNote(append(res.Stdout.Bytes(), res.Stderr.Bytes()...))
+	}
 	tail := ""
 	if bad && printMu != nil {
 		tail = lastLines(append(res.Stdout.Bytes(), res.Stderr.Bytes()...), 25)
