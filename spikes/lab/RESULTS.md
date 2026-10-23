@@ -176,6 +176,13 @@ Each finding came from a real project and was fixed with a test.
 41. **Drafts must never publish.** prometheus's UI release job was drafted and ran a `pnpm publish` dry run. OIDC-token jobs are now skipped as publish/deploy.
 42. **Size tasks like the runner they replace.** `cpus: N` pins a task to N CPUs (Linux CPU affinity, inherited by every child), and parallel workers get separate CPU blocks. `nproc`, Go, Node's `availableParallelism()` and Python's `process_cpu_count()` all see N. Node's `os.cpus()` doesn't, and prettier's jest still started 16 workers, but on 4 CPUs it no longer deadlocked: the jobs went from 1 h timeouts to 3 min passes. Scheduling only, like `exclusive`: not part of the contract. Drafts get `cpus: 4`.
 43. **Workflow-level `defaults:` apply to every job.** The analyzer read only job-level `defaults.run.working-directory`, so prettier's release-script job was drafted to run the wrong suite from the repo root. Had it passed, the receipt would have certified a different check than the one CI runs.
+44. **The gate takes the task list from the base branch, so a new tasks.yaml only counts after it merges.** The first raw-draft PR (prometheus #3) put the draft on the PR branch, and the gate correctly required main's old tasks. A PR can't redefine what it must pass. For adopters: the PR that adds cinema runs everything in CI; reuse starts with the next PR.
+45. **A pinned Go printed "go: downloading" into the probe on fresh runners.** The plan job's first `go version` under `GOTOOLCHAIN` fetched the toolchain, and that stderr line became part of the probe output, so the environment digest never matched the VPS's (which already had that Go). Every Go-pinned task would have missed on GitHub. The pinned Go is now fetched before any probe runs. Local verification can't catch this class: only the real gate on a fresh runner did.
+46. **Raw drafts of container jobs had no environment fingerprint.** prometheus runs its tests in `golang-builder`; the draft ran the steps on the bare machine with no Go pin, so its receipts would match any Linux box. Drafts now pin Go/Node from the repo's version file when a job uses them without a setup action, and container jobs get `container:` (finding 50).
+47. **Raw drafts must pass the repo's formatter.** eslint's `prettier --check` failed on the draft twice: once for `{a: b}` flow maps (fixed: block maps), then because eslint formats YAML with 4-space indents, which no generator can guess. `cinema setup` runs the repo's own prettier on the files it writes. Reformatting `tasks.yaml` kept all 19 existing receipts valid (ADR 0001; finding 22 confirmed on a raw draft): only the failed task re-ran, 2 min instead of 80.
+48. **Review drafts can be hollow.** prometheus's `golangci` draft kept the job's setup steps but not the lint (an action the analyzer can't translate), and it passed. Reusing it would have claimed a lint that never ran. Savings are counted only for drafts that reproduce their job, and `cinema setup` writes only `ready` jobs unless asked.
+49. **Off-the-shelf Actions emulation wasn't faithful (spike).** `run-local-ci` 0.18.1 (agent-ci) feeds jobs to the official runner, but it never started prometheus's job `container:` (no "Initialize containers" step), so `promci-setup` hit `go: command not found` in its minimal runner image, and its checkout copies the working tree (files showed as modified). GitHub's `ubuntu-latest` VM image isn't available as a container, so any emulator runs on a smaller machine. Decision: native tasks plus first-class `container:`, with the capability report naming what the machine lacks.
+50. **`container:` and composite inlining close most of the container gap.** `container: IMAGE` runs a task in the image as root (like a container job), hands files back, and fingerprints the resolved digest, which is exactly what runs. The analyzer emits it for container jobs and inlines commit-pinned composite actions (prometheus's `promci-setup`). prometheus: 8 task drafts instead of 2.
 
 ## The parallel gate with no evidence (fork-like): first runs
 
@@ -240,6 +247,16 @@ Every draft with a proposal (task *and* review verdicts, except those using `sud
 **So:** with clean environments fixed, the runner image's standard tools installed and tasks sized like the runner, 82% of drafts (45/55) pass unmodified, and 24 of 26 task-verdict drafts. The two task-verdict failures are traefik's: a `-j` collision (needs `exclusive`) and a job that rewrites a tracked report. Review is earned: those drafts fail where their reason says they would.
 
 **Caveat on the earlier lab numbers:** the hand-written lab task files behind the savings table were tuned in places (e.g. prettier's `--maxWorkers=3`, `exclusive` on heavy tasks, pinned lint binaries). The savings are what CInema does with a reviewed tasks.yaml, not with raw drafts.
+
+## Raw drafts on real PRs (out of the box)
+
+`tasks.yaml` exactly as `cinema analyze --yaml` wrote it, the generic gate (`exp-draft.sh`), evidence on the VPS, then a one-line code change as a PR so upstream runs its full PR CI. Billed minutes as in `ci-bill-draft.py`: **strict** counts upstream jobs covered by reused task-verdict drafts; **faithful** adds reused review drafts that reproduce every step of their job (hollow ones never count). The gate's own jobs, including tasks it had to run, are subtracted.
+
+| PR | Upstream billed min | Gate | Strict net saved | Faithful net saved | Hand-tuned tasks (earlier) |
+|---|---:|---:|---:|---:|---:|
+| [prometheus#4](https://github.com/mjtechguy/cinema-lab-prometheus/pull/4) | 144 | 26 (2 tasks ran: golangci, test-go-more) | −24 (−17%) | 3 (2%) | 70 (46%) |
+
+**prometheus#4:** the gate reused 9 of 11 tasks. `golangci` missed on finding 45; `test-go-more` had no receipt and failed on the runner because the draft ran outside its container (`buf: command not found`). Upstream CI passed. The raw draft saved nothing because prometheus runs nearly all its CI in `golang-builder`, which the analyzer couldn't express yet (findings 46, 50).
 
 ## Local runs (`run-lab.sh`, VPS, root pass)
 
