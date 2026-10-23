@@ -144,12 +144,20 @@ func jobKey(workflow, name string) string {
 	return workflow + "\x00" + name
 }
 
+// Actions appends a matrix leg's values to the job name unless the name
+// already uses one (name: "Test" → "Test (ubuntu-latest, 20.x)").
 func analyzedKey(j analyze.Job) string {
 	name := j.Name
-	if name == j.ID && len(j.Combo) > 0 {
+	usesValue := false
+	for _, v := range j.Combo {
+		usesValue = usesValue || (v != "" && strings.Contains(name, v))
+	}
+	if len(j.Combo) > 0 && !usesValue {
 		var vals []string
 		for _, v := range j.Combo {
-			vals = append(vals, v)
+			if v != "" { // empty values (a key only some legs set) aren't shown
+				vals = append(vals, v)
+			}
 		}
 		name += " (" + strings.Join(vals, ", ") + ")"
 	}

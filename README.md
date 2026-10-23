@@ -30,7 +30,7 @@ cinema push                                          → checks signature, sourc
 ```sh
 go install github.com/billiondollarsolo/cinema/cmd/cinema@latest
 
-cinema setup                     # from existing CI: what this machine can take over, then tasks.yaml + gate (asks first)
+cinema setup                     # from existing CI: what this machine can take over; covered jobs then skip themselves when reused (asks first)
 cinema trust                     # after reviewing tasks.yaml
 cinema run --commit HEAD --all   # clean-checkout runs, recorded
 cinema status                    # reusable / stale / missing, with reason codes
@@ -38,7 +38,7 @@ cinema keys init && cinema keys export   # register the public key as CINEMA_TRU
 cinema push                      # sign + push branch and receipts
 ```
 
-The gate workflow (plan job, one matrix job per task that must run, and a single required `gate` check) is in [`spikes/lab/workflows/cinema-parallel-go.yml`](spikes/lab/workflows/cinema-parallel-go.yml).
+`cinema setup` edits your workflows in place: each gets a small `cinema` job that verifies receipts, and each covered job gets `needs: cinema` plus an `if:` that skips it when its tasks were reused. Your checks stay the same; reused ones show as skipped. If the `cinema` job fails, nothing is skipped. (The lab's separate parallel gate is in [`spikes/lab/workflows`](spikes/lab/workflows).)
 
 ### From existing CI
 

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -71,7 +72,8 @@ func cmdVerify(args []string) int {
 	reportPath := fs.String("report", "", "write gate-report.json to `FILE`")
 	remote := fs.String("remote", "origin", "fetch evidence from `REMOTE`")
 	only := fs.String("task", "", "with --execute: run just `ID` (one job of a parallel matrix)")
-	if err := fs.Parse(args); err != nil || *eventPath == "" || (*only != "" && !*execute) {
+	skipFor := fs.String("skip-outputs", "", "judge only tasks that cover jobs of workflow `FILE` (covers: FILE#job) and output skip_<job>=true for each job whose tasks are all reused")
+	if err := fs.Parse(args); err != nil || *eventPath == "" || (*only != "" && !*execute) || (*skipFor != "" && *execute) {
 		fmt.Fprintln(os.Stderr, "usage: cinema verify --event FILE [--execute [--task ID]] [--report FILE]")
 		return exitBadArgs
 	}
@@ -174,6 +176,9 @@ func cmdVerify(args []string) int {
 	elsewhere := map[string][]string{}
 	for _, id := range ids {
 		t := cfg.Tasks[id]
+		if *skipFor != "" && !strings.HasPrefix(t.Covers, *skipFor+"#") {
+			continue // another workflow's job: its own cinema job judges it
+		}
 		if t.Platform != task.PlatformAny && t.Platform != task.Platform() {
 			elsewhere[t.Platform] = append(elsewhere[t.Platform], id)
 			continue
@@ -204,6 +209,12 @@ func cmdVerify(args []string) int {
 			fmt.Printf("gate: FAIL (tasks %s are for %s; cinema supports linux tasks only for now)\n", strings.Join(ids, ", "), p)
 		}
 		return exitUnsatisfied
+	}
+	if *skipFor != "" {
+		writeSkipOutputs(cfg, rep)
+		writeGateReport(*reportPath, rep, start)
+		writeStepSummary(rep)
+		return 0
 	}
 	if !*execute {
 		// Plan job of the parallel gate: hand the RUN list to a matrix (one job per task).
@@ -484,5 +495,33 @@ func writeStepSummary(rep gateReport) {
 	if err == nil {
 		f.WriteString(b.String())
 		f.Close()
+	}
+}
+
+// writeSkipOutputs sets skip_<job>=true for each covered job whose tasks were
+// all reused (skip-in-place: the job's if: reads it). A job with any task to
+// run, or a judging error, gets false: it runs as it always did.
+func writeSkipOutputs(cfg *task.Config, rep gateReport) {
+	reused := map[string]bool{} // job → every task so far reused
+	for _, tr := range rep.Tasks {
+		_, job, _ := strings.Cut(cfg.Tasks[tr.Task].Covers, "#")
+		ok, seen := reused[job]
+		reused[job] = (ok || !seen) && tr.Decision == plan.GateReuse
+	}
+	jobs := make([]string, 0, len(reused))
+	for j := range reused {
+		jobs = append(jobs, j)
+	}
+	sort.Strings(jobs)
+	var lines strings.Builder
+	for _, j := range jobs {
+		fmt.Printf("  %-6s %s\n", map[bool]string{true: "SKIP", false: "RUN"}[reused[j]], j)
+		fmt.Fprintf(&lines, "skip_%s=%t\n", j, reused[j])
+	}
+	if path := os.Getenv("GITHUB_OUTPUT"); path != "" {
+		if f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644); err == nil {
+			f.WriteString(lines.String())
+			f.Close()
+		}
 	}
 }

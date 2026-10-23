@@ -83,6 +83,10 @@ type Task struct {
 	// GitHub job's services:. Their image digests are fingerprinted. Tasks with
 	// services run alone under -j (fixed host ports).
 	Services map[string]Service `yaml:"services"`
+	// Covers names the CI job this task stands in for ("ci.yml#test"): the job
+	// skips itself when the task is reused (verify --skip-outputs). Metadata,
+	// not part of the contract.
+	Covers string `yaml:"covers"`
 	// Runtime pins Go/Node versions that cinema provisions for the task and its
 	// probes, on the evidence machine and in the gate alike (runtime.go).
 	Runtime Runtime `yaml:"runtime"`
@@ -124,6 +128,7 @@ var (
 	idRE       = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 	platformRE = regexp.MustCompile(`^[a-z0-9]+/[a-z0-9]+$`)
 	envNameRE  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	coversRE   = regexp.MustCompile(`^[A-Za-z0-9._-]+\.ya?ml#[A-Za-z_][A-Za-z0-9_-]*$`)
 	imageRE    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(@sha256:[0-9a-f]{64})?$`)
 )
 
@@ -263,6 +268,9 @@ func (t *Task) validate() error {
 				return errors.New("container: tasks can't have toolchain cmd probes (they'd run on the host); the image digest fingerprints the container")
 			}
 		}
+	}
+	if t.Covers != "" && !coversRE.MatchString(t.Covers) {
+		return fmt.Errorf("covers must look like ci.yml#job, got %q", t.Covers)
 	}
 	if err := validateServices(t.Services); err != nil {
 		return err

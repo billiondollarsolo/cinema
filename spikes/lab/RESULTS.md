@@ -255,6 +255,9 @@ Every draft with a proposal (task *and* review verdicts, except those using `sud
 | PR | Upstream billed min | Gate | Strict net saved | Faithful net saved | Hand-tuned tasks (earlier) |
 |---|---:|---:|---:|---:|---:|
 | [prometheus#4](https://github.com/mjtechguy/cinema-lab-prometheus/pull/4) | 144 | 26 (2 tasks ran: golangci, test-go-more) | −24 (−17%) | 3 (2%) | 70 (46%) |
+| [eslint#3](https://github.com/mjtechguy/cinema-lab-eslint/pull/3) | 81 | 2 (all 20 reused) | 23 (28%) | 52 (64%) | 17 (20%) |
+
+**eslint#3:** the gate reused all 20 draft tasks, upstream CI passed, and the raw draft beat the hand-written tasks: the analyzer drafted all six Node legs, the types checks and the ecosystem tests where the lab file had 6 tasks. The dollar share is lower (18% strict, 40% faithful) because macOS and Windows stay in CI. Two drafts went through review fixes first: the draft had to be formatted with eslint's prettier (finding 47).
 
 **prometheus#4:** the gate reused 9 of 11 tasks. `golangci` missed on finding 45; `test-go-more` had no receipt and failed on the runner because the draft ran outside its container (`buf: command not found`). Upstream CI passed. The raw draft saved nothing because prometheus runs nearly all its CI in `golang-builder`, which the analyzer couldn't express yet (findings 46, 50).
 

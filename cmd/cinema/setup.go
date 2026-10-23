@@ -2,24 +2,19 @@ package main
 
 import (
 	"bufio"
-	_ "embed"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strings"
 
 	"github.com/billiondollarsolo/cinema/internal/analyze"
 	"github.com/billiondollarsolo/cinema/internal/snapshot"
 	"github.com/billiondollarsolo/cinema/internal/task"
 )
-
-//go:embed gate.yml
-var gateTemplate string
-
-const gatePath = ".github/workflows/cinema.yml"
 
 // cmdSetup is the guided path from existing CI to a working cinema setup: what
 // this machine can take over, the files that does it, formatted the repo's way,
@@ -58,31 +53,76 @@ func cmdSetup(args []string) int {
 		fmt.Println("\nNothing for this machine to take over yet: see what each job needs above (`cinema analyze` has the details).")
 		return exitUnsatisfied
 	}
-	tasks, err := draft(picked)
+	// Skip-in-place: each workflow with ready jobs gets a cinema job, and those
+	// jobs skip themselves when their tasks are reused. Only tasks whose job can
+	// skip are written: evidence for a job that never skips saves nothing.
+	version := selfVersion()
+	byWF := map[string]bool{}
+	for _, j := range picked {
+		byWF[j.Workflow] = true
+	}
+	type file struct{ path, body string }
+	var files []file
+	covered := map[string]bool{} // workflow#job
+	var summary []string
+	for _, wf := range sortedSet(byWF) {
+		src, err := os.ReadFile(filepath.Join(root, ".github", "workflows", wf))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cinema setup: %v\n", err)
+			return exitInternal
+		}
+		p, err := planSkips(wf, src, jobs, picked, version)
+		if err != nil {
+			summary = append(summary, fmt.Sprintf("  %s: left as is (%v)", wf, err))
+			continue
+		}
+		if len(p.covered) > 0 {
+			files = append(files, file{p.file, string(p.out)})
+			summary = append(summary, fmt.Sprintf("  %s: %s skip themselves when cinema reused them", wf, strings.Join(p.covered, ", ")))
+			for _, id := range p.covered {
+				covered[wf+"#"+id] = true
+			}
+		}
+		for _, l := range p.left {
+			summary = append(summary, "    left as is: "+l)
+		}
+	}
+	var kept []analyze.Job
+	for _, j := range picked {
+		if covered[j.Workflow+"#"+j.ID] {
+			kept = append(kept, j)
+		}
+	}
+	fmt.Println("\nWhat changes in CI:")
+	for _, l := range summary {
+		fmt.Println(l)
+	}
+	if len(kept) == 0 {
+		fmt.Println("\nNo job can skip itself yet (see why above); nothing written.")
+		return exitUnsatisfied
+	}
+	tasks, err := draft(kept)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cinema setup: %v\n", err)
 		return exitInternal
 	}
-	version := selfVersion()
-	files := []struct{ path, body, what string }{
-		{task.ConfigPath, string(tasks), fmt.Sprintf("%d tasks: %s", len(picked), taskIDs(picked))},
-		{gatePath, strings.ReplaceAll(gateTemplate, "CINEMA_VERSION", version), "the CI gate: reuses verified receipts, runs the rest (one job per task)"},
-	}
-	fmt.Println("\ncinema setup would write:")
+	files = append([]file{{task.ConfigPath, string(tasks)}}, files...)
+	fmt.Printf("\ncinema setup would write %d tasks (%s) and edit:\n", len(kept), taskIDs(kept))
 	for _, f := range files {
 		state := "new"
 		if _, err := os.Stat(filepath.Join(root, f.path)); err == nil {
-			state = "REPLACES the existing file"
+			state = "edited"
 		}
-		fmt.Printf("  %-32s %s (%s)\n", f.path, f.what, state)
+		fmt.Printf("  %s (%s)\n", f.path, state)
 	}
 	if strings.Contains(version, "latest") {
-		fmt.Println("\n  note: this cinema isn't a tagged build, so the gate installs @latest; pin a version before relying on it")
+		fmt.Println("\n  note: this cinema isn't a tagged build, so CI installs @latest; pin a version before relying on it")
 	}
 	if !*yes && !confirm("\nWrite these files? [y/N] ") {
 		fmt.Println("Nothing written.")
 		return 0
 	}
+	paths := make([]string, 0, len(files))
 	for _, f := range files {
 		p := filepath.Join(root, f.path)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -93,15 +133,17 @@ func cmdSetup(args []string) int {
 			fmt.Fprintf(os.Stderr, "cinema setup: %v\n", err)
 			return exitInternal
 		}
+		paths = append(paths, f.path)
 	}
-	formatLikeRepo(root, task.ConfigPath, gatePath)
+	formatLikeRepo(root, paths...)
 	fmt.Print(`
-Written. Next:
+Written (see git diff). Next:
   1. read .cinema/tasks.yaml, then:   cinema trust
   2. make evidence:                   cinema run --commit HEAD --all -j 4
   3. once per machine:                cinema keys init && cinema keys export
      and add that line to the repo variable CINEMA_TRUSTED_KEYS (Settings → Variables)
-  4. commit both files and push with: cinema push
+  4. commit, then push with:          cinema push
+The PR that adds this runs everything as before; jobs start skipping once it's merged.
 `)
 	return 0
 }
@@ -168,4 +210,13 @@ func selfVersion() string {
 		}
 	}
 	return "latest"
+}
+
+func sortedSet(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

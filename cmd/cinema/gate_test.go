@@ -300,3 +300,59 @@ func TestGateOtherPlatformFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+// Skip-in-place: a workflow's cinema job outputs skip_<job>=true only for jobs
+// whose covering tasks are all reused; other workflows' tasks aren't judged.
+func TestSkipOutputs(t *testing.T) {
+	g := newGateEnv(t)
+	g.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  check:
+    argv: [sh, -c, "test -f main.go"]
+    platform: any
+    covers: ci.yml#lint
+    reuse: { allowed: true, max_age: 1h }
+  never-run-locally:
+    argv: [sh, -c, "exit 0"]
+    platform: any
+    covers: ci.yml#unit
+    reuse: { allowed: true, max_age: 1h }
+  elsewhere:
+    argv: [sh, -c, "exit 0"]
+    platform: any
+    covers: other.yml#x
+    reuse: { allowed: true, max_age: 1h }
+`)
+	g.git("add", "-A")
+	g.git("commit", "-qm", "covers")
+	g.cinema("trust")
+	g.cinema("run", "--commit", "HEAD", "check", "elsewhere")
+	g.cinema("push")
+	ci := filepath.Join(t.TempDir(), "ci")
+	mustRun(t, "", "git", "clone", "-q", g.bare, ci)
+	ev := filepath.Join(t.TempDir(), "e.json")
+	os.WriteFile(ev, []byte(`{"repository":{"full_name":"Example/Repo"}}`), 0o644)
+	out := filepath.Join(t.TempDir(), "gh-output")
+	cmd := exec.Command(bin, "verify", "--event", ev, "--skip-outputs", "ci.yml")
+	cmd.Dir = ci
+	cmd.Env = append(os.Environ(), "GITHUB_REPOSITORY=Example/Repo", "CINEMA_TRUSTED_KEYS="+g.keys,
+		"GITHUB_OUTPUT="+out, "CINEMA_DATA_DIR="+t.TempDir())
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, b)
+	}
+	b, _ := os.ReadFile(out)
+	if string(b) != "skip_lint=true\nskip_unit=false\n" {
+		t.Fatalf("outputs:\n%s", b)
+	}
+	// No keys (or no evidence at all): nothing is skipped, and the job still succeeds.
+	cmd = exec.Command(bin, "verify", "--event", ev, "--skip-outputs", "ci.yml")
+	cmd.Dir = ci
+	os.Remove(out)
+	cmd.Env = append(os.Environ(), "GITHUB_REPOSITORY=Example/Repo", "GITHUB_OUTPUT="+out, "CINEMA_DATA_DIR="+t.TempDir())
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("without keys: %v\n%s", err, b)
+	}
+	if b, _ := os.ReadFile(out); strings.Contains(string(b), "=true") {
+		t.Fatalf("skipped without trusted keys:\n%s", b)
+	}
+}

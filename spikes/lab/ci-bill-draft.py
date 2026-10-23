@@ -6,7 +6,7 @@
 #   faithful = also reused review drafts that reproduce all of the job's steps
 #              (only the environment differs, e.g. no container); hollow drafts
 #              whose real work was an untranslated action are never counted.
-# Usage: python3 -I ci-bill-draft.py   (needs gh, read access)
+# Usage: python3 -I ci-bill-draft.py [PR...]   (needs gh, read access)
 import importlib.util, math, os
 spec = importlib.util.spec_from_file_location("bill", os.path.join(os.path.dirname(os.path.abspath(__file__)), "ci-bill.py"))
 RATE = {"linux": 0.006, "windows": 0.010, "macos": 0.062}
@@ -36,9 +36,15 @@ EXP = {
     "prometheus#4": ("mjtechguy/cinema-lab-prometheus", [39898752627], 39898752531,
                      {"List active LTS releases", "List the oldest supported Go version"},
                      {"Check generated parser", "Compliance testing", "Go tests", "Go tests for 32-bit x86", "Mixins tests", "UI tests"}),
+    "eslint#3": ("mjtechguy/cinema-lab-eslint", [39914241580, 39914241048, 39914241081, 39914241043, 39914241076], 39914241061,
+                 {'Test Types', 'Test (ubuntu-latest, 20.x)', 'Are the types wrong? (eslint-config-eslint, packages/eslint-config-eslint)', 'Test (ubuntu-latest, 20.19.0)', 'Are the types wrong? (eslint, .)', 'Test (ubuntu-latest, 24.x)', 'Verify Files', 'Test (ubuntu-latest, 22.x)', 'Test (ubuntu-latest, 24.x, --experimental-transform-types)', 'Test (ubuntu-latest, 26.x)'},
+                 {'Test Ecosystem Plugin (@eslint-community/eslint-plugin-eslint-comments)', 'Test Ecosystem Plugin (eslint-plugin-unicorn)', 'Test Ecosystem Plugin (@typescript-eslint/typescript-eslint)', 'Test Ecosystem Plugin (@eslint/json)', 'Test Ecosystem Plugin (eslint-plugin-vue)', 'Browser Test', 'Test Ecosystem Plugin (@eslint/markdown)', 'Test Ecosystem Plugin (@eslint/css)'}),
 }
 
+import sys
 for name, (repo, ups, gate_id, strict, faithful) in EXP.items():
+    if sys.argv[1:] and name not in sys.argv[1:]:
+        continue
     up = [j for r in ups for j in run_jobs(repo, r)]
     gate = run_jobs(repo, gate_id)
     u, g = B["tally"](up), B["tally"](gate)

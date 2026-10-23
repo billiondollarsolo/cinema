@@ -42,6 +42,14 @@ func TestJobKeyMatrixOrder(t *testing.T) {
 	if analyzedKey(j) != jobKey("ci.yml", "test (ubuntu-latest, 22.x)") {
 		t.Fatal("matrix job doesn't match Actions' default name")
 	}
+	named := analyze.Job{Workflow: "ci.yml", ID: "test", Name: "Test", Combo: map[string]string{"os": "ubuntu-latest", "node": "20.x", "flags": ""}}
+	if analyzedKey(named) != jobKey("ci.yml", "Test (ubuntu-latest, 20.x)") {
+		t.Fatal("named matrix job doesn't match Actions' name with values appended")
+	}
+	withValue := analyze.Job{Workflow: "ci.yml", ID: "test", Name: "Node 20.x", Combo: map[string]string{"node": "20.x"}}
+	if analyzedKey(withValue) != jobKey("ci.yml", "Node 20.x") {
+		t.Fatal("name that uses a matrix value got values appended")
+	}
 	n := analyze.Job{Workflow: "ci.yml", ID: "test_go", Name: "Go tests"}
 	if analyzedKey(n) != jobKey("ci.yml", "Go tests") {
 		t.Fatal("named job doesn't match")

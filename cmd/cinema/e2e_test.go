@@ -908,12 +908,15 @@ jobs:
 		t.Fatalf("%v\n%s", err, out)
 	}
 	tasks, _ := os.ReadFile(filepath.Join(e.repo, ".cinema/tasks.yaml"))
-	gate, _ := os.ReadFile(filepath.Join(e.repo, ".github/workflows/cinema.yml"))
-	if !strings.Contains(string(tasks), "unit:") || strings.Contains(string(tasks), "mac:") {
+	ci, _ := os.ReadFile(filepath.Join(e.repo, ".github/workflows/ci.yml"))
+	if !strings.Contains(string(tasks), "unit:") || !strings.Contains(string(tasks), "covers: ci.yml#unit") || strings.Contains(string(tasks), "mac:") {
 		t.Fatalf("tasks:\n%s", tasks)
 	}
-	if strings.Contains(string(gate), "CINEMA_VERSION") || !strings.Contains(string(gate), "cinema verify") {
-		t.Fatalf("gate not filled in:\n%s", gate)
+	if !strings.Contains(string(ci), "--skip-outputs ci.yml") || !strings.Contains(string(ci), "needs.cinema.outputs.skip_unit != 'true'") {
+		t.Fatalf("workflow not set up to skip in place:\n%s", ci)
+	}
+	if _, err := os.Stat(filepath.Join(e.repo, ".github/workflows/cinema.yml")); err == nil {
+		t.Fatal("wrote a separate gate workflow")
 	}
 	if out, code := e.cinema("trust"); code != 0 {
 		t.Fatalf("written tasks.yaml doesn't load: exit %d\n%s", code, out)

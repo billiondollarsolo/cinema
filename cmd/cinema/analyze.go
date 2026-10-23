@@ -146,6 +146,7 @@ func draft(jobs []analyze.Job) ([]byte, error) {
 		if p.Container != "" {
 			t.Content = append(t.Content, s("container"), s(p.Container))
 		}
+		t.Content = append(t.Content, s("covers"), s(j.Workflow+"#"+j.ID))
 		if p.Exclusive {
 			t.Content = append(t.Content, s("exclusive"), s("true"))
 		}
