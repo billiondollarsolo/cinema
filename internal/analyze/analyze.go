@@ -329,6 +329,25 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		b.WriteString(")")
 		body = append(body, b.String())
 	}
+	// Steps that use Go or Node with no setup action (a container job, the
+	// runner's preinstalled toolchain) would leave the task with no environment
+	// fingerprint: its receipts would match whatever is installed. Pin from the
+	// repo's version file, as setup-go/setup-node would (lab: prometheus).
+	all := strings.Join(body, "\n")
+	if p.Go == "" && usesGo.MatchString(all) {
+		if f := firstFile(root, ".go-version", "go.mod"); f != "" {
+			if p.Go = exactVersion(root, "", `^1\.[0-9]+\.[0-9]+$`, "Go", f, review, note); p.Go != "" {
+				note("Go isn't set up by the job (container or preinstalled); pinned from " + f)
+			}
+		}
+	}
+	if p.Node == "" && usesNode.MatchString(all) {
+		if f := firstFile(root, ".nvmrc", ".node-version"); f != "" {
+			if p.Node = exactVersion(root, "", `^[0-9]+\.[0-9]+\.[0-9]+$`, "Node", f, review, note); p.Node != "" {
+				note("Node isn't set up by the job (container or preinstalled); pinned from " + f)
+			}
+		}
+	}
 	if len(body) == 0 {
 		if r.Verdict == Review {
 			// A Linux check made only of actions: claimable once someone writes the commands.
@@ -556,6 +575,8 @@ var (
 	sudo     = regexp.MustCompile(`(^|[\s;&|(])sudo\s`)
 	// Lab: vite's preview job ran `pkg-pr-new publish` (it refused outside Actions).
 	publishes   = regexp.MustCompile(`\b(npm|pnpm|yarn|bun|pkg-pr-new|changeset|cargo|gem)(@[\w.^~-]+)? publish\b|\bgoreleaser release\b|\bdocker push\b|\btwine upload\b|\bgh release (create|upload)\b`)
+	usesGo      = regexp.MustCompile(`(^|[\s;&|(])(go (build|test|vet|run|install|generate|mod|tool|list)|make)\b`)
+	usesNode    = regexp.MustCompile(`(^|[\s;&|(])(node|npm|npx|pnpm|yarn|corepack)\b`)
 	pipeToShell = regexp.MustCompile(`(curl|wget)\b[^|\n]*\|\s*(sudo\s+)?(ba)?sh\b`)
 	floating    = regexp.MustCompile(`@latest\b|/HEAD/|/(master|main)/[^\s]*\.(sh|py)\b`)
 )
@@ -889,4 +910,14 @@ func Printable(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// firstFile is the first of names that exists as a regular file in root ("" if none).
+func firstFile(root string, names ...string) string {
+	for _, n := range names {
+		if fi, err := os.Lstat(filepath.Join(root, n)); root != "" && err == nil && fi.Mode().IsRegular() {
+			return n
+		}
+	}
+	return ""
 }

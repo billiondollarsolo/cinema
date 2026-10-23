@@ -432,3 +432,38 @@ jobs:
 		}
 	}
 }
+
+// A job that uses Go or Node without a setup action still gets an exact pin
+// from the repo's version file, so its receipts are bound to a toolchain.
+func TestPinWithoutSetupAction(t *testing.T) {
+	d := t.TempDir()
+	os.WriteFile(filepath.Join(d, "go.mod"), []byte("module x\n\ngo 1.26.0\n\ntoolchain go1.26.10\n"), 0o644)
+	os.WriteFile(filepath.Join(d, ".nvmrc"), []byte("22.23.4\n"), 0o644)
+	os.MkdirAll(filepath.Join(d, ".github", "workflows"), 0o755)
+	os.WriteFile(filepath.Join(d, ".github", "workflows", "ci.yml"), []byte(`on: pull_request
+jobs:
+  test-go:
+    runs-on: ubuntu-latest
+    container: {image: quay.io/prometheus/golang-builder:1.27-base}
+    steps: [{run: make test}]
+  ui:
+    runs-on: ubuntu-latest
+    steps: [{run: npm ci && npm test}]
+  docs:
+    runs-on: ubuntu-latest
+    steps: [{run: ./check-links.sh}]
+`), 0o644)
+	jobs, err := Repo(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, j := range jobs {
+		if j.Proposal != nil {
+			got[j.ID] = j.Proposal.Go + "/" + j.Proposal.Node
+		}
+	}
+	if got["test-go"] != "1.26.10/" || got["ui"] != "/22.23.4" || got["docs"] != "/" {
+		t.Fatalf("pins: %v", got)
+	}
+}
