@@ -224,6 +224,17 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 	}
 	opts := record.Options{Argv: t.Argv, Dir: filepath.Join(w.root, filepath.FromSlash(t.Cwd))}
 	opts.CPUs = cpuSet(t.CPUs, slot, runtime.NumCPU())
+	if t.Container != "" {
+		img, err := task.PinnedImage(t.Container) // the same digest the fingerprint records
+		if err != nil {
+			say("✗ %s  container: %v\n", t.ID, err)
+			return true, false
+		}
+		var stop func()
+		opts.Argv, stop = t.ContainerRun(w.root, img, opts.CPUs)
+		defer stop()
+		opts.CPUs = nil
+	}
 	if t.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, t.Timeout)

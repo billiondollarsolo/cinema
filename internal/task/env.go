@@ -25,6 +25,7 @@ func Platform() string { return runtime.GOOS + "/" + runtime.GOARCH }
 // it, so `explain` can show what differed.
 type Env struct {
 	Digest string
+	Image  string   // container tasks: the image pinned by digest (repo@sha256:...)
 	Inputs []string // e.g. "platform=darwin/arm64", "go version → go version go1.27.1 darwin/arm64"
 }
 
@@ -51,12 +52,22 @@ func (t *Task) EnvFingerprint(root string, env []string) (Env, error) {
 	// Root changes results: permission tests fail (or skip, i.e. pass) as root.
 	// GitHub's runners are non-root, container jobs often root; they must match.
 	user := "user=nonroot"
-	if os.Geteuid() == 0 {
-		user = "user=root"
+	if os.Geteuid() == 0 || t.Container != "" {
+		user = "user=root" // container tasks run as root inside the image, like GitHub's
 	}
 	e.str(user)
 	fp.Inputs = append(fp.Inputs, user)
 
+	if t.Container != "" {
+		img, err := PinnedImage(t.Container)
+		if err != nil {
+			return Env{}, fmt.Errorf("container %s: %w", t.Container, err)
+		}
+		e.str("container")
+		e.str(img)
+		fp.Image = img
+		fp.Inputs = append(fp.Inputs, "container "+img)
+	}
 	dir := filepath.Join(root, filepath.FromSlash(t.Cwd))
 	e.u64(uint64(len(t.Toolchain)))
 	for _, tc := range t.Toolchain {

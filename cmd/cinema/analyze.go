@@ -116,6 +116,9 @@ func draft(jobs []analyze.Job) ([]byte, error) {
 			}
 			t.Content = append(t.Content, s("runtime"), rt, s("toolchain"), probes)
 		}
+		if p.Container != "" {
+			t.Content = append(t.Content, s("container"), s(p.Container))
+		}
 		if len(p.Outputs) > 0 {
 			t.Content = append(t.Content, s("outputs"), flow(seq(p.Outputs...)))
 			j.Notes = append(j.Notes, "outputs: are the paths the job uploads as artifacts; they're left out of the source fingerprint")

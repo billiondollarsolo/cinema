@@ -65,6 +65,11 @@ type Task struct {
 	// some suites deadlock or time out on a bigger box (lab: prettier's jest on
 	// 16 cores). Scheduling only: not part of the contract digest.
 	CPUs int `yaml:"cpus"`
+	// Container runs the task inside this image, as a GitHub container job does
+	// (root inside it; files are handed back afterwards). The image's resolved
+	// digest is part of the environment fingerprint, and the run uses exactly
+	// that digest (container.go).
+	Container string `yaml:"container"`
 	// Runtime pins Go/Node versions that cinema provisions for the task and its
 	// probes, on the evidence machine and in the gate alike (runtime.go).
 	Runtime Runtime `yaml:"runtime"`
@@ -233,6 +238,16 @@ func (t *Task) validate() error {
 		}
 		t.Outputs[i] = c
 	}
+	if t.Container != "" {
+		if t.Runtime.set() {
+			return errors.New("container: and runtime: can't be combined: the image provides the toolchain")
+		}
+		for _, tc := range t.Toolchain {
+			if len(tc.Cmd) > 0 {
+				return errors.New("container: tasks can't have toolchain cmd probes (they'd run on the host); the image digest fingerprints the container")
+			}
+		}
+	}
 	if err := t.Runtime.validate(); err != nil {
 		return err
 	}
@@ -361,6 +376,10 @@ func (t *Task) ContractDigest(root string) (string, error) {
 	e.str(t.Runtime.Go)
 	e.str(t.Runtime.Node)
 	e.str(script)
+	if t.Container != "" { // only when set: existing contracts keep their digests
+		e.str("container")
+		e.str(t.Container)
+	}
 	return e.sum(), nil
 }
 

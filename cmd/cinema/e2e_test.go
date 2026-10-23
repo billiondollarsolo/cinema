@@ -844,3 +844,36 @@ tasks:
 		t.Fatal("unknown task accepted")
 	}
 }
+
+// A container: task runs inside the image as root, like a GitHub container job,
+// hands its files back, and is evidence bound to the image digest.
+func TestRunInContainer(t *testing.T) {
+	if exec.Command("docker", "info").Run() != nil {
+		t.Skip("no docker")
+	}
+	e := newEnv(t)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  in-image: {argv: [sh, -c, "id -u > uid.txt && cat /etc/alpine-release"], platform: linux/amd64, container: "alpine:3.20", reuse: {allowed: true, max_age: 1h}}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	cmd := exec.Command(bin, "run", "--commit", "HEAD", "-j", "1", "in-image")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "✓ in-image") {
+		t.Fatalf("err=%v:\n%s", err, out)
+	}
+	if st := e.states()["in-image"]; st != "reusable/" {
+		t.Fatalf("state %s, want reusable/", st)
+	}
+	log, _ := e.cinema("log", "in-image")
+	if !strings.Contains(log, "3.20") {
+		t.Fatalf("didn't run in the image:\n%s", log)
+	}
+	exp, _ := e.cinema("explain", "--json", "in-image")
+	if !strings.Contains(exp, "container alpine@sha256:") || !strings.Contains(exp, "user=root") {
+		t.Fatalf("explain doesn't show the pinned image:\n%s", exp)
+	}
+}

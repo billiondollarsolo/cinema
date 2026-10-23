@@ -48,6 +48,8 @@ type Proposal struct {
 	Body string `json:"script"`         // bash script; each step in its own subshell
 	// Outputs: paths the job uploads as artifacts, so it writes them (outputs:).
 	Outputs []string `json:"outputs,omitempty"`
+	// Container: the job's container image; cinema runs the steps inside it.
+	Container string `json:"container,omitempty"`
 }
 
 type workflow struct {
@@ -229,14 +231,23 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 	case !strings.Contains(os, "ubuntu") && !strings.Contains(os, "linux"):
 		skip("runs on " + r.RunsOn + " (not a GitHub Linux runner)")
 	}
+	image := ""
 	if !j.Container.IsZero() {
-		review("runs in a container (" + sub(scalarOrMap(&j.Container, "image")) + "): run the steps inside it, e.g. docker run, and fingerprint the image")
+		img := sub(scalarOrMap(&j.Container, "image"))
+		if extra := containerExtras(&j.Container); img == "" || strings.Contains(img, "${{") || extra != "" {
+			review("runs in a container (" + img + extra + "): cinema can run a literal image with no options; translate the rest")
+		} else {
+			image = img
+		}
 	}
 	if len(j.Services) > 0 {
 		skip("needs service containers (" + strings.Join(sortedKeys(j.Services), ", ") + ")")
 	}
 
-	p := &Proposal{ID: taskID(id, combo)}
+	p := &Proposal{ID: taskID(id, combo), Container: image}
+	if image != "" {
+		note("runs in " + image + " as in CI: cinema runs the steps inside it, as root, and fingerprints the image digest")
+	}
 	var body []string
 	plumbing := false // a step writes $GITHUB_ENV & co.: emulate them between steps
 	env := literalEnv(wfEnv, combo, review)
@@ -334,6 +345,10 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 	// fingerprint: its receipts would match whatever is installed. Pin from the
 	// repo's version file, as setup-go/setup-node would (lab: prometheus).
 	all := strings.Join(body, "\n")
+	if p.Container != "" {
+		// The image provides the toolchain (runtime: can't be combined with container:).
+		p.Go, p.Node, all = "", "", ""
+	}
 	if p.Go == "" && usesGo.MatchString(all) {
 		if f := firstFile(root, ".go-version", "go.mod"); f != "" {
 			if p.Go = exactVersion(root, "", `^1\.[0-9]+\.[0-9]+$`, "Go", f, review, note); p.Go != "" {
@@ -920,4 +935,22 @@ func firstFile(root string, names ...string) string {
 		}
 	}
 	return ""
+}
+
+// containerExtras names container: settings cinema doesn't reproduce yet
+// (options, volumes, ports, credentials, env); "" if there are none.
+func containerExtras(n *yaml.Node) string {
+	if n.Kind != yaml.MappingNode {
+		return ""
+	}
+	var extra []string
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		if k := n.Content[i].Value; k != "image" {
+			extra = append(extra, k)
+		}
+	}
+	if len(extra) == 0 {
+		return ""
+	}
+	return "; with " + strings.Join(extra, ", ")
 }

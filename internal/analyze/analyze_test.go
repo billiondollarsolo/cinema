@@ -446,6 +446,9 @@ jobs:
     runs-on: ubuntu-latest
     container: {image: quay.io/prometheus/golang-builder:1.27-base}
     steps: [{run: make test}]
+  build:
+    runs-on: ubuntu-latest
+    steps: [{run: make build}]
   ui:
     runs-on: ubuntu-latest
     steps: [{run: npm ci && npm test}]
@@ -460,10 +463,41 @@ jobs:
 	got := map[string]string{}
 	for _, j := range jobs {
 		if j.Proposal != nil {
-			got[j.ID] = j.Proposal.Go + "/" + j.Proposal.Node
+			got[j.ID] = j.Proposal.Go + "/" + j.Proposal.Node + "/" + j.Proposal.Container
 		}
 	}
-	if got["test-go"] != "1.26.10/" || got["ui"] != "/22.23.4" || got["docs"] != "/" {
+	// test-go runs in its container (the image is the toolchain), build on the runner.
+	if got["test-go"] != "//quay.io/prometheus/golang-builder:1.27-base" || got["build"] != "1.26.10//" || got["ui"] != "/22.23.4/" || got["docs"] != "//" {
 		t.Fatalf("pins: %v", got)
+	}
+}
+
+func TestContainerJobs(t *testing.T) {
+	src := `on: pull_request
+jobs:
+  plain:
+    runs-on: ubuntu-latest
+    container: golang:1.27
+    steps: [{run: go test ./...}]
+  with-options:
+    runs-on: ubuntu-latest
+    container: {image: golang:1.27, options: --privileged}
+    steps: [{run: go test ./...}]
+`
+	jobs, err := Workflow("ci.yml", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range jobs {
+		switch j.ID {
+		case "plain":
+			if j.Verdict != Task || j.Proposal.Container != "golang:1.27" {
+				t.Errorf("plain: %s %q %+v", j.Verdict, j.Reasons, j.Proposal)
+			}
+		case "with-options":
+			if j.Verdict != Review || !strings.Contains(strings.Join(j.Reasons, " "), "with options") {
+				t.Errorf("with-options: %s %q", j.Verdict, j.Reasons)
+			}
+		}
 	}
 }

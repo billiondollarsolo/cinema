@@ -280,6 +280,7 @@ Fields added from the lab (all optional):
     outputs: [cover-profile.out, dist]        # written by the task, unignored: left out of its fingerprint
     exclusive: true                           # never alongside other tasks under -j (fixed ports, networks)
     cpus: 4                                   # Linux: see only 4 CPUs (affinity), like the runner it replaces; scheduling only
+    container: golang:1.27                    # run inside this image as root, like a GitHub container job; its digest is fingerprinted
     timeout: 30m                              # stop a hang; a timeout is a failure (not in the contract)
     accept_tool_cache: false
     reuse: { allowed: true, max_age: 24h, capture: clean }   # capture: clean (default) | workspace (ADR 0002)

@@ -253,7 +253,20 @@ func executeGateTask(root string, t *task.Task, tr *gateTaskReport) {
 		defer os.RemoveAll(tmp)
 		env = task.PrivateGlobals(env, tmp)
 	}
-	res, err := record.Run(ctx, record.Options{Argv: t.Argv, Env: env,
+	argv := t.Argv
+	if t.Container != "" {
+		img, err := task.PinnedImage(t.Container)
+		if err != nil {
+			fmt.Println("::endgroup::")
+			fmt.Printf("%s FAILED: container: %v\n", t.ID, err)
+			tr.Executed, tr.ExitCode = true, 1
+			return
+		}
+		var stop func()
+		argv, stop = t.ContainerRun(root, img, nil)
+		defer stop()
+	}
+	res, err := record.Run(ctx, record.Options{Argv: argv, Env: env,
 		Dir: filepath.Join(root, filepath.FromSlash(t.Cwd)), Stdout: os.Stdout, Stderr: os.Stderr})
 	fmt.Println("::endgroup::")
 	tr.Executed = true

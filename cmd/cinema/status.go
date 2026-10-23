@@ -202,6 +202,9 @@ func cmdExplain(args []string) int {
 		fmt.Printf(" (%s)", ts.Reason)
 	}
 	fmt.Printf("\n  argv      %s\n  cwd       %s\n  platform  %s\n", strings.Join(t.Argv, " "), t.Cwd, t.Platform)
+	if t.Container != "" {
+		fmt.Printf("  container %s (%s)\n", t.Container, firstWith(env.Inputs, "container "))
+	}
 	if t.Reuse.Allowed {
 		fmt.Printf("  max_age   %s\n", t.Reuse.MaxAge)
 	}
@@ -334,4 +337,14 @@ func ago(t time.Time) string {
 		return d.Round(time.Hour).String()
 	}
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+// firstWith is the first of ss with prefix p, trimmed, or "unresolved".
+func firstWith(ss []string, p string) string {
+	for _, x := range ss {
+		if v, ok := strings.CutPrefix(x, p); ok {
+			return v
+		}
+	}
+	return "unresolved"
 }
