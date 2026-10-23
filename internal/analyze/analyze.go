@@ -252,7 +252,9 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 	plumbing := false // a step writes $GITHUB_ENV & co.: emulate them between steps
 	env := literalEnv(wfEnv, combo, review)
 	env = append(env, literalEnv(j.Env, combo, review)...)
-	for _, s := range j.Steps {
+	steps, inlined := j.Steps, 0
+	for i := 0; i < len(steps); i++ {
+		s := steps[i]
 		if s.If != "" {
 			switch v, ok := evalIf(s.If, combo); {
 			case !ok:
@@ -291,7 +293,14 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		case strings.HasPrefix(action, "github/codeql-action"):
 			skip("CodeQL analysis uploads results; not a pass/fail check")
 		default:
-			review("uses action " + uses + ": no local equivalent known; reproduce it with commands")
+			sub, err := compositeSteps(uses, s.With)
+			if err != nil || inlined+len(sub) > 100 {
+				review("uses action " + uses + ": no local equivalent known; reproduce it with commands")
+				break
+			}
+			// A composite action is steps like the job's own: translate them in place.
+			steps, inlined = slices.Insert(slices.Clone(steps), i+1, sub...), inlined+len(sub)
+			note("inlined composite action " + uses)
 		}
 		if s.Run == "" {
 			continue
