@@ -108,13 +108,13 @@ func draft(jobs []analyze.Job) ([]byte, error) {
 			rt, probes := m(), &yaml.Node{Kind: yaml.SequenceNode}
 			if p.Go != "" {
 				rt.Content = append(rt.Content, s("go"), s(p.Go))
-				probes.Content = append(probes.Content, flow(m(s("cmd"), flow(seq("go", "version")))))
+				probes.Content = append(probes.Content, m(s("cmd"), flow(seq("go", "version"))))
 			}
 			if p.Node != "" {
 				rt.Content = append(rt.Content, s("node"), s(p.Node))
-				probes.Content = append(probes.Content, flow(m(s("cmd"), flow(seq("node", "--version")))))
+				probes.Content = append(probes.Content, m(s("cmd"), flow(seq("node", "--version"))))
 			}
-			t.Content = append(t.Content, s("runtime"), flow(rt), s("toolchain"), probes)
+			t.Content = append(t.Content, s("runtime"), rt, s("toolchain"), probes)
 		}
 		if len(p.Outputs) > 0 {
 			t.Content = append(t.Content, s("outputs"), flow(seq(p.Outputs...)))
@@ -122,7 +122,7 @@ func draft(jobs []analyze.Job) ([]byte, error) {
 		}
 		// GitHub's standard Linux runner has 4 vCPUs (public repos; 2 on private ones).
 		t.Content = append(t.Content, s("cpus"), s("4"), s("timeout"), s("60m"),
-			s("reuse"), flow(m(s("allowed"), s("true"), s("max_age"), s("24h"))))
+			s("reuse"), m(s("allowed"), s("true"), s("max_age"), s("24h")))
 		key := s(p.ID)
 		key.HeadComment = analyze.Printable(fmt.Sprintf("%s: %s", j.Workflow, jobName(j)))
 		for _, r := range j.Reasons {
