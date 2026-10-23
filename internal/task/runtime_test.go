@@ -143,3 +143,31 @@ func TestPrivateGlobals(t *testing.T) {
 		}
 	}
 }
+
+// On a fresh runner, the first go call under GOTOOLCHAIN prints "go: downloading
+// goX" to stderr. That must happen during provisioning, not inside a probe, or
+// the probe output (and the environment digest) differs from a warm machine's.
+// Lab: prometheus's gate refused a Go-pinned receipt (ENVIRONMENT_MISMATCH).
+func TestGoProvisionedBeforeProbes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script stand-in for go")
+	}
+	bin := t.TempDir()
+	script := "#!/bin/sh\nif [ ! -f " + bin + "/warm ]; then echo 'go: downloading go1.2.3 (linux/amd64)' >&2; touch " + bin + "/warm; fi\necho 'go version go1.2.3 linux/amd64'\n"
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	tk := &Task{Platform: PlatformAny, Runtime: Runtime{Go: "1.2.3"}, Toolchain: []Toolchain{{Cmd: []string{"go", "version"}}}}
+	env, err := tk.RuntimeEnv(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp, err := tk.EnvFingerprint(t.TempDir(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fp.Inputs[len(fp.Inputs)-1]; got != "go version → go version go1.2.3 linux/amd64" {
+		t.Fatalf("probe saw the download: %q", got)
+	}
+}

@@ -11,11 +11,14 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/billiondollarsolo/cinema/internal/record"
 )
 
 // Runtime pins a language runtime that CInema provisions for the task and its
@@ -54,6 +57,7 @@ func (t *Task) RuntimeEnv(dataDir string) ([]string, error) {
 	env := os.Environ()
 	if t.Runtime.Go != "" {
 		env = setEnv(env, "GOTOOLCHAIN", "go"+t.Runtime.Go)
+		provisionGo(env)
 	}
 	if t.Runtime.Node != "" {
 		bin, err := provisionNode(dataDir, t.Runtime.Node)
@@ -240,4 +244,17 @@ func extractTarGz(data []byte, dir, prefix string) error {
 			}
 		}
 	}
+}
+
+// provisionGo makes the go command fetch the pinned toolchain now. On a fresh
+// machine its first call prints "go: downloading goX" to stderr; inside a probe
+// that line would change the environment digest (lab: prometheus's gate).
+// Errors are left to the probes and the task, which report them.
+func provisionGo(env []string) {
+	cmd := exec.Command("go", "version")
+	cmd.Env = env
+	if p, err := record.LookPath("go", env); err == nil {
+		cmd.Path = p
+	}
+	_ = cmd.Run()
 }
