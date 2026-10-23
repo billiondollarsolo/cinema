@@ -334,6 +334,12 @@ tasks:
     covers: ci.yml#test
     leg: { os: ubuntu-latest, node: "22.x" }
     reuse: { allowed: true, max_age: 1h }
+  build-ubuntu:
+    argv: [sh, -c, "echo build"]
+    platform: any
+    covers: ci.yml#build
+    leg: { os: ubuntu-latest }
+    reuse: { allowed: true, max_age: 1h }
   leg-stale:
     argv: [sh, -c, "echo stale"]
     platform: any
@@ -345,6 +351,12 @@ tasks:
 	// the node key, so excluding it would drop both node legs.
 	g.write(".github/workflows/ci.yml", `on: pull_request
 jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps: [{run: make}]
   test:
     strategy:
       matrix:
@@ -356,7 +368,7 @@ jobs:
 	g.git("add", "-A")
 	g.git("commit", "-qm", "covers")
 	g.cinema("trust")
-	g.cinema("run", "--commit", "HEAD", "check", "elsewhere", "leg-a", "leg-stale")
+	g.cinema("run", "--commit", "HEAD", "check", "elsewhere", "leg-a", "leg-stale", "build-ubuntu")
 	g.cinema("push")
 	ci := filepath.Join(t.TempDir(), "ci")
 	mustRun(t, "", "git", "clone", "-q", g.bare, ci)
@@ -371,7 +383,8 @@ jobs:
 		t.Fatalf("%v\n%s", err, b)
 	}
 	b, _ := os.ReadFile(out)
-	if string(b) != "skip_lint=true\nskip_test=false\nexclude_test=[{\"node\":\"20.x\",\"os\":\"ubuntu-latest\"}]\nskip_unit=false\n" {
+	// build: its only task (ubuntu) was reused, but macOS has no task: never skip whole.
+	if string(b) != "skip_build=false\nexclude_build=[{\"os\":\"ubuntu-latest\"}]\nskip_lint=true\nskip_test=false\nexclude_test=[{\"node\":\"20.x\",\"os\":\"ubuntu-latest\"}]\nskip_unit=false\n" {
 		t.Fatalf("outputs:\n%s", b)
 	}
 	// No keys (or no evidence at all): nothing is skipped, and the job still succeeds.

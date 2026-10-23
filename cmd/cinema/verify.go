@@ -514,19 +514,37 @@ func writeSkipOutputs(cfg *task.Config, rep gateReport, real map[string]map[stri
 		jobs = append(jobs, j)
 	}
 	sort.Strings(jobs)
-	// A matrix job whose tasks are only partly reused excludes the reused legs.
+	// A matrix job is judged against the legs its workflow really has: it skips
+	// whole only if every real leg was reused (tasks alone can't tell: legs this
+	// machine can't run have none); otherwise its reused legs are excluded.
 	legs := map[string][]map[string]string{}
+	reusedLeg := map[string]map[string]bool{}
 	matrix := map[string]bool{}
 	for _, tr := range rep.Tasks {
 		t := cfg.Tasks[tr.Task]
 		_, job, _ := strings.Cut(t.Covers, "#")
-		if len(t.Leg) > 0 {
-			matrix[job] = true
-			// Only a leg the workflow's matrix really has, by exactly its own keys:
-			// a stale or partial leg would match (and drop) legs without evidence.
-			if tr.Decision == plan.GateReuse && !reused[job] && real[job][legID(t.Leg)] {
-				legs[job] = append(legs[job], t.Leg)
+		if len(t.Leg) == 0 {
+			continue
+		}
+		matrix[job] = true
+		// Only a leg the workflow's matrix really has, by exactly its own keys:
+		// a stale or partial leg would match (and drop) legs without evidence.
+		if id := legID(t.Leg); tr.Decision == plan.GateReuse && real[job][id] && !reusedLeg[job][id] {
+			if reusedLeg[job] == nil {
+				reusedLeg[job] = map[string]bool{}
 			}
+			reusedLeg[job][id] = true
+			legs[job] = append(legs[job], t.Leg)
+		}
+	}
+	for job := range matrix {
+		all := len(real[job]) > 0
+		for id := range real[job] {
+			all = all && reusedLeg[job][id]
+		}
+		reused[job] = reused[job] && all
+		if reused[job] {
+			legs[job] = nil // the job skips whole; no exclude needed
 		}
 	}
 	var lines strings.Builder
