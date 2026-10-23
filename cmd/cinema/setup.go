@@ -139,6 +139,13 @@ func cmdSetup(args []string) int {
 	for _, l := range summary {
 		fmt.Println(l)
 	}
+	for _, l := range summary {
+		if strings.Contains(l, "reused matrix legs") {
+			fmt.Println("  note: an excluded matrix leg reports no check; if branch protection requires a leg by name\n" +
+				"        (e.g. \"build (ubuntu-latest)\"), require the job's other checks instead")
+			break
+		}
+	}
 	if saved > 0 {
 		fmt.Printf("  about %.0f billed min/PR saved when everything is reused, minus ~1 min per cinema job\n", saved)
 	}

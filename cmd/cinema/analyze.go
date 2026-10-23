@@ -146,7 +146,7 @@ func draft(jobs []analyze.Job) ([]byte, error) {
 		if p.Container != "" {
 			t.Content = append(t.Content, s("container"), s(p.Container))
 		}
-		t.Content = append(t.Content, s("covers"), s(j.Workflow+"#"+j.ID))
+		t.Content = append(t.Content, s("covers"), s(j.Workflow+"#"+j.ID), s("job_digest"), s(j.LegDigest()))
 		if leg := legOf(j); leg != nil {
 			l := m()
 			for _, k := range j.MatrixKeys {

@@ -227,7 +227,7 @@ func TestPlanSkipsMatrixExclude(t *testing.T) {
 	}
 	for _, want := range []string{
 		"        exclude: ${{ fromJSON(needs.cinema.outputs.exclude_test || '[]') }}\n        os: [ubuntu-latest, macos-latest]",
-		"    if: ${{ !cancelled() }}\n",
+		"    if: \"${{ !cancelled() }}\"\n",
 		"exclude_test: ${{ steps.verify.outputs.exclude_test }}",
 	} {
 		if !strings.Contains(out, want) {
@@ -283,5 +283,101 @@ func TestUnsetupRoundTrip(t *testing.T) {
 		if got := string(unsetup([]byte(c.src))); got != c.src {
 			t.Errorf("%s: unsetup changed a workflow setup never touched", name)
 		}
+	}
+}
+
+// Review findings: each of these used to produce broken YAML, a changed
+// condition, leftover edits, or a skip that tested the wrong code.
+func TestPlanSkipsEdgeCases(t *testing.T) {
+	ready := func(ids ...string) []analyze.Job {
+		var out []analyze.Job
+		for _, id := range ids {
+			out = append(out, analyze.Job{Workflow: "ci.yml", ID: id, Verdict: analyze.Task, Proposal: &analyze.Proposal{ID: id}})
+		}
+		return out
+	}
+	src := `on: [pull_request]
+jobs:
+  colon:
+    if: "!startsWith(github.head_ref, 'chore: release')"
+    runs-on: ubuntu-latest
+    steps: [{run: make}]
+  folded:
+    if: >-
+      github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps: [{run: make}]
+  continued:
+    if: github.event_name == 'pull_request' &&
+      github.actor != 'bot'
+    runs-on: ubuntu-latest
+    steps: [{run: make}]
+  multineeds:
+    if: github.event_name == 'pull_request'
+    needs: [a,
+      b]
+    runs-on: ubuntu-latest
+    steps: [{run: make}]
+  a: {runs-on: ubuntu-latest, steps: [{run: make}]}
+  b: {runs-on: ubuntu-latest, steps: [{run: make}]}
+`
+	all := ready("colon", "folded", "continued", "multineeds")
+	p, err := planSkips("ci.yml", []byte(src), all, all, "v0.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(p.covered, ",") != "colon" {
+		t.Errorf("covered %v, want only colon; left %v", p.covered, p.left)
+	}
+	var doc struct {
+		Jobs map[string]struct {
+			If string `yaml:"if"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(p.out, &doc); err != nil {
+		t.Fatalf("invalid YAML: %v\n%s", err, p.out)
+	}
+	if got := doc.Jobs["colon"].If; got != "${{ !cancelled() && needs.cinema.outputs.skip_colon != 'true' && (!startsWith(github.head_ref, 'chore: release')) }}" {
+		t.Errorf("colon if: %s", got)
+	}
+	if doc.Jobs["multineeds"].If != "github.event_name == 'pull_request'" {
+		t.Errorf("multineeds was left alone but its if: changed: %q", doc.Jobs["multineeds"].If)
+	}
+	if !strings.Contains(string(p.out), "timeout-minutes: 10") {
+		t.Error("cinema job has no timeout")
+	}
+	// Undo gives back a valid workflow with the same condition.
+	var back struct {
+		Jobs map[string]struct {
+			If string `yaml:"if"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(unsetup(p.out), &back); err != nil || strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(back.Jobs["colon"].If, "${{"), "}}")) != "!startsWith(github.head_ref, 'chore: release')" {
+		t.Errorf("undo: %v %q\n%s", err, back.Jobs["colon"].If, unsetup(p.out))
+	}
+
+	// A project's own job named cinema is never touched.
+	own := "on: [pull_request]\njobs:\n  cinema:\n    runs-on: ubuntu-latest\n    steps: [{run: cinema verify --event x --execute}]\n  lint:\n    needs: cinema\n    runs-on: ubuntu-latest\n    steps: [{run: make lint}]\n"
+	if got := string(unsetup([]byte(own))); got != own {
+		t.Errorf("undo removed the project's own cinema job:\n%s", got)
+	}
+	if _, err := planSkips("ci.yml", []byte(own), ready("lint"), ready("lint"), "v"); err == nil {
+		t.Error("planned over the project's own cinema job")
+	}
+
+	// pull_request_target checks out the base branch: never skip there.
+	prt := "on: {pull_request_target: {}}\njobs:\n  lint: {runs-on: ubuntu-latest, steps: [{run: make}]}\n"
+	if _, err := planSkips("ci.yml", []byte(prt), ready("lint"), ready("lint"), "v"); err == nil || !strings.Contains(err.Error(), "pull_request_target") {
+		t.Errorf("pull_request_target: %v", err)
+	}
+
+	// A matrix with include: gets no exclude (exclude runs before include).
+	inc := "on: [pull_request]\njobs:\n  test:\n    strategy:\n      matrix:\n        os: [ubuntu-latest, macos-latest]\n        include:\n          - os: ubuntu-latest\n            coverage: \"true\"\n    runs-on: ${{ matrix.os }}\n    steps: [{run: make}]\n"
+	leg := analyze.Job{Workflow: "ci.yml", ID: "test", Verdict: analyze.Task, Combo: map[string]string{"os": "ubuntu-latest"}, MatrixKeys: []string{"os"}, Proposal: &analyze.Proposal{ID: "t"}}
+	mac := leg
+	mac.Combo = map[string]string{"os": "macos-latest"}
+	p, err = planSkips("ci.yml", []byte(inc), []analyze.Job{leg, mac}, []analyze.Job{leg}, "v")
+	if err != nil || len(p.covered) != 0 || !strings.Contains(strings.Join(p.left, " "), "has an include:") {
+		t.Errorf("include matrix: %v %+v", err, p)
 	}
 }

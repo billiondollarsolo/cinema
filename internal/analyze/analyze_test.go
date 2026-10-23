@@ -555,3 +555,13 @@ jobs:
 		}
 	}
 }
+
+func TestARMAndSelfHostedStayInCI(t *testing.T) {
+	src := "on: pull_request\njobs:\n  arm: {runs-on: ubuntu-24.04-arm, steps: [{run: make}]}\n  self: {runs-on: [self-hosted, linux], steps: [{run: make}]}\n"
+	jobs, _ := Workflow("ci.yml", []byte(src))
+	for _, j := range jobs {
+		if j.Verdict != Skip {
+			t.Errorf("%s: %s %q, want skip", j.ID, j.Verdict, j.Reasons)
+		}
+	}
+}

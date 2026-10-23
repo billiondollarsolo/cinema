@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -251,6 +252,10 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 	switch os := strings.ToLower(r.RunsOn); {
 	case strings.Contains(os, "windows"), strings.Contains(os, "macos"):
 		skip("runs on " + r.RunsOn)
+	case strings.Contains(os, "arm"), strings.Contains(os, "aarch64"):
+		skip("runs on " + r.RunsOn + " (ARM, not linux/amd64)")
+	case strings.Contains(os, "self-hosted"):
+		skip("runs on a self-hosted runner (" + r.RunsOn + "): its machine isn't known")
 	case strings.Contains(os, "${{"):
 		review("runs-on is an expression: " + r.RunsOn)
 	case !strings.Contains(os, "ubuntu") && !strings.Contains(os, "linux"):
@@ -1132,4 +1137,22 @@ func needsCinema(n *yaml.Node) bool {
 		return n.Value == "cinema"
 	}
 	return slices.ContainsFunc(n.Content, func(c *yaml.Node) bool { return c.Value == "cinema" })
+}
+
+// LegDigest identifies the job leg a draft task stands in for: its workflow,
+// job, runner, matrix values and translated steps (with runtime, container and
+// services). verify recomputes it from the workflow under test, so a task can
+// only skip the exact job it was drafted from: a changed step, if:, runner or
+// a new matrix leg means the job runs.
+func (j Job) LegDigest() string {
+	if j.Proposal == nil {
+		return ""
+	}
+	b, _ := json.Marshal(struct {
+		Workflow, Job, RunsOn string
+		Combo                 map[string]string
+		Proposal              Proposal
+	}{j.Workflow, j.ID, j.RunsOn, j.Combo, *j.Proposal})
+	sum := sha256.Sum256(b)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }

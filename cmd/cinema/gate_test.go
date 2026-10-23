@@ -302,100 +302,72 @@ func TestGateOtherPlatformFailsClosed(t *testing.T) {
 }
 
 // Skip-in-place: a workflow's cinema job outputs skip_<job>=true only for jobs
-// whose covering tasks are all reused; other workflows' tasks aren't judged.
+// whose every leg (as the workflow under test expands it) was drafted into a
+// task that was reused, and exclude_<job> with the reused legs otherwise.
 func TestSkipOutputs(t *testing.T) {
 	g := newGateEnv(t)
-	g.write(".cinema/tasks.yaml", `schema_version: 1
-tasks:
-  check:
-    argv: [sh, -c, "test -f main.go"]
-    platform: any
-    covers: ci.yml#lint
-    reuse: { allowed: true, max_age: 1h }
-  never-run-locally:
-    argv: [sh, -c, "exit 0"]
-    platform: any
-    covers: ci.yml#unit
-    reuse: { allowed: true, max_age: 1h }
-  elsewhere:
-    argv: [sh, -c, "exit 0"]
-    platform: any
-    covers: other.yml#x
-    reuse: { allowed: true, max_age: 1h }
-  leg-a:
-    argv: [sh, -c, "echo a"]
-    platform: any
-    covers: ci.yml#test
-    leg: { os: ubuntu-latest, node: "20.x" }
-    reuse: { allowed: true, max_age: 1h }
-  leg-b:
-    argv: [sh, -c, "echo b"]
-    platform: any
-    covers: ci.yml#test
-    leg: { os: ubuntu-latest, node: "22.x" }
-    reuse: { allowed: true, max_age: 1h }
-  build-ubuntu:
-    argv: [sh, -c, "echo build"]
-    platform: any
-    covers: ci.yml#build
-    leg: { os: ubuntu-latest }
-    reuse: { allowed: true, max_age: 1h }
-  leg-stale:
-    argv: [sh, -c, "echo stale"]
-    platform: any
-    covers: ci.yml#test
-    leg: { os: ubuntu-latest }
-    reuse: { allowed: true, max_age: 1h }
-`)
-	// The workflow as checked out decides which legs are real: leg-stale lacks
-	// the node key, so excluding it would drop both node legs.
-	g.write(".github/workflows/ci.yml", `on: pull_request
+	wf := `on: pull_request
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps: [{run: echo lint}]
+  unit:
+    runs-on: ubuntu-latest
+    steps: [{run: echo unit}]
   build:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    steps: [{run: make}]
+    steps: [{run: echo build}]
   test:
     strategy:
       matrix:
         os: [ubuntu-latest]
         node: ["20.x", "22.x"]
     runs-on: ubuntu-latest
-    steps: [{run: npm test}]
-`)
+    steps: [{run: echo test}]
+`
+	g.write(".github/workflows/ci.yml", wf)
 	g.git("add", "-A")
-	g.git("commit", "-qm", "covers")
+	g.git("commit", "-qm", "ci")
+	draft, _ := g.cinema("analyze", "--yaml")
+	// platform: any so the test runs on any machine (not part of the leg digest)
+	g.write(".cinema/tasks.yaml", strings.ReplaceAll(draft, "platform: linux/amd64", "platform: any"))
+	g.git("add", "-A")
+	g.git("commit", "-qm", "drafted tasks")
 	g.cinema("trust")
-	g.cinema("run", "--commit", "HEAD", "check", "elsewhere", "leg-a", "leg-stale", "build-ubuntu")
+	g.cinema("run", "--commit", "HEAD", "lint", "build-ubuntu-latest", "test-20.x-ubuntu-latest")
 	g.cinema("push")
-	ci := filepath.Join(t.TempDir(), "ci")
-	mustRun(t, "", "git", "clone", "-q", g.bare, ci)
-	ev := filepath.Join(t.TempDir(), "e.json")
-	os.WriteFile(ev, []byte(`{"repository":{"full_name":"Example/Repo"}}`), 0o644)
-	out := filepath.Join(t.TempDir(), "gh-output")
-	cmd := exec.Command(bin, "verify", "--event", ev, "--skip-outputs", "ci.yml")
-	cmd.Dir = ci
-	cmd.Env = append(os.Environ(), "GITHUB_REPOSITORY=Example/Repo", "CINEMA_TRUSTED_KEYS="+g.keys,
-		"GITHUB_OUTPUT="+out, "CINEMA_DATA_DIR="+t.TempDir())
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("%v\n%s", err, b)
+	verify := func() string {
+		ci := filepath.Join(t.TempDir(), "ci")
+		mustRun(t, "", "git", "clone", "-q", g.bare, ci)
+		ev := filepath.Join(t.TempDir(), "e.json")
+		os.WriteFile(ev, []byte(`{"repository":{"full_name":"Example/Repo"}}`), 0o644)
+		out := filepath.Join(t.TempDir(), "gh-output")
+		cmd := exec.Command(bin, "verify", "--event", ev, "--skip-outputs", "ci.yml")
+		cmd.Dir = ci
+		cmd.Env = append(os.Environ(), "GITHUB_REPOSITORY=Example/Repo", "CINEMA_TRUSTED_KEYS="+g.keys,
+			"GITHUB_OUTPUT="+out, "CINEMA_DATA_DIR="+t.TempDir())
+		if b, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v\n%s", err, b)
+		}
+		b, _ := os.ReadFile(out)
+		return string(b)
 	}
-	b, _ := os.ReadFile(out)
-	// build: its only task (ubuntu) was reused, but macOS has no task: never skip whole.
-	if string(b) != "skip_build=false\nexclude_build=[{\"os\":\"ubuntu-latest\"}]\nskip_lint=true\nskip_test=false\nexclude_test=[{\"node\":\"20.x\",\"os\":\"ubuntu-latest\"}]\nskip_unit=false\n" {
-		t.Fatalf("outputs:\n%s", b)
+	// build: its ubuntu leg was reused, macOS has no task: never skip whole.
+	want := "skip_build=false\nexclude_build=[{\"os\":\"ubuntu-latest\"}]\nskip_lint=true\nskip_test=false\nexclude_test=[{\"node\":\"20.x\",\"os\":\"ubuntu-latest\"}]\nskip_unit=false\n"
+	if got := verify(); got != want {
+		t.Fatalf("outputs:\n%s\nwant:\n%s", got, want)
 	}
-	// No keys (or no evidence at all): nothing is skipped, and the job still succeeds.
-	cmd = exec.Command(bin, "verify", "--event", ev, "--skip-outputs", "ci.yml")
-	cmd.Dir = ci
-	os.Remove(out)
-	cmd.Env = append(os.Environ(), "GITHUB_REPOSITORY=Example/Repo", "GITHUB_OUTPUT="+out, "CINEMA_DATA_DIR="+t.TempDir())
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("without keys: %v\n%s", err, b)
-	}
-	if b, _ := os.ReadFile(out); strings.Contains(string(b), "=true") {
-		t.Fatalf("skipped without trusted keys:\n%s", b)
+	// A change adds a step to lint. Its task (from the base tasks.yaml) is
+	// unchanged and freshly reused, but it no longer stands for the job: run it.
+	g.write(".github/workflows/ci.yml", strings.Replace(wf, "steps: [{run: echo lint}]", "steps: [{run: echo lint}, {run: ./new-check.sh}]", 1))
+	g.git("add", "-A")
+	g.git("commit", "-qm", "lint gains a step")
+	g.cinema("run", "--commit", "HEAD", "lint")
+	g.cinema("push")
+	if got := verify(); !strings.Contains(got, "skip_lint=false") {
+		t.Fatalf("a job whose steps changed was skipped:\n%s", got)
 	}
 }

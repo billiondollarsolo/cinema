@@ -10,7 +10,6 @@ import (
 	"github.com/billiondollarsolo/cinema/internal/analyze"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -155,6 +154,11 @@ func cmdVerify(args []string) int {
 		allRun = plan.PolicyUnavailable
 	case fork:
 		allRun = plan.ForkPR
+	case ev.PullRequest != nil && candidate == base && head != base:
+		// The checkout is the base, not the PR (pull_request_target): receipts
+		// for it say nothing about the code the PR's jobs test.
+		allRun = plan.PolicyUnavailable
+		rep.Note = "checked out the base commit, not the pull request: every task runs"
 	case kerr != nil || len(keys) == 0:
 		allRun = plan.PolicyUnavailable
 		rep.Note = "CINEMA_TRUSTED_KEYS missing or invalid: every task runs"
@@ -212,7 +216,7 @@ func cmdVerify(args []string) int {
 		return exitUnsatisfied
 	}
 	if *skipFor != "" {
-		writeSkipOutputs(cfg, rep, realLegs(root, *skipFor))
+		writeSkipOutputs(cfg, rep, root, *skipFor)
 		writeGateReport(*reportPath, rep, start)
 		writeStepSummary(rep)
 		return 0
@@ -499,69 +503,52 @@ func writeStepSummary(rep gateReport) {
 	}
 }
 
-// writeSkipOutputs sets skip_<job>=true for each covered job whose tasks were
-// all reused (skip-in-place: the job's if: reads it). A job with any task to
-// run, or a judging error, gets false: it runs as it always did.
-func writeSkipOutputs(cfg *task.Config, rep gateReport, real map[string]map[string]bool) {
-	reused := map[string]bool{} // job → every task so far reused
-	for _, tr := range rep.Tasks {
-		_, job, _ := strings.Cut(cfg.Tasks[tr.Task].Covers, "#")
-		ok, seen := reused[job]
-		reused[job] = (ok || !seen) && tr.Decision == plan.GateReuse
-	}
-	jobs := make([]string, 0, len(reused))
-	for j := range reused {
-		jobs = append(jobs, j)
-	}
-	sort.Strings(jobs)
-	// A matrix job is judged against the legs its workflow really has: it skips
-	// whole only if every real leg was reused (tasks alone can't tell: legs this
-	// machine can't run have none); otherwise its reused legs are excluded.
-	legs := map[string][]map[string]string{}
-	reusedLeg := map[string]map[string]bool{}
-	matrix := map[string]bool{}
+// writeSkipOutputs decides, for each job of workflow wf that tasks cover,
+// whether it skips whole (skip_<job>=true) or drops reused matrix legs
+// (exclude_<job>). It judges the workflow as checked out (the code under test),
+// not tasks.yaml: a leg counts as reused only if a reused task was drafted from
+// exactly that leg (job_digest), and a job skips whole only if every leg it
+// expands to is reused. A changed step, if:, runner or a new leg means it runs.
+func writeSkipOutputs(cfg *task.Config, rep gateReport, root, wf string) {
+	reused := map[string]bool{} // job_digest of every reused task
+	jobsCovered := map[string]bool{}
 	for _, tr := range rep.Tasks {
 		t := cfg.Tasks[tr.Task]
 		_, job, _ := strings.Cut(t.Covers, "#")
-		if len(t.Leg) == 0 {
-			continue
-		}
-		matrix[job] = true
-		// Only a leg the workflow's matrix really has, by exactly its own keys:
-		// a stale or partial leg would match (and drop) legs without evidence.
-		if id := legID(t.Leg); tr.Decision == plan.GateReuse && real[job][id] && !reusedLeg[job][id] {
-			if reusedLeg[job] == nil {
-				reusedLeg[job] = map[string]bool{}
-			}
-			reusedLeg[job][id] = true
-			legs[job] = append(legs[job], t.Leg)
+		jobsCovered[job] = true
+		if tr.Decision == plan.GateReuse && t.JobDigest != "" {
+			reused[t.JobDigest] = true
 		}
 	}
-	for job := range matrix {
-		all := len(real[job]) > 0
-		for id := range real[job] {
-			all = all && reusedLeg[job][id]
-		}
-		reused[job] = reused[job] && all
-		if reused[job] {
-			legs[job] = nil // the job skips whole; no exclude needed
-		}
-	}
+	legs := candidateLegs(root, wf)
 	var lines strings.Builder
-	for _, j := range jobs {
-		state := map[bool]string{true: "SKIP", false: "RUN"}[reused[j]]
-		if n := len(legs[j]); n > 0 {
-			state = fmt.Sprintf("RUN (%d reused leg(s) excluded)", n)
-		}
-		fmt.Printf("  %-6s %s\n", state, j)
-		fmt.Fprintf(&lines, "skip_%s=%t\n", j, reused[j])
-		if matrix[j] {
-			ex := legs[j]
-			if ex == nil {
-				ex = []map[string]string{}
+	for _, job := range sortedSet(jobsCovered) {
+		all := len(legs[job]) > 0
+		var excl []map[string]string
+		isMatrix := false
+		for _, l := range legs[job] {
+			isMatrix = isMatrix || len(l.MatrixKeys) > 0
+			ok := reused[l.LegDigest()]
+			all = all && ok
+			if leg := legOf(l); ok && leg != nil {
+				excl = append(excl, leg)
 			}
-			b, _ := json.Marshal(ex)
-			fmt.Fprintf(&lines, "exclude_%s=%s\n", j, b)
+		}
+		state := map[bool]string{true: "SKIP", false: "RUN"}[all]
+		switch {
+		case all:
+			excl = nil // the job skips whole
+		case len(excl) > 0:
+			state = fmt.Sprintf("RUN (%d reused leg(s) excluded)", len(excl))
+		}
+		fmt.Printf("  %-6s %s\n", state, job)
+		fmt.Fprintf(&lines, "skip_%s=%t\n", job, all)
+		if isMatrix {
+			if excl == nil {
+				excl = []map[string]string{}
+			}
+			b, _ := json.Marshal(excl)
+			fmt.Fprintf(&lines, "exclude_%s=%s\n", job, b)
 		}
 	}
 	if path := os.Getenv("GITHUB_OUTPUT"); path != "" {
@@ -572,11 +559,11 @@ func writeSkipOutputs(cfg *task.Config, rep gateReport, real map[string]map[stri
 	}
 }
 
-// realLegs is, per job of workflow wf as checked out, the legs its matrix
-// expands to, by exactly the matrix's own keys (legID). A job whose matrix
-// can't be expanded has none, so nothing of it is excluded.
-func realLegs(root, wf string) map[string]map[string]bool {
-	out := map[string]map[string]bool{}
+// candidateLegs is every leg (matrix combination) of each job of workflow wf
+// as checked out. A job whose matrix can't be expanded yields a leg without a
+// proposal, which no task matches: it never skips.
+func candidateLegs(root, wf string) map[string][]analyze.Job {
+	out := map[string][]analyze.Job{}
 	src, err := os.ReadFile(filepath.Join(root, ".github", "workflows", filepath.Base(wf)))
 	if err != nil {
 		return out
@@ -586,30 +573,7 @@ func realLegs(root, wf string) map[string]map[string]bool {
 		return out
 	}
 	for _, j := range jobs {
-		if len(j.MatrixKeys) == 0 {
-			continue
-		}
-		leg := map[string]string{}
-		for _, k := range j.MatrixKeys {
-			v, ok := j.Combo[k]
-			if !ok {
-				leg = nil
-				break
-			}
-			leg[k] = v
-		}
-		if leg != nil {
-			if out[j.ID] == nil {
-				out[j.ID] = map[string]bool{}
-			}
-			out[j.ID][legID(leg)] = true
-		}
+		out[j.ID] = append(out[j.ID], j)
 	}
 	return out
-}
-
-// legID is a leg's identity: its keys and values, sorted.
-func legID(leg map[string]string) string {
-	b, _ := json.Marshal(leg) // map keys marshal sorted
-	return string(b)
 }

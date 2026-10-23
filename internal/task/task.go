@@ -90,6 +90,9 @@ type Task struct {
 	// Leg is the matrix leg of the covered job this task is (its matrix's own
 	// keys → values): a reused leg is excluded from the job's matrix. Metadata.
 	Leg map[string]string `yaml:"leg"`
+	// JobDigest is the covered job leg as drafted (analyze.Job.LegDigest): the
+	// job skips only if the workflow under test still has exactly that leg.
+	JobDigest string `yaml:"job_digest"`
 	// Runtime pins Go/Node versions that cinema provisions for the task and its
 	// probes, on the evidence machine and in the gate alike (runtime.go).
 	Runtime Runtime `yaml:"runtime"`

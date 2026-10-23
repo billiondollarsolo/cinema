@@ -59,6 +59,11 @@ func planSkips(wf string, src []byte, all, ready []analyze.Job, version string) 
 	if mapValue(jobs, "cinema") != nil {
 		return p, fmt.Errorf("%s already has a job named cinema", wf)
 	}
+	if triggers(doc.Content[0], "pull_request_target") {
+		// Its checkout is the base branch, not the PR: receipts for the base tree
+		// would skip jobs that test the PR head.
+		return p, fmt.Errorf("%s runs on pull_request_target (checks out the base branch, not the PR)", wf)
+	}
 	needed := map[string]bool{} // jobs some other job needs: skipping them would skip their dependents
 	for i := 1; i < len(jobs.Content); i += 2 {
 		for _, n := range needsOf(jobs.Content[i]) {
@@ -72,6 +77,12 @@ func planSkips(wf string, src []byte, all, ready []analyze.Job, version string) 
 		text    []string // full lines, each ending in \n
 	}
 	var edits []edit
+	type expected struct {
+		cond    string
+		needs   []string
+		exclude bool
+	}
+	want := map[string]expected{}
 	ids := make([]string, 0, len(readyLegs))
 	for id := range readyLegs {
 		ids = append(ids, id)
@@ -102,42 +113,46 @@ func planSkips(wf string, src []byte, all, ready []analyze.Job, version string) 
 			cond += " && needs." + n + ".result == 'success'"
 		}
 		indent := strings.Repeat(" ", job.Content[0].Column-1)
+		var mine []edit // applied only if every check for this job passes
 		var ins []string
 		if ifNode := mapValue(job, "if"); ifNode != nil {
 			orig := strings.TrimSpace(ifNode.Value)
 			if strings.HasPrefix(orig, "${{") && strings.HasSuffix(orig, "}}") {
 				orig = strings.TrimSpace(orig[3 : len(orig)-2])
 			}
-			if statusCall.MatchString(orig) || ifNode.Line != mapKey(job, "if").Line || strings.Contains(orig, "\n") {
+			if statusCall.MatchString(orig) || !oneLine(ifNode, mapKey(job, "if"), lines) {
 				p.left = append(p.left, id+": its if: uses status functions or spans lines")
 				continue
 			}
-			edits = append(edits, edit{line: ifNode.Line - 1, replace: true, text: []string{indent + "if: ${{ " + cond + " && (" + orig + ") }}\n"}})
+			cond += " && (" + orig + ")"
+			mine = append(mine, edit{line: ifNode.Line - 1, replace: true, text: []string{indent + "if: " + quoted("${{ "+cond+" }}") + "\n"}})
 		} else {
-			ins = append(ins, indent+"if: ${{ "+cond+" }}\n")
+			ins = append(ins, indent+"if: "+quoted("${{ "+cond+" }}")+"\n")
 		}
 		switch nd := mapValue(job, "needs"); {
 		case nd == nil:
 			ins = append([]string{indent + "needs: cinema\n"}, ins...)
 		case nd.Kind == yaml.ScalarNode || (nd.Kind == yaml.SequenceNode && nd.Style&yaml.FlowStyle != 0):
-			if nd.Line != mapKey(job, "needs").Line {
+			if !oneLine(nd, mapKey(job, "needs"), lines) {
 				p.left = append(p.left, id+": its needs: is written in a form cinema doesn't edit")
 				continue
 			}
-			edits = append(edits, edit{line: nd.Line - 1, replace: true, text: []string{indent + "needs: [cinema, " + strings.Join(needsOf(job), ", ") + "]\n"}})
+			mine = append(mine, edit{line: nd.Line - 1, replace: true, text: []string{indent + "needs: [cinema, " + strings.Join(needsOf(job), ", ") + "]\n"}})
 		case nd.Kind == yaml.SequenceNode && len(nd.Content) > 0:
-			edits = append(edits, edit{line: nd.Content[0].Line - 1, text: []string{strings.Repeat(" ", nd.Content[0].Column-3) + "- cinema\n"}})
+			mine = append(mine, edit{line: nd.Content[0].Line - 1, text: []string{strings.Repeat(" ", nd.Content[0].Column-3) + "- cinema\n"}})
 		default:
 			p.left = append(p.left, id+": its needs: is written in a form cinema doesn't edit")
 			continue
 		}
 		if len(ins) > 0 {
-			edits = append(edits, edit{line: job.Content[0].Line - 1, text: ins})
+			mine = append(mine, edit{line: job.Content[0].Line - 1, text: ins})
 		}
 		if exAt > 0 {
-			edits = append(edits, edit{line: exAt - 1, text: []string{exIndent + "exclude: ${{ fromJSON(needs.cinema.outputs.exclude_" + id + " || '[]') }}\n"}})
+			mine = append(mine, edit{line: exAt - 1, text: []string{exIndent + "exclude: ${{ fromJSON(needs.cinema.outputs.exclude_" + id + " || '[]') }}\n"}})
 			p.matrix = append(p.matrix, id)
 		}
+		edits = append(edits, mine...)
+		want[id] = expected{cond: "${{ " + cond + " }}", needs: append([]string{"cinema"}, needsOf(job)...), exclude: exAt > 0}
 		if !partial {
 			p.skippable = append(p.skippable, id)
 		}
@@ -149,7 +164,7 @@ func planSkips(wf string, src []byte, all, ready []analyze.Job, version string) 
 	// The cinema job goes first under jobs:, indented like the other jobs.
 	ji := strings.Repeat(" ", jobs.Content[0].Column-1)
 	step := ji + "  "
-	block := []string{ji + "cinema:\n", step + "runs-on: ubuntu-latest\n", step + "permissions: { contents: read }\n", step + "outputs:\n"}
+	block := []string{ji + "cinema:\n", step + "runs-on: ubuntu-latest\n", step + "timeout-minutes: 10\n", step + "permissions: { contents: read }\n", step + "outputs:\n"}
 	for _, id := range p.skippable {
 		block = append(block, step+"  skip_"+id+": ${{ steps.verify.outputs.skip_"+id+" }}\n")
 	}
@@ -180,7 +195,90 @@ func planSkips(wf string, src []byte, all, ready []analyze.Job, version string) 
 		}
 	}
 	p.out = []byte(strings.Join(lines, ""))
+	// Safety net: read the result back; every covered job must say exactly what
+	// was meant, or the workflow is left as it was.
+	var back struct {
+		Jobs map[string]struct {
+			If       string    `yaml:"if"`
+			Needs    yaml.Node `yaml:"needs"`
+			Strategy struct {
+				Matrix map[string]any `yaml:"matrix"`
+			} `yaml:"strategy"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(p.out, &back); err != nil {
+		return skipPlan{file: p.file}, fmt.Errorf("%s: the edit didn't parse (%v); left as is", wf, err)
+	}
+	for id, w := range want {
+		j := back.Jobs[id]
+		_, hasEx := j.Strategy.Matrix["exclude"]
+		var needs []string
+		if j.Needs.Kind == yaml.ScalarNode {
+			needs = []string{j.Needs.Value}
+		}
+		for _, c := range j.Needs.Content {
+			needs = append(needs, c.Value)
+		}
+		if j.If != w.cond || strings.Join(needs, ",") != strings.Join(w.needs, ",") || hasEx != w.exclude {
+			return skipPlan{file: p.file}, fmt.Errorf("%s: job %s didn't come out as intended; left as is", wf, id)
+		}
+	}
 	return p, nil
+}
+
+// quoted is s as a double-quoted YAML scalar (an if: may hold ": " or " #").
+func quoted(s string) string {
+	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
+}
+
+// oneLine reports whether value v of key k sits wholly on k's line: not a
+// block scalar, and nothing of it continues on the next line.
+func oneLine(v, k *yaml.Node, lines []string) bool {
+	if v.Line != k.Line || v.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0 {
+		return false
+	}
+	line := strings.TrimRight(lines[v.Line-1], "\r\n")
+	switch {
+	case v.Kind == yaml.SequenceNode:
+		return strings.Contains(line, "]")
+	case v.Style&yaml.DoubleQuotedStyle != 0, v.Style&yaml.SingleQuotedStyle != 0:
+		q := `"`
+		if v.Style&yaml.SingleQuotedStyle != 0 {
+			q = "'"
+		}
+		return strings.Count(line, q) >= 2
+	}
+	// A plain scalar continues if the next line is indented deeper and isn't a key.
+	if v.Line < len(lines) {
+		next := lines[v.Line]
+		trimmed := strings.TrimLeft(next, " ")
+		deeper := len(next)-len(trimmed) > k.Column-1
+		if deeper && strings.TrimSpace(trimmed) != "" && !strings.HasPrefix(trimmed, "#") {
+			return false
+		}
+	}
+	return true
+}
+
+// triggers reports whether a workflow's on: names event ev.
+func triggers(w *yaml.Node, ev string) bool {
+	on := mapValue(w, "on")
+	if on == nil {
+		return false
+	}
+	switch on.Kind {
+	case yaml.ScalarNode:
+		return on.Value == ev
+	case yaml.SequenceNode:
+		for _, c := range on.Content {
+			if c.Value == ev {
+				return true
+			}
+		}
+	case yaml.MappingNode:
+		return mapValue(on, ev) != nil
+	}
+	return false
 }
 
 const cinemaJobSteps = `steps:
@@ -267,6 +365,10 @@ func excludeSlot(job *yaml.Node, keys []string) (line int, indent, why string) {
 		return 0, "", "is written on one line or as an expression"
 	case mapValue(m, "exclude") != nil:
 		return 0, "", "already has an exclude:"
+	case mapValue(m, "include") != nil:
+		// GitHub applies exclude before include: an include that extended an
+		// excluded leg would become a new, incomplete leg.
+		return 0, "", "has an include:"
 	}
 	for _, k := range keys {
 		v := mapValue(m, k)

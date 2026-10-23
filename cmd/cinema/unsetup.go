@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	setupIf      = regexp.MustCompile(`^(\s*)if: \$\{\{ !cancelled\(\)(.*) \}\}\s*$`)
+	setupIf      = regexp.MustCompile(`^(\s*)if: "\$\{\{ !cancelled\(\)(.*) \}\}"\s*$`)
 	setupExclude = regexp.MustCompile(`^\s*exclude: \$\{\{ fromJSON\(needs\.cinema\.outputs\.exclude_[A-Za-z0-9_-]+ \|\| '\[\]'\) \}\}\s*$`)
 	setupNeedsIn = regexp.MustCompile(`^(\s*)needs: \[cinema, (.*)\]\s*$`)
 )
@@ -24,8 +24,8 @@ func unsetup(src []byte) []byte {
 		return src
 	}
 	jobs := mapValue(doc.Content[0], "jobs")
-	if jobs == nil || mapValue(jobs, "cinema") == nil {
-		return src
+	if jobs == nil || !generatedCinemaJob(mapValue(jobs, "cinema")) {
+		return src // no cinema job, or the project's own: not setup's to remove
 	}
 	lines := strings.SplitAfter(string(src), "\n")
 	drop := map[int]bool{}
@@ -71,8 +71,9 @@ func unsetup(src []byte) []byte {
 		}
 		if k := mapKey(job, "if"); k != nil {
 			if m := setupIf.FindStringSubmatch(lines[k.Line-1]); m != nil {
-				if orig := originalIfText(m[2]); orig != "" {
-					lines[k.Line-1] = m[1] + "if: " + orig + "\n"
+				tail := strings.NewReplacer(`\"`, `"`, `\\`, `\`).Replace(m[2])
+				if orig := originalIfText(tail); orig != "" {
+					lines[k.Line-1] = m[1] + "if: " + plainOrExpr(orig) + "\n"
 				} else {
 					drop[k.Line-1] = true
 				}
@@ -102,4 +103,33 @@ func originalIfText(tail string) string {
 		return tail[i+5 : len(tail)-1]
 	}
 	return ""
+}
+
+// generatedCinemaJob reports whether job is the one setup writes: it runs
+// cinema verify --skip-outputs.
+func generatedCinemaJob(job *yaml.Node) bool {
+	if job == nil || job.Kind != yaml.MappingNode {
+		return false
+	}
+	steps := mapValue(job, "steps")
+	if steps == nil {
+		return false
+	}
+	for _, st := range steps.Content {
+		if st.Kind == yaml.MappingNode {
+			if r := mapValue(st, "run"); r != nil && strings.Contains(r.Value, "cinema verify") && strings.Contains(r.Value, "--skip-outputs") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// plainOrExpr writes a restored condition so it stays valid YAML: as written if
+// it's a safe plain scalar, else double-quoted.
+func plainOrExpr(e string) string {
+	if strings.ContainsAny(e[:1], "!&*[]{}|>%@`'\"#,?:-") || strings.Contains(e, ": ") || strings.Contains(e, " #") {
+		return quoted(e)
+	}
+	return e
 }
