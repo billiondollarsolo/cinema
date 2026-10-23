@@ -109,7 +109,13 @@ func jobName(j analyze.Job) string {
 // comments. Values go through the YAML encoder, so scripts are quoted safely.
 func draft(jobs []analyze.Job) ([]byte, error) {
 	m := func(kv ...*yaml.Node) *yaml.Node { return &yaml.Node{Kind: yaml.MappingNode, Content: kv} }
-	s := func(v string) *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Value: v} }
+	s := func(v string) *yaml.Node {
+		n := &yaml.Node{Kind: yaml.ScalarNode, Value: v}
+		if v == "" {
+			n.Style = yaml.DoubleQuotedStyle // "" not an empty value (lab: eslint's yml/no-empty-mapping-value)
+		}
+		return n
+	}
 	flow := func(n *yaml.Node) *yaml.Node { n.Style = yaml.FlowStyle; return n }
 	seq := func(vs ...string) *yaml.Node {
 		n := &yaml.Node{Kind: yaml.SequenceNode}

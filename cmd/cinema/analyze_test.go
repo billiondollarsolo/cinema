@@ -47,3 +47,16 @@ func TestDraftServicesLoad(t *testing.T) {
 		t.Fatalf("flow map in draft:\n%s", out)
 	}
 }
+
+// An empty matrix value is written as "", not an empty mapping value.
+func TestDraftQuotesEmptyValues(t *testing.T) {
+	jobs := []analyze.Job{{Workflow: "ci.yml", ID: "test", Verdict: analyze.Task, MatrixKeys: []string{"os", "flags"},
+		Combo: map[string]string{"os": "ubuntu-latest", "flags": ""}, Proposal: &analyze.Proposal{ID: "test", Body: "(\nnpm test\n)"}}}
+	out, err := draft(jobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `flags: ""`) {
+		t.Fatalf("empty value not quoted:\n%s", out)
+	}
+}
