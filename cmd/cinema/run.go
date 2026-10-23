@@ -316,7 +316,7 @@ func restoreTree(root string) error {
 // fingerprinted set), at most 10.
 func changedPaths(root string) []string {
 	// -z, untrimmed: each entry is "XY path" and X may be a space.
-	out, err := exec.Command("git", "-C", root, "status", "--porcelain", "-z", "--untracked-files=all", "--no-renames").Output()
+	out, err := exec.Command("git", "-C", root, "status", "--porcelain", "-z", "--untracked-files=no", "--no-renames").Output()
 	if err != nil {
 		return nil
 	}

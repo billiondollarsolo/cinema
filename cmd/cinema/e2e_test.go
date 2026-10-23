@@ -708,8 +708,30 @@ tasks:
 	cmd := exec.Command(bin, "run", "--commit", "HEAD", "regen")
 	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
 	out, _ := cmd.CombinedOutput()
-	if !strings.Contains(string(out), "changed: a-report.txt") || !strings.Contains(string(out), "fresh.txt") || !strings.Contains(string(out), "outputs:") {
-		t.Fatalf("changed files not named:\n%s", out)
+	if !strings.Contains(string(out), "changed: a-report.txt\n") || !strings.Contains(string(out), "outputs:") {
+		t.Fatalf("changed files not named (or new file named):\n%s", out)
+	}
+}
+
+// In a clean checkout, files a task only adds (coverage temp files, a
+// downloaded tool) are build junk, as on a CI runner: the run is evidence.
+func TestRunNewFilesAreNotSourceChanges(t *testing.T) {
+	e := newEnv(t)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  junk: {argv: [sh, -c, "mkdir -p coverage/tmp && touch coverage/tmp/x.json actionlint"], platform: any, reuse: {allowed: true, max_age: 1h}}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	cmd := exec.Command(bin, "run", "--commit", "HEAD", "junk")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "✓ junk") {
+		t.Fatalf("err=%v:\n%s", err, out)
+	}
+	if st := e.states()["junk"]; st != "reusable/" {
+		t.Fatalf("state %s, want reusable/", st)
 	}
 }
 

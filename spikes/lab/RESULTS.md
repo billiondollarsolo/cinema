@@ -216,14 +216,14 @@ Every draft with a proposal (task *and* review verdicts, except those using `sud
 | cli | 3/4 | 2/2 | 1/2 |
 | traefik | 4/9 | 4/6 | 0/3 |
 | vite | 1/6 | – | 1/6 |
-| prettier | 1/8 | 0/5 | 1/3 |
-| **total** | **36/56** | **19/26** | **17/30** |
+| prettier | 3/8 | 0/5 | 3/3 |
+| **total** | **38/56** | **19/26** | **19/30** |
 
 **Failures, by cause:**
 
 - **Machine prerequisites (7):** traefik validate (`shellcheck`), vite preview (`yq`), vite's four test jobs (Playwright's Chromium won't launch: missing system libraries), eslint test-on-browser (no X display). These are on the GitHub runner image; an evidence machine needs them installed. Not a CInema bug.
 - **Project's tests hang on a 16-core box (5):** prettier's jest jobs hit the 1 h `timeout:` (finding 37). Unchanged by CInema; a safe failure.
-- **Writes files during the run (3), correctly not evidence:** traefik's gateway conformance rewrites a tracked report; prettier `test` leaves c8 `coverage/tmp/*.json` files; prettier `lint` downloads `./actionlint` into the repo root. The last two are new untracked files that GitHub would ignore. Open question: whether new untracked files (as opposed to modified tracked ones) should block evidence. Today they do, because untracked non-ignored files are part of the source fingerprint (plan §6, ACC-012).
+- **Writes files during the run (1 now; 3 before the fix below):** traefik's gateway conformance rewrites a tracked report; prettier `test` leaves c8 `coverage/tmp/*.json` files; prettier `lint` downloads `./actionlint` into the repo root. The last two only added untracked files, which GitHub would ignore too. CInema now ignores files a run only adds in a clean checkout (they don't change what was tested); a modified or deleted tracked file still blocks evidence. Re-run with that change, both passed as evidence.
 - **Needs the CI environment (3):** cli integration-tests (`GH_TOKEN`), traefik knative (`ko-build/setup-ko` exports `KO_DOCKER_REPO`), traefik docs (`setup-python`; Debian's system pip refuses installs). All three were verdict review with that reason.
 - **Containers / parallel collisions (2):** prometheus test-go-more runs in the project's builder image (verdict review, "runs in a container"); traefik's merged conformance collides with the other conformance cluster under `-j` and passed alone (needs `exclusive`).
 
@@ -233,7 +233,7 @@ Every draft with a proposal (task *and* review verdicts, except those using `sud
 - **A publish job was drafted and ran.** prometheus's `publish_ui_release` became a task and ran `pnpm publish` (a dry run that 404'd; nothing was published). Jobs that request an OIDC token are now skipped as publish/deploy, as are status aggregators, steps reading the PR body, and third-party artifact restores.
 - **Analyzer translation gaps:** object-valued matrix entries (`matrix.package.directory`), checkouts of other repositories, `failure() && …` steps included unconditionally, and artifact uploads reported as source changes.
 
-**So:** with clean environments fixed, about two-thirds of drafts pass unmodified. On jobs the analyzer calls task, every failure was a machine limit (prettier's deadlock, a `-j` collision) or the tree-change rule. Review is earned: those drafts fail where their reason says they would.
+**So:** with clean environments fixed, about 70% of drafts (38/56) pass unmodified. On jobs the analyzer calls task, every failure was a machine limit (prettier's deadlock, a `-j` collision) or the tree-change rule. Review is earned: those drafts fail where their reason says they would.
 
 **Caveat on the earlier lab numbers:** the hand-written lab task files behind the savings table were tuned in places (e.g. prettier's `--maxWorkers=3`, `exclusive` on heavy tasks, pinned lint binaries). The savings are what CInema does with a reviewed tasks.yaml, not with raw drafts.
 

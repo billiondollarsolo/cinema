@@ -180,7 +180,7 @@ Secrets: record only an allowlist of environment variable names and values decla
 
 ### 4.4 Mutating commands
 
-Formatters, `--fix` linters, and code generators can be recorded, but they never certify the tree they modified. If the source fingerprint after the run differs from before, the run is **ineligible** (`SOURCE_CHANGED_DURING_RUN`). Workflow: `cinema exec -- npm run lint:fix`, then `cinema run frontend-lint`.
+Formatters, `--fix` linters, and code generators can be recorded, but they never certify the tree they modified. If the source fingerprint after the run differs from before, the run is **ineligible** (`SOURCE_CHANGED_DURING_RUN`). In a clean checkout (§5.2) the tree starts as the commit, so files a run only *adds* (coverage temp files, a downloaded tool) are build junk, as on a CI runner, and don't count; modifying or deleting a tracked file does. Workflow: `cinema exec -- npm run lint:fix`, then `cinema run frontend-lint`.
 
 ### 4.5 Tool caches
 

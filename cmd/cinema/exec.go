@@ -9,7 +9,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/billiondollarsolo/cinema/internal/record"
 	"github.com/billiondollarsolo/cinema/internal/snapshot"
@@ -147,6 +150,13 @@ func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr err
 		if t != nil {
 			extra, outputs = t.ExtraInputs, t.Outputs
 		}
+		if r.capture == "clean" {
+			// The checkout started as the commit, with no untracked files, so any
+			// now present were written by the command: build junk (coverage/tmp, a
+			// downloaded ./actionlint) like on a CI runner. They don't change what
+			// was tested; modified or deleted tracked files still do.
+			outputs = append(slices.Clip(outputs), untracked(r.root)...)
+		}
 		if src.After, err = r.source(extra, outputs); err != nil {
 			warn("fingerprint: %v", err)
 		}
@@ -202,4 +212,13 @@ func configHash(root string) string {
 	}
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
+}
+
+// untracked lists the non-ignored untracked files under root, root-relative.
+func untracked(root string) []string {
+	out, err := exec.Command("git", "-C", root, "ls-files", "-z", "--others", "--exclude-standard").Output()
+	if err != nil {
+		return nil // nothing excluded: the run just can't count as evidence
+	}
+	return strings.FieldsFunc(string(out), func(r rune) bool { return r == 0 })
 }
