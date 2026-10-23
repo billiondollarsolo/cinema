@@ -102,6 +102,7 @@ type step struct {
 	Env  map[string]any `yaml:"env"`
 	Dir  string         `yaml:"working-directory"`
 	If   string         `yaml:"if"`
+	at   string         // shell run before the step: a producer's steps run in its own copy (artifact.go)
 }
 
 // Repo analyzes every workflow under root/.github/workflows.
@@ -200,7 +201,7 @@ func workflowAt(root, name string, src []byte) ([]Job, error) {
 			}
 		}
 		for _, c := range combos {
-			r := analyzeJob(root, name, id, j, w.Env, c)
+			r := analyzeJob(root, name, id, j, &w, c)
 			r.MatrixKeys = keys
 			out = append(out, r)
 		}
@@ -208,7 +209,8 @@ func workflowAt(root, name string, src []byte) ([]Job, error) {
 	return out, nil
 }
 
-func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[string]string) Job {
+func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]string) Job {
+	wfEnv := w.Env
 	r := Job{Workflow: wf, ID: id, Combo: combo, Verdict: Task}
 	skip := func(why string) { r.Verdict, r.Reasons = Skip, append(r.Reasons, why) }
 	review := func(why string) {
@@ -328,13 +330,21 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		case action == "actions/checkout", action == "actions/cache", strings.HasPrefix(action, "actions/cache/"),
 			strings.HasSuffix(action, "/harden-runner"):
 			// checkout: cinema runs in a clean checkout; caches and uploads don't change results
-		case action == "actions/download-artifact",
-			strings.Contains(action, "artifact") && !strings.Contains(action, "upload") && !strings.Contains(action, "save"):
+		case action == "actions/download-artifact":
+			pre, sub, producer, why := artifactSteps(root, w, j, s.With, len(r.Notes))
+			if why != "" {
+				skip(why)
+				break
+			}
+			body = slices.Insert(body, 0, pre) // before the job's own steps touch the tree
+			steps = slices.Insert(slices.Clone(steps), i+1, sub...)
+			note("builds artifact " + str(s.With["name"]) + " as job " + producer + " does, in a fresh copy of the commit (CI builds it once and shares it)")
+		case strings.Contains(action, "artifact") && !strings.Contains(action, "upload") && !strings.Contains(action, "save"):
 			skip("needs artifacts from another job (download-artifact)")
 		case action == "actions/setup-go":
-			p.Go = exactVersion(root, sub(str(s.With["go-version"])), `^1\.[0-9]+\.[0-9]+$`, "Go", str(s.With["go-version-file"]), review, note)
+			p.Go = onePin(p.Go, exactVersion(root, sub(str(s.With["go-version"])), `^1\.[0-9]+\.[0-9]+$`, "Go", str(s.With["go-version-file"]), review, note), "Go", review)
 		case action == "actions/setup-node":
-			p.Node = exactVersion(root, sub(str(s.With["node-version"])), `^[0-9]+\.[0-9]+\.[0-9]+$`, "Node", str(s.With["node-version-file"]), review, note)
+			p.Node = onePin(p.Node, exactVersion(root, sub(str(s.With["node-version"])), `^[0-9]+\.[0-9]+\.[0-9]+$`, "Node", str(s.With["node-version-file"]), review, note), "Node", review)
 		case action == "golangci/golangci-lint-action", action == "pnpm/action-setup":
 			tr := golangciStep
 			if action == "pnpm/action-setup" {
@@ -397,6 +407,9 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		b.WriteString("(\n")
 		if plumbing {
 			b.WriteString("  _gh_load\n")
+		}
+		if s.at != "" {
+			fmt.Fprintf(&b, "  %s\n", s.at)
 		}
 		if dir != "" {
 			fmt.Fprintf(&b, "  cd %s\n", shellQuote(sub(dir)))
@@ -1155,4 +1168,15 @@ func (j Job) LegDigest() string {
 	}{j.Workflow, j.ID, j.RunsOn, j.Combo, *j.Proposal})
 	sum := sha256.Sum256(b)
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// onePin keeps a task to one version of a tool: a second setup step (a rebuilt
+// artifact's producer, or the job itself) that wants another can't share its
+// runtime.
+func onePin(had, v, tool string, review func(string)) string {
+	if had != "" && v != "" && v != had {
+		review(tool + " " + had + " and " + v + " in one task (a rebuilt artifact's producer uses another version): cinema provisions one")
+		return had
+	}
+	return cmp.Or(v, had)
 }
