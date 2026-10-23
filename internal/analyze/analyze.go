@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"unicode"
@@ -870,7 +871,7 @@ func evalIf(src string, combo map[string]string) (v, ok bool) {
 	return truthy(val), true
 }
 
-var ifTokens = regexp.MustCompile(`'(?:[^']|'')*'|==|!=|&&|\|\||[!()]|[A-Za-z_][A-Za-z0-9_.-]*\(\)|[A-Za-z_][A-Za-z0-9_.-]*|[0-9.]+`)
+var ifTokens = regexp.MustCompile(`'(?:[^']|'')*'|==|!=|&&|\|\||[!(),]|[A-Za-z_][A-Za-z0-9_.-]*\(\)|[A-Za-z_][A-Za-z0-9_.-]*|[0-9.]+`)
 
 type ifParser struct {
 	toks  []string
@@ -970,10 +971,47 @@ func (p *ifParser) unary() string {
 	case t != "" && (t[0] >= '0' && t[0] <= '9'):
 		p.i++
 		return t
+	case p.i+1 < len(p.toks) && p.toks[p.i+1] == "(" && identifier.MatchString(t):
+		return p.call(t)
 	}
 	p.ok = false
 	p.i++
 	return ""
+}
+
+var identifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// call evaluates contains/startsWith/endsWith on strings (case-insensitive, as
+// Actions does). Any other function, or an argument cinema can't know, makes
+// the result unknown (short-circuiting can still decide the expression).
+func (p *ifParser) call(name string) string {
+	p.i += 2 // name (
+	var args []string
+	for p.peek() != ")" && p.peek() != "" {
+		args = append(args, p.or())
+		if p.peek() == "," {
+			p.i++
+		}
+	}
+	p.i++ // )
+	if len(args) != 2 {
+		p.ok = false
+		return ""
+	}
+	a, b := strings.ToLower(args[0]), strings.ToLower(args[1])
+	var v bool
+	switch name {
+	case "contains":
+		v = strings.Contains(a, b)
+	case "startsWith":
+		v = strings.HasPrefix(a, b)
+	case "endsWith":
+		v = strings.HasSuffix(a, b)
+	default:
+		p.ok = false
+		return ""
+	}
+	return strconv.FormatBool(v)
 }
 
 func truthy(v string) bool { return v != "" && v != "false" && v != "0" }

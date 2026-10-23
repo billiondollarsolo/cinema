@@ -118,18 +118,23 @@ func TestEvalIf(t *testing.T) {
 		"matrix.node != '14' && matrix.os != 'windows-latest'": false,
 		"${{ !matrix.COV }}": false,
 		"matrix.missing":     false,
-		"(matrix.node == '18' || matrix.os == 'UBUNTU-LATEST')": true,
-		"success() && matrix.node == 14":                        true,
-		"failure()":                                             false,
-		"runner.os != 'Windows'":                                true,
-		"runner.os == 'Windows' || runner.arch == 'ARM64'":      false,
-		"github.event_name == 'push'":                           false,
+		"(matrix.node == '18' || matrix.os == 'UBUNTU-LATEST')":         true,
+		"success() && matrix.node == 14":                                true,
+		"failure()":                                                     false,
+		"runner.os != 'Windows'":                                        true,
+		"runner.os == 'Windows' || runner.arch == 'ARM64'":              false,
+		"github.event_name == 'push'":                                   false,
+		"contains(matrix.os, 'UBUNTU')":                                 true,
+		"startsWith(matrix.node, '1') && endsWith(matrix.os, 'latest')": true,
+		// prometheus's build: on a pull request every push clause is false, so
+		// startsWith(github.ref, ...) never needs a value
+		"!(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v2.'))\n&&\n!(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v3.'))": true,
 	} {
 		if v, ok := evalIf(src, combo); !ok || v != want {
 			t.Errorf("%s: %v ok=%v, want %v", src, v, ok, want)
 		}
 	}
-	for _, src := range []string{"github.ref == 'refs/heads/main'", "steps.x.outputs.y", "contains(matrix.os, 'ubuntu')", "matrix.node ="} {
+	for _, src := range []string{"github.ref == 'refs/heads/main'", "steps.x.outputs.y", "startsWith(github.ref, 'refs/tags/')", "format('{0}', matrix.os) == 'x'", "matrix.node ="} {
 		if _, ok := evalIf(src, combo); ok {
 			t.Errorf("%s: evaluated, want unsupported", src)
 		}
