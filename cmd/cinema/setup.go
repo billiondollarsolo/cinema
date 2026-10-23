@@ -78,7 +78,11 @@ func cmdSetup(args []string) int {
 		}
 		if len(p.covered) > 0 {
 			files = append(files, file{p.file, string(p.out)})
-			summary = append(summary, fmt.Sprintf("  %s: %s skip themselves when cinema reused them", wf, strings.Join(p.covered, ", ")))
+			verb := "skip themselves"
+			if len(p.covered) == 1 {
+				verb = "skips itself"
+			}
+			summary = append(summary, fmt.Sprintf("  %s: %s %s when cinema reused its tasks", wf, strings.Join(p.covered, ", "), verb))
 			for _, id := range p.covered {
 				covered[wf+"#"+id] = true
 			}
@@ -107,7 +111,7 @@ func cmdSetup(args []string) int {
 		return exitInternal
 	}
 	files = append([]file{{task.ConfigPath, string(tasks)}}, files...)
-	fmt.Printf("\ncinema setup would write %d tasks (%s) and edit:\n", len(kept), taskIDs(kept))
+	fmt.Printf("\ncinema setup would write %d task%s (%s) and edit:\n", len(kept), map[bool]string{true: "", false: "s"}[len(kept) == 1], taskIDs(kept))
 	for _, f := range files {
 		state := "new"
 		if _, err := os.Stat(filepath.Join(root, f.path)); err == nil {

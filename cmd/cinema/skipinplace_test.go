@@ -144,3 +144,29 @@ func toStrings(v any) []string {
 	}
 	return nil
 }
+
+// After setup edits a workflow, analyze still sees the jobs as written: the
+// cinema job is cinema's own, and the skip conditions aren't the job's.
+func TestAnalyzeAfterSkipInPlace(t *testing.T) {
+	job := func(id string) analyze.Job {
+		return analyze.Job{Workflow: "ci.yml", ID: id, Verdict: analyze.Task, Proposal: &analyze.Proposal{ID: id}}
+	}
+	all := []analyze.Job{job("build"), job("lint"), job("unit"), job("e2e"), job("report"), job("matrix"), job("matrix")}
+	p, err := planSkips("ci.yml", []byte(skipWorkflow), all, all[:5], "v0.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := analyze.Workflow("ci.yml", []byte(skipWorkflow))
+	after, err := analyze.Workflow("ci.yml", p.out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("%d jobs after setup, %d before", len(after), len(before))
+	}
+	for i := range before {
+		if before[i].ID != after[i].ID || before[i].Verdict != after[i].Verdict || strings.Join(before[i].Reasons, ";") != strings.Join(after[i].Reasons, ";") {
+			t.Errorf("%s: before %s %q, after %s %q", before[i].ID, before[i].Verdict, before[i].Reasons, after[i].Verdict, after[i].Reasons)
+		}
+	}
+}

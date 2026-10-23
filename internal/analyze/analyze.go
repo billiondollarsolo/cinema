@@ -170,15 +170,12 @@ func workflowAt(root, name string, src []byte) ([]Job, error) {
 		return nil, nil // copilot-setup-steps: the Copilot agent's environment, not a check
 	}
 	var out []Job
-	for _, j := range w.Jobs {
-		for _, s := range j.Steps {
-			if cinemaGate.MatchString(s.Run) {
-				return nil, nil // the CInema gate workflow itself
-			}
-		}
-	}
 	for _, id := range sortedKeys(w.Jobs) {
 		j := w.Jobs[id]
+		if slices.ContainsFunc(j.Steps, func(s step) bool { return cinemaGate.MatchString(s.Run) }) {
+			continue // cinema's own job (the gate, or setup's skip-in-place job)
+		}
+		j.If = originalIf(j.If)
 		if j.Defaults.Run.WorkingDirectory == "" {
 			// Lab: prettier's release-script job ran the whole suite from the root.
 			j.Defaults = w.Defaults
@@ -276,6 +273,12 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 	plumbing := false // a step writes $GITHUB_ENV & co.: emulate them between steps
 	env := literalEnv(wfEnv, combo, review)
 	env = append(env, literalEnv(j.Env, combo, review)...)
+	envVals := map[string]string{} // literal workflow/job env, for ${{ env.X }} in action inputs
+	for _, m := range []map[string]any{wfEnv, j.Env} {
+		for k, v := range m {
+			envVals[k] = sub(str(v))
+		}
+	}
 	steps, inlined := j.Steps, 0
 	for i := 0; i < len(steps); i++ {
 		s := steps[i]
@@ -312,7 +315,18 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 			p.Go = exactVersion(root, sub(str(s.With["go-version"])), `^1\.[0-9]+\.[0-9]+$`, "Go", str(s.With["go-version-file"]), review, note)
 		case action == "actions/setup-node":
 			p.Node = exactVersion(root, sub(str(s.With["node-version"])), `^[0-9]+\.[0-9]+\.[0-9]+$`, "Node", str(s.With["node-version-file"]), review, note)
-		case action == "pnpm/action-setup", action == "oven-sh/setup-bun", action == "actions/setup-python", action == "actions/setup-java":
+		case action == "golangci/golangci-lint-action", action == "pnpm/action-setup":
+			tr := golangciStep
+			if action == "pnpm/action-setup" {
+				tr = pnpmStep
+			}
+			run, why := tr(root, s.With, envVals, note)
+			if why != "" {
+				review(why)
+				break
+			}
+			steps = slices.Insert(slices.Clone(steps), i+1, step{Run: run, Dir: str(s.With["working-directory"])})
+		case action == "oven-sh/setup-bun", action == "actions/setup-python", action == "actions/setup-java":
 			review("uses " + action + ": its tool version must be pinned and fingerprinted (toolchain:)")
 		case strings.HasPrefix(action, "github/codeql-action"):
 			skip("CodeQL analysis uploads results; not a pass/fail check")
@@ -1039,4 +1053,21 @@ func service(n *yaml.Node, sub func(string) string) (Service, string) {
 		svc.Ports = append(svc.Ports, sub(fmt.Sprint(p)))
 	}
 	return svc, ""
+}
+
+// originalIf undoes cinema setup's skip-in-place condition,
+//
+//	${{ !cancelled() && needs.cinema.outputs.skip_X != 'true' [&& needs.Y.result == 'success']... [&& (ORIG)] }}
+//
+// so the job is analyzed as written.
+func originalIf(s string) string {
+	if !strings.Contains(s, "needs.cinema.outputs.skip_") {
+		return s
+	}
+	e := strings.TrimSpace(s)
+	e = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(e, "${{"), "}}"))
+	if i := strings.Index(e, " && ("); i >= 0 && strings.HasSuffix(e, ")") {
+		return e[i+5 : len(e)-1]
+	}
+	return ""
 }
