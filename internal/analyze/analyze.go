@@ -282,6 +282,9 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		if strings.Contains(run, "secrets.") || anyEnvMentions(s.Env, "secrets.") {
 			skip("a step uses secrets")
 		}
+		if publishes.MatchString(run) && !strings.Contains(run, "--dry-run") {
+			skip("a step publishes or releases (" + publishes.FindString(run) + "): not a check")
+		}
 		if strings.Contains(run, "github.event.") || anyEnvMentions(s.Env, "github.event.") {
 			skip("a step reads the triggering event (github.event.*, e.g. the PR description): depends on the PR, not the commit")
 		}
@@ -541,9 +544,11 @@ func agrees(inc, c map[string]string) bool {
 }
 
 var (
-	statusFn    = regexp.MustCompile(`\b(failure|cancelled)\(\)`)
-	ghFiles     = regexp.MustCompile(`\$\{?GITHUB_(ENV|PATH|OUTPUT)\b`)
-	sudo        = regexp.MustCompile(`(^|[\s;&|(])sudo\s`)
+	statusFn = regexp.MustCompile(`\b(failure|cancelled)\(\)`)
+	ghFiles  = regexp.MustCompile(`\$\{?GITHUB_(ENV|PATH|OUTPUT)\b`)
+	sudo     = regexp.MustCompile(`(^|[\s;&|(])sudo\s`)
+	// Lab: vite's preview job ran `pkg-pr-new publish` (it refused outside Actions).
+	publishes   = regexp.MustCompile(`\b(npm|pnpm|yarn|bun|pkg-pr-new|changeset|cargo|gem)(@[\w.^~-]+)? publish\b|\bgoreleaser release\b|\bdocker push\b|\btwine upload\b|\bgh release (create|upload)\b`)
 	pipeToShell = regexp.MustCompile(`(curl|wget)\b[^|\n]*\|\s*(sudo\s+)?(ba)?sh\b`)
 	floating    = regexp.MustCompile(`@latest\b|/HEAD/|/(master|main)/[^\s]*\.(sh|py)\b`)
 )

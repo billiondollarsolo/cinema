@@ -348,12 +348,24 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps: [{run: make}]
+  preview:
+    runs-on: ubuntu-latest
+    steps: [{run: "pnpm build\npnpm dlx pkg-pr-new@0.0 publish --pnpm ./packages/vite"}]
+  pack-check:
+    runs-on: ubuntu-latest
+    steps: [{run: npm publish --dry-run}]
 `
 	jobs, err := Workflow("ci.yml", []byte(src))
-	if err != nil || len(jobs) != 5 {
+	if err != nil || len(jobs) != 7 {
 		t.Fatalf("%v %+v", err, jobs)
 	}
 	for _, j := range jobs {
+		if j.ID == "pack-check" {
+			if j.Verdict == Skip {
+				t.Errorf("a dry-run publish is a check: %q", j.Reasons)
+			}
+			continue
+		}
 		if j.Verdict != Skip {
 			t.Errorf("%s: want skip, got %s %q", j.ID, j.Verdict, j.Reasons)
 		}

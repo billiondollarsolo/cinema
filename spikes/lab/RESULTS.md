@@ -207,21 +207,23 @@ Deterministic drafts from each project's `.github/workflows`, one per Linux job 
 
 ### Verification: every draft, run unmodified
 
-Every draft with a proposal (task *and* review verdicts, except those using `sudo`) was run as-is with `cinema run --commit HEAD -j 2` in clean checkouts on the VPS, on each mirror's default branch. Nothing was edited, tuned or installed for the projects: a failure is either a CInema bug (fixed, then everything re-run) or recorded below as a limit.
+Every draft with a proposal (task *and* review verdicts, except those using `sudo`) was run as-is with `cinema run --commit HEAD -j 2` in clean checkouts on the VPS, on each mirror's default branch. Nothing in the projects was edited or tuned: a failure is either a CInema bug (fixed, then everything re-run) or recorded below as a limit. After the first pass, the VPS got the GitHub runner image's standard tools that `cinema doctor` named (`shellcheck`, `xvfb`, mikefarah `yq`, Playwright's Chromium and Firefox system libraries), and the affected drafts were re-run.
 
 | Project | Passed as drafted | of which verdict task | of which verdict review |
 |---|---:|---:|---:|
-| eslint | 19/20 | 11/11 | 8/9 |
+| eslint | 20/20 | 11/11 | 9/9 |
 | prometheus | 8/9 | 2/2 | 6/7 |
 | cli | 3/4 | 2/2 | 1/2 |
-| traefik | 4/9 | 4/6 | 0/3 |
-| vite | 1/6 | – | 1/6 |
+| traefik | 5/9 | 4/6 | 1/3 |
+| vite | 1/5 | – | 1/5 |
 | prettier | 3/8 | 0/5 | 3/3 |
-| **total** | **38/56** | **19/26** | **19/30** |
+| **total** | **40/55** | **19/26** | **21/29** |
 
 **Failures, by cause:**
 
-- **Machine prerequisites (7):** traefik validate (`shellcheck`), vite preview (`yq`), vite's four test jobs (Playwright's Chromium won't launch: missing system libraries), eslint test-on-browser (no X display). These are on the GitHub runner image; an evidence machine needs them installed. Not a CInema bug. A failed run now names them (`not on this machine: shellcheck`), and `cinema doctor` lists them per task from the latest runs; on the VPS it named all four (shellcheck, yq, libnspr4.so, Xvfb).
+- **Machine prerequisites (7 at first, 0 now):** traefik validate (`shellcheck`), vite preview (`yq`), vite's four test jobs (Chromium: `libnspr4.so`), eslint test-on-browser (`Xvfb`, then Firefox's `libgtk-3`). All are on the GitHub runner image. A failed run now names them (`not on this machine: shellcheck`), and `cinema doctor` lists them per task. Installed on the VPS, validate and test-on-browser passed. Trap: Ubuntu's `yq` package is a different tool (kislyuk's jq wrapper) from the runner's mikefarah `yq`; install the release binary.
+- **Flaky on this box (4):** vite's test jobs now run, and fail only in `playground/hmr*` (HMR updates time out under full parallel load). The same suite fails or passes from run to run outside CInema too, with identical settings. Same class as finding 33.
+- **Not a check (1, now skipped):** vite's `preview` job ran `pkg-pr-new publish` ("Continuous Releases are only available in GitHub Actions"). Steps that publish (`npm/pnpm/yarn publish`, `pkg-pr-new publish`, `goreleaser release`, `docker push`, …, but not `--dry-run`) now make the analyzer skip the job.
 - **Project's tests hang on a 16-core box (5):** prettier's jest jobs hit the 1 h `timeout:` (finding 37). Unchanged by CInema; a safe failure.
 - **Writes files during the run (1 now; 3 before the fix below):** traefik's gateway conformance rewrites a tracked report; prettier `test` leaves c8 `coverage/tmp/*.json` files; prettier `lint` downloads `./actionlint` into the repo root. The last two only added untracked files, which GitHub would ignore too. CInema now ignores files a run only adds in a clean checkout (they don't change what was tested); a modified or deleted tracked file still blocks evidence. Re-run with that change, both passed as evidence.
 - **Needs the CI environment (3):** cli integration-tests (`GH_TOKEN`), traefik knative (`ko-build/setup-ko` exports `KO_DOCKER_REPO`), traefik docs (`setup-python`; Debian's system pip refuses installs). All three were verdict review with that reason.
@@ -233,7 +235,7 @@ Every draft with a proposal (task *and* review verdicts, except those using `sud
 - **A publish job was drafted and ran.** prometheus's `publish_ui_release` became a task and ran `pnpm publish` (a dry run that 404'd; nothing was published). Jobs that request an OIDC token are now skipped as publish/deploy, as are status aggregators, steps reading the PR body, and third-party artifact restores.
 - **Analyzer translation gaps:** object-valued matrix entries (`matrix.package.directory`), checkouts of other repositories, `failure() && …` steps included unconditionally, and artifact uploads reported as source changes.
 
-**So:** with clean environments fixed, about 70% of drafts (38/56) pass unmodified. On jobs the analyzer calls task, every failure was a machine limit (prettier's deadlock, a `-j` collision) or the tree-change rule. Review is earned: those drafts fail where their reason says they would.
+**So:** with clean environments fixed and the runner image's standard tools installed, 73% of drafts (40/55) pass unmodified. On jobs the analyzer calls task, every failure was a machine limit (prettier's deadlock, a `-j` collision) or the tree-change rule. Review is earned: those drafts fail where their reason says they would.
 
 **Caveat on the earlier lab numbers:** the hand-written lab task files behind the savings table were tuned in places (e.g. prettier's `--maxWorkers=3`, `exclusive` on heavy tasks, pinned lint binaries). The savings are what CInema does with a reviewed tasks.yaml, not with raw drafts.
 
