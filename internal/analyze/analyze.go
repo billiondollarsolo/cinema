@@ -52,6 +52,8 @@ type Proposal struct {
 	Outputs []string `json:"outputs,omitempty"`
 	// Container: the job's container image; cinema runs the steps inside it.
 	Container string `json:"container,omitempty"`
+	// Exclusive: run alone under -j (the draft changes the machine, e.g. sudo apt-get).
+	Exclusive bool `json:"exclusive,omitempty"`
 	// Services: the job's service containers, started beside the task.
 	Services map[string]Service `json:"services,omitempty"`
 }
@@ -340,6 +342,7 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		}
 		if sudo.MatchString(run) {
 			review("a step uses sudo (installs or changes the machine): make it a prerequisite of the evidence machine, not part of the task")
+			p.Exclusive = true // machine-wide state (apt's lock): never alongside other tasks (lab: prometheus)
 		}
 		if pipeToShell.MatchString(run) {
 			review("a step pipes a downloaded script into a shell: an unpinned network input; pin a release and check its SHA-256")

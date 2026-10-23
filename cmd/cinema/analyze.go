@@ -146,6 +146,9 @@ func draft(jobs []analyze.Job) ([]byte, error) {
 		if p.Container != "" {
 			t.Content = append(t.Content, s("container"), s(p.Container))
 		}
+		if p.Exclusive {
+			t.Content = append(t.Content, s("exclusive"), s("true"))
+		}
 		if len(p.Services) > 0 {
 			var svcs yaml.Node
 			if err := svcs.Encode(p.Services); err != nil {

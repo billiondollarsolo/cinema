@@ -32,7 +32,7 @@ func TestReadiness(t *testing.T) {
 		{task("make test", ""), machine{Platform: "darwin/arm64"}, "stays in CI"},
 	} {
 		if got, _ := readiness(c.j, c.m); got != c.want {
-			t.Errorf("%q on %s: %s, want %s", c.j.Proposal, c.m.Platform, got, c.want)
+			t.Errorf("%+v on %s: %s, want %s", c.j.Proposal, c.m.Platform, got, c.want)
 		}
 	}
 }

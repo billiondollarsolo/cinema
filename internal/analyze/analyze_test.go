@@ -197,6 +197,9 @@ func TestNetworkInputsFlagged(t *testing.T) {
 		if want := j.ID != "c"; (j.Verdict == Review) != want {
 			t.Errorf("%s: %s %v", j.ID, j.Verdict, j.Reasons)
 		}
+		if j.Proposal != nil && j.Proposal.Exclusive != (j.ID == "d") {
+			t.Errorf("%s: exclusive=%v (only the sudo job should be)", j.ID, j.Proposal.Exclusive)
+		}
 	}
 }
 
