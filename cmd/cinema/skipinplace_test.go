@@ -170,3 +170,81 @@ func TestAnalyzeAfterSkipInPlace(t *testing.T) {
 		}
 	}
 }
+
+const matrixWorkflow = `on: [pull_request]
+jobs:
+  test:
+    name: Test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ["20.x", "22.x"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - run: npm test
+  numbers:
+    strategy:
+      matrix:
+        node: [20, 22]
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - run: npm test
+`
+
+// A matrix with legs the machine can't run drops only its reused legs: the job
+// never skips whole, since cinema can't vouch for the legs it doesn't see.
+func TestPlanSkipsMatrixExclude(t *testing.T) {
+	leg := func(id, os, node string) analyze.Job {
+		return analyze.Job{Workflow: "ci.yml", ID: id, Verdict: analyze.Task, Combo: map[string]string{"os": os, "node": node},
+			MatrixKeys: []string{"os", "node"}, Proposal: &analyze.Proposal{ID: id}}
+	}
+	var all, ready []analyze.Job
+	for _, id := range []string{"test", "numbers"} {
+		for _, os := range []string{"ubuntu-latest", "macos-latest"} {
+			for _, n := range []string{"20.x", "22.x"} {
+				if id == "numbers" {
+					n = strings.TrimSuffix(n, ".x")
+				}
+				j := leg(id, os, n)
+				all = append(all, j)
+				if os == "ubuntu-latest" {
+					ready = append(ready, j)
+				}
+			}
+		}
+	}
+	p, err := planSkips("ci.yml", []byte(matrixWorkflow), all, ready, "v0.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := string(p.out)
+	if strings.Join(p.covered, ",") != "test" || len(p.skippable) != 0 || strings.Join(p.matrix, ",") != "test" {
+		t.Fatalf("covered %v skippable %v matrix %v\n%s", p.covered, p.skippable, p.matrix, out)
+	}
+	if !strings.Contains(strings.Join(p.left, "\n"), "numbers: 2 of 4 matrix legs are ready, and its matrix has values that aren't plain strings") {
+		t.Errorf("left: %v", p.left)
+	}
+	for _, want := range []string{
+		"        exclude: ${{ fromJSON(needs.cinema.outputs.exclude_test || '[]') }}\n        os: [ubuntu-latest, macos-latest]",
+		"    if: ${{ !cancelled() }}\n",
+		"exclude_test: ${{ steps.verify.outputs.exclude_test }}",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "skip_test") {
+		t.Errorf("a partly covered job must never skip whole:\n%s", out)
+	}
+	before, _ := analyze.Workflow("ci.yml", []byte(matrixWorkflow))
+	after, err := analyze.Workflow("ci.yml", p.out)
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("after setup: %v, %d jobs vs %d", err, len(after), len(before))
+	}
+	for i := range before {
+		if before[i].Verdict != after[i].Verdict || strings.Join(before[i].Reasons, ";") != strings.Join(after[i].Reasons, ";") {
+			t.Errorf("%s: before %s %q, after %s %q", before[i].ID, before[i].Verdict, before[i].Reasons, after[i].Verdict, after[i].Reasons)
+		}
+	}
+}

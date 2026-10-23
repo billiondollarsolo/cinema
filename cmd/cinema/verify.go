@@ -513,10 +513,35 @@ func writeSkipOutputs(cfg *task.Config, rep gateReport) {
 		jobs = append(jobs, j)
 	}
 	sort.Strings(jobs)
+	// A matrix job whose tasks are only partly reused excludes the reused legs.
+	legs := map[string][]map[string]string{}
+	matrix := map[string]bool{}
+	for _, tr := range rep.Tasks {
+		t := cfg.Tasks[tr.Task]
+		_, job, _ := strings.Cut(t.Covers, "#")
+		if len(t.Leg) > 0 {
+			matrix[job] = true
+			if tr.Decision == plan.GateReuse && !reused[job] {
+				legs[job] = append(legs[job], t.Leg)
+			}
+		}
+	}
 	var lines strings.Builder
 	for _, j := range jobs {
-		fmt.Printf("  %-6s %s\n", map[bool]string{true: "SKIP", false: "RUN"}[reused[j]], j)
+		state := map[bool]string{true: "SKIP", false: "RUN"}[reused[j]]
+		if n := len(legs[j]); n > 0 {
+			state = fmt.Sprintf("RUN (%d reused leg(s) excluded)", n)
+		}
+		fmt.Printf("  %-6s %s\n", state, j)
 		fmt.Fprintf(&lines, "skip_%s=%t\n", j, reused[j])
+		if matrix[j] {
+			ex := legs[j]
+			if ex == nil {
+				ex = []map[string]string{}
+			}
+			b, _ := json.Marshal(ex)
+			fmt.Fprintf(&lines, "exclude_%s=%s\n", j, b)
+		}
 	}
 	if path := os.Getenv("GITHUB_OUTPUT"); path != "" {
 		if f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644); err == nil {

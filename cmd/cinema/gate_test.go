@@ -322,11 +322,23 @@ tasks:
     platform: any
     covers: other.yml#x
     reuse: { allowed: true, max_age: 1h }
+  leg-a:
+    argv: [sh, -c, "echo a"]
+    platform: any
+    covers: ci.yml#test
+    leg: { os: ubuntu-latest, node: "20.x" }
+    reuse: { allowed: true, max_age: 1h }
+  leg-b:
+    argv: [sh, -c, "echo b"]
+    platform: any
+    covers: ci.yml#test
+    leg: { os: ubuntu-latest, node: "22.x" }
+    reuse: { allowed: true, max_age: 1h }
 `)
 	g.git("add", "-A")
 	g.git("commit", "-qm", "covers")
 	g.cinema("trust")
-	g.cinema("run", "--commit", "HEAD", "check", "elsewhere")
+	g.cinema("run", "--commit", "HEAD", "check", "elsewhere", "leg-a")
 	g.cinema("push")
 	ci := filepath.Join(t.TempDir(), "ci")
 	mustRun(t, "", "git", "clone", "-q", g.bare, ci)
@@ -341,7 +353,7 @@ tasks:
 		t.Fatalf("%v\n%s", err, b)
 	}
 	b, _ := os.ReadFile(out)
-	if string(b) != "skip_lint=true\nskip_unit=false\n" {
+	if string(b) != "skip_lint=true\nskip_test=false\nexclude_test=[{\"node\":\"20.x\",\"os\":\"ubuntu-latest\"}]\nskip_unit=false\n" {
 		t.Fatalf("outputs:\n%s", b)
 	}
 	// No keys (or no evidence at all): nothing is skipped, and the job still succeeds.

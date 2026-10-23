@@ -19,10 +19,12 @@ import (
 var statusCall = regexp.MustCompile(`\b(success|failure|always|cancelled)\(\)`)
 
 type skipPlan struct {
-	file    string   // .github/workflows/<name>
-	covered []string // job ids that will skip themselves when reused
-	left    []string // "job: why" for ready jobs left alone
-	out     []byte   // the edited workflow
+	file      string   // .github/workflows/<name>
+	covered   []string // job ids that skip themselves, or their reused legs, when reused
+	skippable []string // covered jobs that skip whole (every leg has a task)
+	matrix    []string // covered matrix jobs that exclude their reused legs
+	left      []string // "job: why" for ready jobs left alone
+	out       []byte   // the edited workflow
 }
 
 // planSkips edits workflow src (file base name wf) so that jobs whose every
@@ -77,9 +79,11 @@ func planSkips(wf string, src []byte, all, ready []analyze.Job, version string) 
 	sort.Strings(ids)
 	for _, id := range ids {
 		key, job := mapKey(jobs, id), mapValue(jobs, id)
+		partial := readyLegs[id] < legs[id]
+		exAt, exIndent, whyNot := excludeSlot(job, legKeys(ready, wf, id))
 		switch {
-		case readyLegs[id] < legs[id]:
-			p.left = append(p.left, fmt.Sprintf("%s: %d of %d matrix legs are ready", id, readyLegs[id], legs[id]))
+		case partial && whyNot != "":
+			p.left = append(p.left, fmt.Sprintf("%s: %d of %d matrix legs are ready, and its matrix %s", id, readyLegs[id], legs[id], whyNot))
 			continue
 		case needed[id]:
 			p.left = append(p.left, id+": other jobs need it (skipping it would skip them)")
@@ -88,7 +92,12 @@ func planSkips(wf string, src []byte, all, ready []analyze.Job, version string) 
 			p.left = append(p.left, id+": written in a form cinema doesn't edit")
 			continue
 		}
+		// A partly covered matrix only drops reused legs (exclude): the whole job
+		// must never skip, since cinema doesn't see the legs it can't run.
 		cond := "!cancelled() && needs.cinema.outputs.skip_" + id + " != 'true'"
+		if partial {
+			cond = "!cancelled()"
+		}
 		for _, n := range needsOf(job) { // what `needs` alone required: each dependency succeeded
 			cond += " && needs." + n + ".result == 'success'"
 		}
@@ -125,6 +134,13 @@ func planSkips(wf string, src []byte, all, ready []analyze.Job, version string) 
 		if len(ins) > 0 {
 			edits = append(edits, edit{line: job.Content[0].Line - 1, text: ins})
 		}
+		if exAt > 0 {
+			edits = append(edits, edit{line: exAt - 1, text: []string{exIndent + "exclude: ${{ fromJSON(needs.cinema.outputs.exclude_" + id + " || '[]') }}\n"}})
+			p.matrix = append(p.matrix, id)
+		}
+		if !partial {
+			p.skippable = append(p.skippable, id)
+		}
 		p.covered = append(p.covered, id)
 	}
 	if len(p.covered) == 0 {
@@ -134,8 +150,11 @@ func planSkips(wf string, src []byte, all, ready []analyze.Job, version string) 
 	ji := strings.Repeat(" ", jobs.Content[0].Column-1)
 	step := ji + "  "
 	block := []string{ji + "cinema:\n", step + "runs-on: ubuntu-latest\n", step + "permissions: { contents: read }\n", step + "outputs:\n"}
-	for _, id := range p.covered {
+	for _, id := range p.skippable {
 		block = append(block, step+"  skip_"+id+": ${{ steps.verify.outputs.skip_"+id+" }}\n")
+	}
+	for _, id := range p.matrix {
+		block = append(block, step+"  exclude_"+id+": ${{ steps.verify.outputs.exclude_"+id+" }}\n")
 	}
 	for _, l := range strings.Split(strings.TrimRight(fmt.Sprintf(cinemaJobSteps, version, wf), "\n"), "\n") {
 		block = append(block, step+l+"\n")
@@ -213,4 +232,57 @@ func needsOf(job *yaml.Node) []string {
 		out = append(out, c.Value)
 	}
 	return out
+}
+
+// legKeys is whether every ready leg of job id has a complete leg identity,
+// and the matrix keys it uses.
+func legKeys(ready []analyze.Job, wf, id string) []string {
+	var keys []string
+	for _, j := range ready {
+		if j.Workflow == wf && j.ID == id {
+			if legOf(j) == nil {
+				return nil
+			}
+			keys = j.MatrixKeys
+		}
+	}
+	return keys
+}
+
+// excludeSlot is where (1-based line) and how indented an exclude: line can go
+// in job's matrix, or why not. Exclude matching is exact by value, so only a
+// block matrix of plain string values, without its own exclude, qualifies;
+// anything else stays as written (its reused legs just run).
+func excludeSlot(job *yaml.Node, keys []string) (line int, indent, why string) {
+	if len(keys) == 0 {
+		return 0, "", "has no leg identity cinema can match (object values, or no matrix)"
+	}
+	strat := mapValue(job, "strategy")
+	if strat == nil || strat.Kind != yaml.MappingNode {
+		return 0, "", "isn't a strategy cinema can edit"
+	}
+	m := mapValue(strat, "matrix")
+	switch {
+	case m == nil || m.Kind != yaml.MappingNode || m.Style&yaml.FlowStyle != 0 || len(m.Content) == 0:
+		return 0, "", "is written on one line or as an expression"
+	case mapValue(m, "exclude") != nil:
+		return 0, "", "already has an exclude:"
+	}
+	for _, k := range keys {
+		v := mapValue(m, k)
+		if v == nil {
+			return 0, "", "has a key cinema can't find (" + k + ")"
+		}
+		vals := []*yaml.Node{v}
+		if v.Kind == yaml.SequenceNode {
+			vals = v.Content
+		}
+		for _, x := range vals {
+			if x.Kind != yaml.ScalarNode || x.Tag != "!!str" || strings.Contains(x.Value, "${{") {
+				return 0, "", "has values that aren't plain strings (" + k + ")"
+			}
+		}
+	}
+	first := m.Content[0]
+	return first.Line, strings.Repeat(" ", first.Column-1), ""
 }

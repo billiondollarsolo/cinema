@@ -37,11 +37,14 @@ type Job struct {
 	ID       string            `json:"job"`
 	Combo    map[string]string `json:"matrix,omitempty"`
 	Name     string            `json:"name"` // as Actions shows it: name: with matrix values substituted, else the id
-	RunsOn   string            `json:"runs_on"`
-	Verdict  string            `json:"verdict"`
-	Reasons  []string          `json:"reasons,omitempty"`
-	Notes    []string          `json:"notes,omitempty"` // decisions made for the draft (e.g. a resolved version)
-	Proposal *Proposal         `json:"proposal,omitempty"`
+	// MatrixKeys are the matrix's own keys (not include/exclude): a leg is
+	// identified by their values (skip-in-place excludes reused legs by them).
+	MatrixKeys []string  `json:"matrix_keys,omitempty"`
+	RunsOn     string    `json:"runs_on"`
+	Verdict    string    `json:"verdict"`
+	Reasons    []string  `json:"reasons,omitempty"`
+	Notes      []string  `json:"notes,omitempty"` // decisions made for the draft (e.g. a resolved version)
+	Proposal   *Proposal `json:"proposal,omitempty"`
 }
 
 // Proposal is a suggested task: the job's run steps, in order.
@@ -75,6 +78,7 @@ type defaults struct {
 
 type job struct {
 	Name      string               `yaml:"name"`
+	Needs     yaml.Node            `yaml:"needs"`
 	RunsOn    yaml.Node            `yaml:"runs-on"`
 	If        string               `yaml:"if"`
 	Uses      string               `yaml:"uses"` // reusable workflow
@@ -175,7 +179,7 @@ func workflowAt(root, name string, src []byte) ([]Job, error) {
 		if slices.ContainsFunc(j.Steps, func(s step) bool { return cinemaGate.MatchString(s.Run) }) {
 			continue // cinema's own job (the gate, or setup's skip-in-place job)
 		}
-		j.If = originalIf(j.If)
+		j.If = originalIf(j.If, needsCinema(&j.Needs))
 		if j.Defaults.Run.WorkingDirectory == "" {
 			// Lab: prettier's release-script job ran the whole suite from the root.
 			j.Defaults = w.Defaults
@@ -185,8 +189,18 @@ func workflowAt(root, name string, src []byte) ([]Job, error) {
 			out = append(out, Job{Workflow: name, ID: id, Name: cmp.Or(j.Name, id), Verdict: Review, Reasons: []string{"matrix: " + err.Error()}})
 			continue
 		}
+		var keys []string
+		if m := &j.Strategy.Matrix; m.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(m.Content); i += 2 {
+				if k := m.Content[i].Value; k != "include" && k != "exclude" {
+					keys = append(keys, k)
+				}
+			}
+		}
 		for _, c := range combos {
-			out = append(out, analyzeJob(root, name, id, j, w.Env, c))
+			r := analyzeJob(root, name, id, j, w.Env, c)
+			r.MatrixKeys = keys
+			out = append(out, r)
 		}
 	}
 	return out, nil
@@ -510,6 +524,8 @@ func expand(n *yaml.Node) ([]map[string]string, error) {
 	for i := 0; i < len(n.Content); i += 2 {
 		k, v := n.Content[i].Value, n.Content[i+1]
 		switch {
+		case k == "exclude" && v.Kind == yaml.ScalarNode && strings.Contains(v.Value, "needs.cinema.outputs.exclude_"):
+			// cinema setup's reused-leg exclude: the job's legs are as written
 		case k == "include" || k == "exclude":
 			var list []map[string]any
 			if err := v.Decode(&list); err != nil {
@@ -1055,19 +1071,27 @@ func service(n *yaml.Node, sub func(string) string) (Service, string) {
 	return svc, ""
 }
 
-// originalIf undoes cinema setup's skip-in-place condition,
+// originalIf undoes cinema setup's skip-in-place condition on a job that
+// needs: cinema,
 //
-//	${{ !cancelled() && needs.cinema.outputs.skip_X != 'true' [&& needs.Y.result == 'success']... [&& (ORIG)] }}
+//	${{ !cancelled() [&& needs.cinema.outputs.skip_X != 'true'] [&& needs.Y.result == 'success']... [&& (ORIG)] }}
 //
 // so the job is analyzed as written.
-func originalIf(s string) string {
-	if !strings.Contains(s, "needs.cinema.outputs.skip_") {
+func originalIf(s string, cinema bool) string {
+	e := strings.TrimSpace(s)
+	if !cinema || !strings.HasPrefix(e, "${{ !cancelled()") {
 		return s
 	}
-	e := strings.TrimSpace(s)
 	e = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(e, "${{"), "}}"))
 	if i := strings.Index(e, " && ("); i >= 0 && strings.HasSuffix(e, ")") {
 		return e[i+5 : len(e)-1]
 	}
 	return ""
+}
+
+func needsCinema(n *yaml.Node) bool {
+	if n.Kind == yaml.ScalarNode {
+		return n.Value == "cinema"
+	}
+	return slices.ContainsFunc(n.Content, func(c *yaml.Node) bool { return c.Value == "cinema" })
 }

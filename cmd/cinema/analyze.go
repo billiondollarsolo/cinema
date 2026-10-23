@@ -147,6 +147,13 @@ func draft(jobs []analyze.Job) ([]byte, error) {
 			t.Content = append(t.Content, s("container"), s(p.Container))
 		}
 		t.Content = append(t.Content, s("covers"), s(j.Workflow+"#"+j.ID))
+		if leg := legOf(j); leg != nil {
+			l := m()
+			for _, k := range j.MatrixKeys {
+				l.Content = append(l.Content, s(k), s(leg[k]))
+			}
+			t.Content = append(t.Content, s("leg"), l)
+		}
 		if p.Exclusive {
 			t.Content = append(t.Content, s("exclusive"), s("true"))
 		}
@@ -184,4 +191,21 @@ func draft(jobs []analyze.Job) ([]byte, error) {
 		return nil, err
 	}
 	return b.Bytes(), enc.Close()
+}
+
+// legOf is the matrix leg j is, by the matrix's own keys; nil if j isn't a
+// matrix job or a key's value isn't a plain one (object values are flattened).
+func legOf(j analyze.Job) map[string]string {
+	if len(j.MatrixKeys) == 0 {
+		return nil
+	}
+	leg := map[string]string{}
+	for _, k := range j.MatrixKeys {
+		v, ok := j.Combo[k]
+		if !ok {
+			return nil
+		}
+		leg[k] = v
+	}
+	return leg
 }

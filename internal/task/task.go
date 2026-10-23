@@ -87,6 +87,9 @@ type Task struct {
 	// skips itself when the task is reused (verify --skip-outputs). Metadata,
 	// not part of the contract.
 	Covers string `yaml:"covers"`
+	// Leg is the matrix leg of the covered job this task is (its matrix's own
+	// keys → values): a reused leg is excluded from the job's matrix. Metadata.
+	Leg map[string]string `yaml:"leg"`
 	// Runtime pins Go/Node versions that cinema provisions for the task and its
 	// probes, on the evidence machine and in the gate alike (runtime.go).
 	Runtime Runtime `yaml:"runtime"`
