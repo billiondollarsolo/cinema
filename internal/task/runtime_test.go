@@ -142,6 +142,21 @@ func TestPrivateGlobals(t *testing.T) {
 			t.Errorf("unexpected %q", kv)
 		}
 	}
+	// A private HOME; caches stay in the real one, unless already set.
+	dir := t.TempDir()
+	env = PrivateGlobals([]string{"PATH=/usr/bin", "HOME=/real", "GOPATH=/gp", "npm_config_cache=/mine"}, dir)
+	got := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		got[k] = v
+	}
+	if got["HOME"] != filepath.Join(dir, "home") || got["XDG_CACHE_HOME"] != "/real/.cache" || got["npm_config_cache"] != "/mine" ||
+		got["GOMODCACHE"] != "" || got["DOCKER_CONFIG"] != "/real/.docker" {
+		t.Fatalf("%v", got)
+	}
+	if fi, err := os.Stat(got["HOME"]); err != nil || !fi.IsDir() {
+		t.Fatal("the private HOME must exist")
+	}
 }
 
 // On a fresh runner, the first go call under GOTOOLCHAIN prints "go: downloading

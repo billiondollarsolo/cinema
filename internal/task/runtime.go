@@ -80,12 +80,44 @@ func (t *Task) RuntimeEnv(dataDir string) ([]string, error) {
 // dirs first on PATH. Otherwise they land in the shared provisioned runtime,
 // where concurrent tasks race on them and later runs inherit them (lab: eslint).
 // Evidence runs and gate runs both use it, so they behave alike.
+//
+// HOME is private too, as on a fresh runner: scripts that write dotfiles (lab:
+// traefik's safe-chain → ~/.safe-chain) leave nothing behind, and no run sees
+// what an earlier one left. Download and build caches stay in the real home, so
+// they stay warm; they're keyed by content, not results.
 func PrivateGlobals(env []string, dir string) []string {
 	npm, pnpm := filepath.Join(dir, "npm-global"), filepath.Join(dir, "pnpm-home")
-	path := ""
+	path, home := "", ""
+	set := map[string]bool{}
 	for _, kv := range env {
-		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+		k, v, _ := strings.Cut(kv, "=")
+		set[k] = true
+		switch k {
+		case "PATH":
 			path = v
+		case "HOME":
+			home = v
+		}
+	}
+	if home != "" {
+		for _, c := range [][2]string{
+			{"XDG_CACHE_HOME", ".cache"}, // go-build, yarn 1, pip, Cypress, puppeteer, playwright
+			{"npm_config_cache", ".npm"},
+			{"YARN_GLOBAL_FOLDER", ".yarn/berry"},
+			{"DOCKER_CONFIG", ".docker"}, // logins and buildx builders
+			{"RUSTUP_HOME", ".rustup"},   // installed toolchains
+			{"CARGO_HOME", ".cargo"},
+		} {
+			if !set[c[0]] {
+				env = setEnv(env, c[0], filepath.Join(home, c[1]))
+			}
+		}
+		if !set["GOPATH"] && !set["GOMODCACHE"] {
+			env = setEnv(env, "GOMODCACHE", filepath.Join(home, "go", "pkg", "mod"))
+		}
+		h := filepath.Join(dir, "home")
+		if os.MkdirAll(h, 0o700) == nil {
+			env = setEnv(env, "HOME", h)
 		}
 	}
 	env = setEnv(env, "NPM_CONFIG_PREFIX", npm)
