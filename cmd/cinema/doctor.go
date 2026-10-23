@@ -19,6 +19,7 @@ var missingRe = []*regexp.Regexp{
 	regexp.MustCompile(`spawn ([\w.+-]+) ENOENT`),                                    // node
 	regexp.MustCompile(`exec: "([\w.+-]+)": executable file not found`),              // go
 	regexp.MustCompile(`"?No ([\w.+-]+) in \$?PATH`),                                 // make guards
+	regexp.MustCompile(`make: ([\w.+-]+): No such file or directory`),                // make running a recipe command
 	regexp.MustCompile(`error while loading shared libraries: ([\w.+-]+\.so[\w.]*)`), // ld.so
 }
 

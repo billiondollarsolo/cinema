@@ -15,8 +15,9 @@ exec: "zz-kind": executable file not found in $PATH
 chrome: error while loading shared libraries: libnspr4.so: cannot open shared object file
 sh: command not found
 package.json: not found
-sh: 1: sh: not found`)
-	want := []string{"libnspr4.so", "zz-Xvfb", "zz-dash", "zz-kind", "zz-shellcheck", "zz-yq"}
+sh: 1: sh: not found
+make: zz-unzip: No such file or directory`)
+	want := []string{"libnspr4.so", "zz-Xvfb", "zz-dash", "zz-kind", "zz-shellcheck", "zz-unzip", "zz-yq"}
 	if got := missingTools(out); !slices.Equal(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
