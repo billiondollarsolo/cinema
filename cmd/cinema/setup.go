@@ -98,13 +98,22 @@ func cmdSetup(args []string) int {
 		}
 		if len(p.covered) > 0 {
 			files = append(files, file{p.file, string(p.out)})
-			verb := "skip themselves"
-			if len(p.covered) == 1 {
-				verb = "skips itself"
+			var parts []string
+			if n := len(p.skippable); n > 0 {
+				parts = append(parts, strings.Join(p.skippable, ", ")+map[bool]string{true: " skips itself", false: " skip themselves"}[n == 1])
 			}
-			line := fmt.Sprintf("  %s: %s %s when cinema reused its tasks", wf, strings.Join(p.covered, ", "), verb)
-			if m, ok := price(wf, p.covered); ok {
-				line += fmt.Sprintf(" (~%.0f billed min/PR)", m)
+			var dropping []string
+			for _, id := range p.covered {
+				if !slices.Contains(p.skippable, id) {
+					dropping = append(dropping, id)
+				}
+			}
+			if len(dropping) > 0 {
+				parts = append(parts, strings.Join(dropping, ", ")+" drop"+map[bool]string{true: "s its", false: " their"}[len(dropping) == 1]+" reused matrix legs")
+			}
+			line := fmt.Sprintf("  %s: %s when cinema reused their tasks", wf, strings.Join(parts, "; "))
+			if m, ok := price(wf, p.skippable); ok {
+				line += fmt.Sprintf(" (~%.0f billed min/PR for the whole jobs)", m)
 				saved += m
 			}
 			summary = append(summary, line)

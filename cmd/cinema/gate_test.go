@@ -334,11 +334,29 @@ tasks:
     covers: ci.yml#test
     leg: { os: ubuntu-latest, node: "22.x" }
     reuse: { allowed: true, max_age: 1h }
+  leg-stale:
+    argv: [sh, -c, "echo stale"]
+    platform: any
+    covers: ci.yml#test
+    leg: { os: ubuntu-latest }
+    reuse: { allowed: true, max_age: 1h }
+`)
+	// The workflow as checked out decides which legs are real: leg-stale lacks
+	// the node key, so excluding it would drop both node legs.
+	g.write(".github/workflows/ci.yml", `on: pull_request
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        node: ["20.x", "22.x"]
+    runs-on: ubuntu-latest
+    steps: [{run: npm test}]
 `)
 	g.git("add", "-A")
 	g.git("commit", "-qm", "covers")
 	g.cinema("trust")
-	g.cinema("run", "--commit", "HEAD", "check", "elsewhere", "leg-a")
+	g.cinema("run", "--commit", "HEAD", "check", "elsewhere", "leg-a", "leg-stale")
 	g.cinema("push")
 	ci := filepath.Join(t.TempDir(), "ci")
 	mustRun(t, "", "git", "clone", "-q", g.bare, ci)

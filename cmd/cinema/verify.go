@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/billiondollarsolo/cinema/internal/analyze"
 	"os"
 	"path/filepath"
 	"sort"
@@ -211,7 +212,7 @@ func cmdVerify(args []string) int {
 		return exitUnsatisfied
 	}
 	if *skipFor != "" {
-		writeSkipOutputs(cfg, rep)
+		writeSkipOutputs(cfg, rep, realLegs(root, *skipFor))
 		writeGateReport(*reportPath, rep, start)
 		writeStepSummary(rep)
 		return 0
@@ -501,7 +502,7 @@ func writeStepSummary(rep gateReport) {
 // writeSkipOutputs sets skip_<job>=true for each covered job whose tasks were
 // all reused (skip-in-place: the job's if: reads it). A job with any task to
 // run, or a judging error, gets false: it runs as it always did.
-func writeSkipOutputs(cfg *task.Config, rep gateReport) {
+func writeSkipOutputs(cfg *task.Config, rep gateReport, real map[string]map[string]bool) {
 	reused := map[string]bool{} // job → every task so far reused
 	for _, tr := range rep.Tasks {
 		_, job, _ := strings.Cut(cfg.Tasks[tr.Task].Covers, "#")
@@ -521,7 +522,9 @@ func writeSkipOutputs(cfg *task.Config, rep gateReport) {
 		_, job, _ := strings.Cut(t.Covers, "#")
 		if len(t.Leg) > 0 {
 			matrix[job] = true
-			if tr.Decision == plan.GateReuse && !reused[job] {
+			// Only a leg the workflow's matrix really has, by exactly its own keys:
+			// a stale or partial leg would match (and drop) legs without evidence.
+			if tr.Decision == plan.GateReuse && !reused[job] && real[job][legID(t.Leg)] {
 				legs[job] = append(legs[job], t.Leg)
 			}
 		}
@@ -549,4 +552,46 @@ func writeSkipOutputs(cfg *task.Config, rep gateReport) {
 			f.Close()
 		}
 	}
+}
+
+// realLegs is, per job of workflow wf as checked out, the legs its matrix
+// expands to, by exactly the matrix's own keys (legID). A job whose matrix
+// can't be expanded has none, so nothing of it is excluded.
+func realLegs(root, wf string) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	src, err := os.ReadFile(filepath.Join(root, ".github", "workflows", filepath.Base(wf)))
+	if err != nil {
+		return out
+	}
+	jobs, err := analyze.Workflow(filepath.Base(wf), src)
+	if err != nil {
+		return out
+	}
+	for _, j := range jobs {
+		if len(j.MatrixKeys) == 0 {
+			continue
+		}
+		leg := map[string]string{}
+		for _, k := range j.MatrixKeys {
+			v, ok := j.Combo[k]
+			if !ok {
+				leg = nil
+				break
+			}
+			leg[k] = v
+		}
+		if leg != nil {
+			if out[j.ID] == nil {
+				out[j.ID] = map[string]bool{}
+			}
+			out[j.ID][legID(leg)] = true
+		}
+	}
+	return out
+}
+
+// legID is a leg's identity: its keys and values, sorted.
+func legID(leg map[string]string) string {
+	b, _ := json.Marshal(leg) // map keys marshal sorted
+	return string(b)
 }
