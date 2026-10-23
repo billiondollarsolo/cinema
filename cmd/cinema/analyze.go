@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"flag"
 	"fmt"
 	"os"
@@ -130,7 +131,7 @@ func draft(jobs []analyze.Job) ([]byte, error) {
 		script.Style = yaml.LiteralStyle
 		argv := seq("bash", "-eo", "pipefail", "-c") // Actions' default shell on Linux
 		argv.Content = append(argv.Content, script)
-		t := m(s("argv"), argv, s("platform"), s("linux/amd64"))
+		t := m(s("argv"), argv, s("platform"), s(cmp.Or(p.Platform, "linux/amd64")))
 		if p.Go != "" || p.Node != "" {
 			rt, probes := m(), &yaml.Node{Kind: yaml.SequenceNode}
 			if p.Go != "" {
