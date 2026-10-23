@@ -2,6 +2,8 @@ package analyze
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -99,7 +101,15 @@ func artifactSteps(root string, w *workflow, consumer *job, with map[string]any,
 				}
 			}
 		}
-		at := "cd " + p
+		// Shared between tasks (cinema run sets CINEMA_ARTIFACTS for clean
+		// checkouts): built once per commit, producer job and Go/Node version,
+		// not once per task (lab: traefik's 19 legs each rebuilt the web UI).
+		// A hit skips the producer's steps; a failed build is never stored.
+		def, _ := json.Marshal([]any{id, name, upPath, penv, pj.Env, pj.Defaults, unset, pj.Steps[:up]})
+		sum := sha256.Sum256(def)
+		key := fmt.Sprintf(`c=$(git rev-parse --verify HEAD 2>/dev/null) && K="$CINEMA_ARTIFACTS/%x-$c-$( { node --version; go version; } 2>&1 | sha256sum | cut -c1-16)"`, sum[:8])
+		cached := `[ -n "${CINEMA_ARTIFACTS:-}" ] && command -v sha256sum >/dev/null && ` + key
+		at := "cd " + p + "\n  [ -e .cinema-hit ] && exit 0"
 		if len(unset) > 0 {
 			at += "\n  unset " + strings.Join(unset, " ")
 		}
@@ -114,10 +124,26 @@ func artifactSteps(root string, w *workflow, consumer *job, with map[string]any,
 			s.at = at
 			steps = append(steps, s)
 		}
-		steps = append(steps, step{Run: place + "\nrm -rf " + p, Dir: "."})
+		// Store before placing: one writer per key (mkdir as the lock), into a
+		// temp dir renamed into place, and never failing the task.
+		store := fmt.Sprintf(`if [ ! -e %[1]s/.cinema-hit ] && %[2]s; then
+  ( set +e; mkdir -p "$CINEMA_ARTIFACTS" && mkdir "$K.lock" 2>/dev/null || exit 0
+    [ -e "$K" ] || { rm -rf "$K.tmp" && mkdir "$K.tmp" && cp -a %[1]s/%[3]s "$K.tmp/a" && mv "$K.tmp" "$K"; }
+    rm -rf "$K.tmp" "$K.lock" ) || true
+fi
+`, p, cached, shellQuote(upPath))
+		steps = append(steps, step{Run: store + place + "\nrm -rf " + p, Dir: "."})
 		// mkdir, not mkdir -p: atomic, and fails on anything already there (a
 		// planted dir or symlink, when TMPDIR is the shared /tmp).
-		return fmt.Sprintf("(\n  mkdir -m 700 %[1]s && cp -a . %[1]s/\n)", p), steps, id, ""
+		pre = fmt.Sprintf(`(
+  mkdir -m 700 %[1]s
+  if %[2]s && [ -e "$K/a" ]; then
+    touch "$K" && mkdir -p %[1]s/%[3]s && cp -a "$K/a" %[1]s/%[4]s && touch %[1]s/.cinema-hit
+  else
+    cp -a . %[1]s/
+  fi
+)`, p, cached, shellQuote(filepath.Dir(upPath)), shellQuote(upPath))
+		return pre, steps, id, ""
 	}
 	return "", nil, "", "needs artifacts from another job (download-artifact: no job it needs uploads " + name + ")"
 }

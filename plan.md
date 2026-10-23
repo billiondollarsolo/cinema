@@ -656,6 +656,7 @@ CInema leaves nothing behind that it no longer needs. No daemon, so every rule r
 |---|---|
 | Processes the command left running | When the child exits, SIGTERM its process group, then SIGKILL after the grace period; report it on stderr and in the run record. `setsid` escapees aren't touched, but the pipes they hold are dropped after the grace period. |
 | Clean-checkout dirs (`run --commit`) | Shared clone in a stable, locked slot `<data dir>/checkouts/<repo>/<n>` (per-user, 0700, never a shared TMPDIR: a predictable /tmp path could be pre-created by another user), never `git worktree add`, so `.git` is never modified. A stable path keeps path-keyed build caches warm (lab: random paths grew a Go cache to 77 GB). Each run fully resets the slot, ignored files included (ADR 0002). Slots unused for 7 days are swept. Each task in a clean checkout gets a private `TMPDIR`, removed afterwards, so killed tools can't leave `/tmp/go-build*` behind. |
+| Shared rebuilt artifacts (`artifacts/<key>`) | A task that rebuilds another job's artifact stores it here for other tasks at the same commit (key: producer job, commit, Go/Node versions). Written to `<key>.tmp` and renamed, one writer per key (`<key>.lock`). Entries unused for 24 h are swept by any `cinema run`, partial writes and stale locks after 1 h (CLEAN-008). |
 | Partial blob/DB writes | Temp file + rename. On startup, sweep `*.tmp` older than 1 h in the data dir. |
 | Provisioned runtimes (`runtimes/<lang>/<version>`) | Installed atomically (temp dir + rename). The daily pass removes versions unused for 90 days and interrupted installs older than 1 h. |
 | Fingerprint caches (`fscache/<repo>.gob`) | One file per repo, rewritten on use. The daily pass deletes caches unused for 90 days, and temp files older than 1 h. |
@@ -669,7 +670,7 @@ CInema leaves nothing behind that it no longer needs. No daemon, so every rule r
 
 Inside the repo, CInema only ever creates `.cinema/tasks.yaml`, and only via `cinema init`.
 
-Tests: CLEAN-001 leftover child stopped (polite + SIGTERM-ignoring). CLEAN-002 `run --commit` interrupted by SIGINT leaves no temp dir. CLEAN-003 crash mid-blob-write: next start sweeps the `.tmp`. CLEAN-004 retention removes expired rows and their blobs, keeps blobs still referenced. CLEAN-005 size cap evicts passing logs first. CLEAN-006 `uninstall` leaves no data dir, key, or local notes ref. CLEAN-007 squashed notes ref still verifies every receipt within `max_age`.
+Tests: CLEAN-001 leftover child stopped (polite + SIGTERM-ignoring). CLEAN-002 `run --commit` interrupted by SIGINT leaves no temp dir. CLEAN-003 crash mid-blob-write: next start sweeps the `.tmp`. CLEAN-004 retention removes expired rows and their blobs, keeps blobs still referenced. CLEAN-005 size cap evicts passing logs first. CLEAN-006 `uninstall` leaves no data dir, key, or local notes ref. CLEAN-007 squashed notes ref still verifies every receipt within `max_age`. CLEAN-008 shared artifacts swept after a day unused, partial writes after an hour.
 
 ---
 

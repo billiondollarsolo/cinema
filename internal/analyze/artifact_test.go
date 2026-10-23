@@ -83,3 +83,68 @@ jobs:
 		t.Fatalf("elsewhere: %v %v", ej.Verdict, ej.Reasons)
 	}
 }
+
+// With CINEMA_ARTIFACTS set, the second task (or run) at the same commit takes
+// the artifact from the cache instead of running the producer again; a new
+// commit builds again.
+func TestArtifactShared(t *testing.T) {
+	if _, err := exec.LookPath("sha256sum"); err != nil {
+		t.Skip("no sha256sum")
+	}
+	count := filepath.Join(t.TempDir(), "builds")
+	src := `on: pull_request
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo x >> ` + count + ` && mkdir -p dist && git rev-parse HEAD > dist/commit
+      - uses: actions/upload-artifact@v4
+        with: {name: dist, path: dist}
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {name: dist, path: dist}
+      - run: test "$(cat dist/commit)" = "$(git rev-parse HEAD)"
+`
+	jobs, err := Workflow("ci.yml", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body string
+	for _, j := range jobs {
+		if j.ID == "test" {
+			body = j.Proposal.Body
+		}
+	}
+	dir, cache := t.TempDir(), t.TempDir()
+	git := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	run := func() {
+		cmd := exec.Command("bash", "-ec", body)
+		cmd.Dir, cmd.Env = dir, append(os.Environ(), "TMPDIR="+t.TempDir(), "CINEMA_ARTIFACTS="+cache)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		_ = os.RemoveAll(filepath.Join(dir, "dist")) // the next task's checkout is clean
+	}
+	builds := func() int { b, _ := os.ReadFile(count); return strings.Count(string(b), "x") }
+	git("init", "-q")
+	git("commit", "-q", "--allow-empty", "-m", "one")
+	run()
+	run()
+	if builds() != 1 {
+		t.Fatalf("same commit: %d builds, want 1", builds())
+	}
+	git("commit", "-q", "--allow-empty", "-m", "two")
+	run()
+	if builds() != 2 {
+		t.Fatalf("new commit: %d builds, want 2", builds())
+	}
+}

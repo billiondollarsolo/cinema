@@ -263,6 +263,12 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 			defer os.RemoveAll(tmp)
 			opts.Env = task.PrivateGlobals(append(opts.Env, "TMPDIR="+tmp), tmp)
 		}
+		// Artifacts a task rebuilds from another job (analyze/artifact.go) are
+		// shared by tasks at the same commit; only clean checkouts, whose tree
+		// is exactly HEAD, may use them.
+		if dir, err := artifactsRoot(); err == nil {
+			opts.Env = append(opts.Env, "CINEMA_ARTIFACTS="+dir)
+		}
 	}
 	if printMu == nil {
 		fmt.Fprintf(os.Stderr, "▶ %s: %s\n", t.ID, strings.Join(t.Argv, " "))
@@ -429,6 +435,17 @@ func cleanCheckout(r *repo, rev string) (*repo, func(), error) {
 
 // checkoutsRoot is <data dir>/checkouts, created 0700 and verified to be a
 // real directory owned by us.
+// artifactsRoot is <data dir>/artifacts (0700): rebuilt artifacts shared
+// between tasks, keyed by commit. Swept after a day unused (sweepRunDirs).
+func artifactsRoot() (string, error) {
+	dataDir, err := store.DataDir()
+	if err != nil {
+		return "", err
+	}
+	root := filepath.Join(dataDir, "artifacts")
+	return root, os.MkdirAll(root, 0o700)
+}
+
 func checkoutsRoot() (string, error) {
 	dataDir, err := store.DataDir()
 	if err != nil {
@@ -503,6 +520,20 @@ func sweepRunDirs() {
 		}
 		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
 			os.RemoveAll(filepath.Join(tmp, e.Name()))
+		}
+	}
+	if aroot, err := artifactsRoot(); err == nil {
+		entries, _ := os.ReadDir(aroot)
+		for _, e := range entries {
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			age := time.Since(info.ModTime())
+			partial := strings.HasSuffix(e.Name(), ".tmp") || strings.HasSuffix(e.Name(), ".lock")
+			if age > 24*time.Hour || (partial && age > time.Hour) {
+				os.RemoveAll(filepath.Join(aroot, e.Name()))
+			}
 		}
 	}
 	croot, err := checkoutsRoot()
