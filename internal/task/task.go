@@ -60,6 +60,11 @@ type Task struct {
 	// bind fixed ports or create a fixed docker network. Scheduling only: not
 	// part of the contract digest.
 	Exclusive bool `yaml:"exclusive"`
+	// CPUs caps how many CPUs the task sees locally (Linux: CPU affinity), to
+	// match the runner it replaces: tools size worker pools by core count, and
+	// some suites deadlock or time out on a bigger box (lab: prettier's jest on
+	// 16 cores). Scheduling only: not part of the contract digest.
+	CPUs int `yaml:"cpus"`
 	// Runtime pins Go/Node versions that cinema provisions for the task and its
 	// probes, on the evidence machine and in the gate alike (runtime.go).
 	Runtime Runtime `yaml:"runtime"`
@@ -247,6 +252,9 @@ func (t *Task) validate() error {
 	case "clean", "workspace":
 	default:
 		return errors.New(`reuse.capture must be "clean" or "workspace"`)
+	}
+	if t.CPUs < 0 {
+		return errors.New("cpus must be a positive number")
 	}
 	if t.RawTimeout != "" {
 		d, err := time.ParseDuration(t.RawTimeout)

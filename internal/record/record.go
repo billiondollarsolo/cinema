@@ -30,6 +30,7 @@ type Options struct {
 	Stderr       io.Writer
 	CaptureLimit int64         // 0 = DefaultCaptureLimit
 	Grace        time.Duration // SIGTERM → SIGKILL delay, and pipe drain bound; 0 = 5s
+	CPUs         []int         // Linux: run on only these CPUs (affinity, inherited by children); nil = all
 }
 
 type Result struct {
@@ -100,7 +101,7 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	defer signal.Stop(sigs)
 
 	res.Start = time.Now()
-	startErr := cmd.Start()
+	startErr := start(cmd, o.CPUs)
 	outW.Close() // the child has its own copies
 	errW.Close()
 	if startErr != nil {

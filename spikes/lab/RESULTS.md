@@ -174,6 +174,8 @@ Each finding came from a real project and was fixed with a test.
 39. **Ignored files leaked between tasks in one run: a false-green path.** Slots were fully reset between runs but not between tasks, so one task's `node_modules` and build outputs were visible to the next (eslint `pnpm-test`). Each task now starts from a fully clean checkout (see the analyze section).
 40. **Global installs must not touch the shared runtime.** Parallel `npm i -g pnpm` broke the provisioned Node for both tasks. Global npm/pnpm installs now go to the run's scratch dir, in evidence and gate runs.
 41. **Drafts must never publish.** prometheus's UI release job was drafted and ran a `pnpm publish` dry run. OIDC-token jobs are now skipped as publish/deploy.
+42. **Size tasks like the runner they replace.** `cpus: N` pins a task to N CPUs (Linux CPU affinity, inherited by every child), and parallel workers get separate CPU blocks. `nproc`, Go, Node's `availableParallelism()` and Python's `process_cpu_count()` all see N. Node's `os.cpus()` doesn't, and prettier's jest still started 16 workers, but on 4 CPUs it no longer deadlocked: the jobs went from 1 h timeouts to 3 min passes. Scheduling only, like `exclusive`: not part of the contract. Drafts get `cpus: 4`.
+43. **Workflow-level `defaults:` apply to every job.** The analyzer read only job-level `defaults.run.working-directory`, so prettier's release-script job was drafted to run the wrong suite from the repo root. Had it passed, the receipt would have certified a different check than the one CI runs.
 
 ## The parallel gate with no evidence (fork-like): first runs
 
@@ -216,15 +218,15 @@ Every draft with a proposal (task *and* review verdicts, except those using `sud
 | cli | 3/4 | 2/2 | 1/2 |
 | traefik | 5/9 | 4/6 | 1/3 |
 | vite | 1/5 | – | 1/5 |
-| prettier | 3/8 | 0/5 | 3/3 |
-| **total** | **40/55** | **19/26** | **21/29** |
+| prettier | 8/8 | 5/5 | 3/3 |
+| **total** | **45/55** | **24/26** | **21/29** |
 
 **Failures, by cause:**
 
 - **Machine prerequisites (7 at first, 0 now):** traefik validate (`shellcheck`), vite preview (`yq`), vite's four test jobs (Chromium: `libnspr4.so`), eslint test-on-browser (`Xvfb`, then Firefox's `libgtk-3`). All are on the GitHub runner image. A failed run now names them (`not on this machine: shellcheck`), and `cinema doctor` lists them per task. Installed on the VPS, validate and test-on-browser passed. Trap: Ubuntu's `yq` package is a different tool (kislyuk's jq wrapper) from the runner's mikefarah `yq`; install the release binary.
 - **Flaky on this box (4):** vite's test jobs now run, and fail only in `playground/hmr*` (HMR updates time out under full parallel load). The same suite fails or passes from run to run outside CInema too, with identical settings. Same class as finding 33.
 - **Not a check (1, now skipped):** vite's `preview` job ran `pkg-pr-new publish` ("Continuous Releases are only available in GitHub Actions"). Steps that publish (`npm/pnpm/yarn publish`, `pkg-pr-new publish`, `goreleaser release`, `docker push`, …, but not `--dry-run`) now make the analyzer skip the job.
-- **Project's tests hang on a 16-core box (5):** prettier's jest jobs hit the 1 h `timeout:` (finding 37). Unchanged by CInema; a safe failure.
+- **Too big a machine (5 at first, 0 now):** prettier's jest jobs deadlocked on 16 cores and hit the 1 h `timeout:` (finding 37). Drafts now carry `cpus: 4` (GitHub's standard Linux runner), and all four passed in about 3 minutes each, with no project change (finding 42). The fifth, `test-release-script-test`, was an analyzer bug: it ignored the workflow-level `defaults.run.working-directory`, so the draft ran prettier's whole suite from the root on Node 20 instead of the release script's 8 tests (finding 43). Fixed; it passes.
 - **Writes files during the run (1 now; 3 before the fix below):** traefik's gateway conformance rewrites a tracked report; prettier `test` leaves c8 `coverage/tmp/*.json` files; prettier `lint` downloads `./actionlint` into the repo root. The last two only added untracked files, which GitHub would ignore too. CInema now ignores files a run only adds in a clean checkout (they don't change what was tested); a modified or deleted tracked file still blocks evidence. Re-run with that change, both passed as evidence.
 - **Needs the CI environment (3):** cli integration-tests (`GH_TOKEN`), traefik knative (`ko-build/setup-ko` exports `KO_DOCKER_REPO`), traefik docs (`setup-python`; Debian's system pip refuses installs). All three were verdict review with that reason.
 - **Containers / parallel collisions (2):** prometheus test-go-more runs in the project's builder image (verdict review, "runs in a container"); traefik's merged conformance collides with the other conformance cluster under `-j` and passed alone (needs `exclusive`).
@@ -235,7 +237,7 @@ Every draft with a proposal (task *and* review verdicts, except those using `sud
 - **A publish job was drafted and ran.** prometheus's `publish_ui_release` became a task and ran `pnpm publish` (a dry run that 404'd; nothing was published). Jobs that request an OIDC token are now skipped as publish/deploy, as are status aggregators, steps reading the PR body, and third-party artifact restores.
 - **Analyzer translation gaps:** object-valued matrix entries (`matrix.package.directory`), checkouts of other repositories, `failure() && …` steps included unconditionally, and artifact uploads reported as source changes.
 
-**So:** with clean environments fixed and the runner image's standard tools installed, 73% of drafts (40/55) pass unmodified. On jobs the analyzer calls task, every failure was a machine limit (prettier's deadlock, a `-j` collision) or the tree-change rule. Review is earned: those drafts fail where their reason says they would.
+**So:** with clean environments fixed, the runner image's standard tools installed and tasks sized like the runner, 82% of drafts (45/55) pass unmodified, and 24 of 26 task-verdict drafts. The two task-verdict failures are traefik's: a `-j` collision (needs `exclusive`) and a job that rewrites a tracked report. Review is earned: those drafts fail where their reason says they would.
 
 **Caveat on the earlier lab numbers:** the hand-written lab task files behind the savings table were tuned in places (e.g. prettier's `--maxWorkers=3`, `exclusive` on heavy tasks, pinned lint binaries). The savings are what CInema does with a reviewed tasks.yaml, not with raw drafts.
 

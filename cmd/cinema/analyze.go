@@ -120,7 +120,8 @@ func draft(jobs []analyze.Job) ([]byte, error) {
 			t.Content = append(t.Content, s("outputs"), flow(seq(p.Outputs...)))
 			j.Notes = append(j.Notes, "outputs: are the paths the job uploads as artifacts; they're left out of the source fingerprint")
 		}
-		t.Content = append(t.Content, s("timeout"), s("60m"),
+		// GitHub's standard Linux runner has 4 vCPUs (public repos; 2 on private ones).
+		t.Content = append(t.Content, s("cpus"), s("4"), s("timeout"), s("60m"),
 			s("reuse"), flow(m(s("allowed"), s("true"), s("max_age"), s("24h"))))
 		key := s(p.ID)
 		key.HeadComment = analyze.Printable(fmt.Sprintf("%s: %s", j.Workflow, jobName(j)))

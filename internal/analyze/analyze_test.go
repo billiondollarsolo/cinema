@@ -408,3 +408,27 @@ jobs:
 		t.Errorf("outputs %q, body %q", p.Outputs, p.Body)
 	}
 }
+
+func TestWorkflowDefaultsWorkingDirectory(t *testing.T) {
+	src := `on: pull_request
+defaults: {run: {working-directory: scripts/release}}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps: [{run: yarn test}]
+  own:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: web}}
+    steps: [{run: yarn test}]
+`
+	jobs, err := Workflow("ci.yml", []byte(src))
+	if err != nil || len(jobs) != 2 {
+		t.Fatalf("%v %+v", err, jobs)
+	}
+	for _, j := range jobs {
+		want := map[string]string{"own": "cd web\n", "test": "cd scripts/release\n"}[j.ID]
+		if j.Proposal == nil || !strings.Contains(j.Proposal.Body, want) {
+			t.Errorf("%s: want %q in %+v", j.ID, want, j.Proposal)
+		}
+	}
+}

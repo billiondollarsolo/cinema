@@ -279,6 +279,7 @@ Fields added from the lab (all optional):
       - image: quay.io/org/builder:1.27-base  # fingerprinted by resolved digest
     outputs: [cover-profile.out, dist]        # written by the task, unignored: left out of its fingerprint
     exclusive: true                           # never alongside other tasks under -j (fixed ports, networks)
+    cpus: 4                                   # Linux: see only 4 CPUs (affinity), like the runner it replaces; scheduling only
     timeout: 30m                              # stop a hang; a timeout is a failure (not in the contract)
     accept_tool_cache: false
     reuse: { allowed: true, max_age: 24h, capture: clean }   # capture: clean (default) | workspace (ADR 0002)

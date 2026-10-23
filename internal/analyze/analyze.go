@@ -51,9 +51,16 @@ type Proposal struct {
 }
 
 type workflow struct {
-	On   yaml.Node       `yaml:"on"`
-	Env  map[string]any  `yaml:"env"`
-	Jobs map[string]*job `yaml:"jobs"`
+	On       yaml.Node       `yaml:"on"`
+	Env      map[string]any  `yaml:"env"`
+	Defaults defaults        `yaml:"defaults"`
+	Jobs     map[string]*job `yaml:"jobs"`
+}
+
+type defaults struct {
+	Run struct {
+		WorkingDirectory string `yaml:"working-directory"`
+	} `yaml:"run"`
 }
 
 type job struct {
@@ -66,11 +73,7 @@ type job struct {
 	Strategy  struct {
 		Matrix yaml.Node `yaml:"matrix"`
 	} `yaml:"strategy"`
-	Defaults struct {
-		Run struct {
-			WorkingDirectory string `yaml:"working-directory"`
-		} `yaml:"run"`
-	} `yaml:"defaults"`
+	Defaults    defaults  `yaml:"defaults"`
 	Steps       []step    `yaml:"steps"`
 	Permissions yaml.Node `yaml:"permissions"`
 }
@@ -165,6 +168,10 @@ func workflowAt(root, name string, src []byte) ([]Job, error) {
 	}
 	for _, id := range sortedKeys(w.Jobs) {
 		j := w.Jobs[id]
+		if j.Defaults.Run.WorkingDirectory == "" {
+			// Lab: prettier's release-script job ran the whole suite from the root.
+			j.Defaults = w.Defaults
+		}
 		combos, err := expand(&j.Strategy.Matrix)
 		if err != nil {
 			out = append(out, Job{Workflow: name, ID: id, Verdict: Review, Reasons: []string{"matrix: " + err.Error()}})

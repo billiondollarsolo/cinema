@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -134,7 +135,7 @@ func runTasks(ctx context.Context, w *repo, todo []*task.Task) int {
 		if ctx.Err() != nil {
 			break
 		}
-		bad, fatal := runOne(ctx, w, t, nil)
+		bad, fatal := runOne(ctx, w, t, nil, 0)
 		if bad {
 			failed++
 		}
@@ -175,7 +176,7 @@ func runPool(ctx context.Context, r *repo, rev string, todo []*task.Task, j int)
 	var mu sync.Mutex
 	failed := 0
 	var wg sync.WaitGroup
-	for range min(j, len(todo)) {
+	for slot := range min(j, len(todo)) {
 		wg.Go(func() {
 			cr, cleanup, err := cleanCheckout(r, rev)
 			defer cleanup()
@@ -187,7 +188,7 @@ func runPool(ctx context.Context, r *repo, rev string, todo []*task.Task, j int)
 					mu.Unlock()
 					continue
 				}
-				bad, fatal := runOne(ctx, cr, t, &mu)
+				bad, fatal := runOne(ctx, cr, t, &mu, slot)
 				mu.Lock()
 				if bad {
 					failed++
@@ -212,7 +213,8 @@ func runPool(ctx context.Context, r *repo, rev string, todo []*task.Task, j int)
 
 // runOne runs a single task in w. printMu non-nil means parallel mode: output is
 // captured only, and lines are printed under the lock. fatal: w can't be reused.
-func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex) (bad, fatal bool) {
+// slot is the worker's index, so parallel tasks with cpus: get different CPUs.
+func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slot int) (bad, fatal bool) {
 	say := func(f string, a ...any) {
 		if printMu != nil {
 			printMu.Lock()
@@ -221,6 +223,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex) (ba
 		fmt.Printf(f, a...)
 	}
 	opts := record.Options{Argv: t.Argv, Dir: filepath.Join(w.root, filepath.FromSlash(t.Cwd))}
+	opts.CPUs = cpuSet(t.CPUs, slot, runtime.NumCPU())
 	if t.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, t.Timeout)
@@ -523,4 +526,18 @@ func gitOut(dir string, args ...string) (string, error) {
 		return "", fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// cpuSet is the CPUs worker slot runs a task capped at n on, out of total:
+// consecutive blocks per slot, wrapping when -j × n exceeds the machine.
+// nil when no cap applies.
+func cpuSet(n, slot, total int) []int {
+	if n <= 0 || n >= total {
+		return nil
+	}
+	cpus := make([]int, n)
+	for i := range cpus {
+		cpus[i] = (slot*n + i) % total
+	}
+	return cpus
 }
