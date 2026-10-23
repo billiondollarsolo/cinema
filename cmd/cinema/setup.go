@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 
@@ -23,8 +24,9 @@ func cmdSetup(args []string) int {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	withReview := fs.Bool("include-review", false, "also draft jobs with open issues (marked REVIEW): check each before relying on it")
 	yes := fs.Bool("yes", false, "write without asking")
+	withMinutes := fs.Bool("minutes", false, "price the jobs that will skip themselves from the repo's recent PR runs (gh CLI)")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: cinema setup [--include-review] [--yes]")
+		fmt.Fprintln(os.Stderr, "usage: cinema setup [--include-review] [--minutes] [--yes]")
 		return exitBadArgs
 	}
 	cwd, _ := os.Getwd()
@@ -61,6 +63,24 @@ func cmdSetup(args []string) int {
 	for _, j := range picked {
 		byWF[j.Workflow] = true
 	}
+	var mins map[string]float64
+	if *withMinutes {
+		if mins, err = jobMinutes(30); err != nil {
+			fmt.Fprintf(os.Stderr, "cinema setup: minutes: %v\n", err)
+		}
+	}
+	price := func(wf string, ids []string) (float64, bool) { // median billed minutes of these jobs' legs
+		total, any := 0.0, false
+		for _, j := range jobs {
+			if j.Workflow == wf && slices.Contains(ids, j.ID) {
+				if v, ok := mins[analyzedKey(j)]; ok {
+					total, any = total+v, true
+				}
+			}
+		}
+		return total, any
+	}
+	saved := 0.0
 	type file struct{ path, body string }
 	var files []file
 	covered := map[string]bool{} // workflow#job
@@ -82,7 +102,12 @@ func cmdSetup(args []string) int {
 			if len(p.covered) == 1 {
 				verb = "skips itself"
 			}
-			summary = append(summary, fmt.Sprintf("  %s: %s %s when cinema reused its tasks", wf, strings.Join(p.covered, ", "), verb))
+			line := fmt.Sprintf("  %s: %s %s when cinema reused its tasks", wf, strings.Join(p.covered, ", "), verb)
+			if m, ok := price(wf, p.covered); ok {
+				line += fmt.Sprintf(" (~%.0f billed min/PR)", m)
+				saved += m
+			}
+			summary = append(summary, line)
 			for _, id := range p.covered {
 				covered[wf+"#"+id] = true
 			}
@@ -100,6 +125,9 @@ func cmdSetup(args []string) int {
 	fmt.Println("\nWhat changes in CI:")
 	for _, l := range summary {
 		fmt.Println(l)
+	}
+	if saved > 0 {
+		fmt.Printf("  about %.0f billed min/PR saved when everything is reused, minus ~1 min per cinema job\n", saved)
 	}
 	if len(kept) == 0 {
 		fmt.Println("\nNo job can skip itself yet (see why above); nothing written.")
