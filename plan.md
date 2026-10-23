@@ -499,6 +499,18 @@ Live updates: an SSE endpoint emits `runs-changed`, and the page re-fetches the 
 
 ## 11. GitHub Actions integration
 
+### 11.0 Default: skip in place (`cinema setup`)
+
+A separate gate saves nothing on its own: the project's CI still runs every job it covers, unless someone deletes them (lab finding 51). So `cinema setup` edits the project's workflows instead, after showing what changes and asking:
+
+- Each workflow with covered jobs gets a `cinema` job that runs `cinema verify --skip-outputs <workflow>`. It judges only tasks whose `covers:` names a job in that workflow, and outputs `skip_<job>=true` when every task of the job was reused, and, for a matrix job, `exclude_<job>` with the reused legs.
+- A covered job gets `needs: cinema` and `if: ${{ !cancelled() && needs.cinema.outputs.skip_<job> != 'true' && <its needs succeeded> && (<its own if>) }}`: skipped (0 minutes, shown as skipped) when reused, run as before otherwise. If the `cinema` job fails, its outputs are empty and nothing is skipped.
+- A matrix job with legs the machine can't run gets `exclude: ${{ fromJSON(needs.cinema.outputs.exclude_<job> || '[]') }}`, and never the whole-job skip. verify emits a leg only if it is exactly one leg the checked-out workflow's matrix expands to (by the matrix's own keys), and skips a matrix job whole only when every real leg was reused.
+- Left alone: jobs other jobs need, `if:`s with status functions or over several lines, matrices with object or non-string values or their own `exclude:`.
+- The edit is textual (positions from the YAML parse); everything else stays byte-for-byte. Rerunning `setup` starts from the original; `cinema setup --undo` removes the edits.
+
+The single-job and parallel gates below remain for repos that want a separate required check.
+
 ### 11.1 One job, not three
 
 `vision §15.3` used separate `plan`, `baseline`, and `gate` jobs. Each job is a runner start, and billed minutes round up per job. The MVP uses **one job** that verifies, runs only what's missing inline, then decides:
