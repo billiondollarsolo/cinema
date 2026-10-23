@@ -522,6 +522,11 @@ jobs:
     services:
       app: {image: ghcr.io/x/app:1, credentials: {username: u, password: "${{ secrets.P }}"}}
     steps: [{run: make e2e}]
+  privileged:
+    runs-on: ubuntu-latest
+    services:
+      dind: {image: docker:dind, options: --privileged}
+    steps: [{run: make e2e}]
 `
 	jobs, err := Workflow("ci.yml", []byte(src))
 	if err != nil {
@@ -537,6 +542,10 @@ jobs:
 		case "private":
 			if j.Verdict != Review || !strings.Contains(strings.Join(j.Reasons, " "), "credentials") {
 				t.Errorf("private: %s %q", j.Verdict, j.Reasons)
+			}
+		case "privileged":
+			if j.Verdict != Review || !strings.Contains(strings.Join(j.Reasons, " "), "won't pass to docker") {
+				t.Errorf("privileged: %s %q", j.Verdict, j.Reasons)
 			}
 		}
 	}

@@ -20,6 +20,8 @@ import (
 	"unicode"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/billiondollarsolo/cinema/internal/task"
 )
 
 // Verdicts.
@@ -1019,6 +1021,9 @@ func service(n *yaml.Node, sub func(string) string) (Service, string) {
 	svc := Service{Image: sub(raw.Image), Options: sub(raw.Options)}
 	if svc.Image == "" || strings.Contains(svc.Image+svc.Options, "${{") {
 		return Service{}, "has an image or options cinema can't evaluate"
+	}
+	if err := task.CheckServiceOptions(svc.Options); err != nil {
+		return Service{}, "has options cinema won't pass to docker (" + err.Error() + ")"
 	}
 	for k, v := range raw.Env {
 		if svc.Env == nil {

@@ -198,3 +198,13 @@ func allowedOptions(opts []string) error {
 	}
 	return nil
 }
+
+// CheckServiceOptions reports whether options (as written in a workflow) would
+// be accepted for a service: the analyzer uses it so drafts load.
+func CheckServiceOptions(options string) error {
+	opts, err := shellWords(options)
+	if err != nil {
+		return err
+	}
+	return allowedOptions(opts)
+}
