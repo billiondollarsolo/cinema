@@ -59,6 +59,18 @@ func cmdSetup(args []string) int {
 		fmt.Println("\nNothing for this machine to take over yet: see what each job needs above (`cinema analyze` has the details).")
 		return exitUnsatisfied
 	}
+	required, reqErr := requiredChecks()
+	var keepRequired []string
+	if reqErr == nil {
+		picked = slices.DeleteFunc(picked, func(j analyze.Job) bool {
+			if requiredLeg(j, required) {
+				_, name, _ := strings.Cut(analyzedKey(j), "\x00")
+				keepRequired = append(keepRequired, name)
+				return true
+			}
+			return false
+		})
+	}
 	// Skip-in-place: each workflow with ready jobs gets a cinema job, and those
 	// jobs skip themselves when their tasks are reused. Only tasks whose job can
 	// skip are written: evidence for a job that never skips saves nothing.
@@ -139,10 +151,14 @@ func cmdSetup(args []string) int {
 	for _, l := range summary {
 		fmt.Println(l)
 	}
+	for _, n := range keepRequired {
+		fmt.Printf("  %s: stays in CI, branch protection requires it by name (a skipped or excluded leg never reports)\n", n)
+	}
 	for _, l := range summary {
-		if strings.Contains(l, "reused matrix legs") {
-			fmt.Println("  note: an excluded matrix leg reports no check; if branch protection requires a leg by name\n" +
-				"        (e.g. \"build (ubuntu-latest)\"), require the job's other checks instead")
+		if reqErr != nil && strings.Contains(l, "reused matrix legs") {
+			fmt.Printf("  note: couldn't read branch protection (%v).\n"+
+				"        An excluded matrix leg reports no check; if branch protection requires a leg by name\n"+
+				"        (e.g. \"build (ubuntu-latest)\"), require the job's other checks instead\n", reqErr)
 			break
 		}
 	}

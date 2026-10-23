@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/billiondollarsolo/cinema/internal/analyze"
@@ -53,5 +54,32 @@ func TestJobKeyMatrixOrder(t *testing.T) {
 	n := analyze.Job{Workflow: "ci.yml", ID: "test_go", Name: "Go tests"}
 	if analyzedKey(n) != jobKey("ci.yml", "Go tests") {
 		t.Fatal("named job doesn't match")
+	}
+}
+
+func TestRequiredLegs(t *testing.T) {
+	old := ghAPI
+	defer func() { ghAPI = old }()
+	ghAPI = func(p string) ([]byte, error) {
+		switch p {
+		case "repos/{owner}/{repo}":
+			return []byte(`{"default_branch":"main"}`), nil
+		case "repos/{owner}/{repo}/rules/branches/main":
+			return []byte(`[{"type":"pull_request"},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"Test (20.x, ubuntu-latest)"}]}}]`), nil
+		}
+		return nil, errors.New("HTTP 404") // classic protection: not an admin
+	}
+	req, err := requiredChecks()
+	if err != nil || !slices.Equal(req, []string{"Test (20.x, ubuntu-latest)"}) {
+		t.Fatalf("requiredChecks = %v, %v", req, err)
+	}
+	leg := func(node string) analyze.Job {
+		return analyze.Job{Workflow: "ci.yml", Name: "Test", Combo: map[string]string{"os": "ubuntu-latest", "node": node}}
+	}
+	if !requiredLeg(leg("20.x"), req) || requiredLeg(leg("22.x"), req) {
+		t.Fatal("only the 20.x leg is required")
+	}
+	if requiredLeg(analyze.Job{Workflow: "ci.yml", Name: "Test (20.x, ubuntu-latest)"}, req) {
+		t.Fatal("a plain job that skips reports its check: not blocked")
 	}
 }

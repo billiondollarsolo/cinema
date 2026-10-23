@@ -507,6 +507,7 @@ A separate gate saves nothing on its own: the project's CI still runs every job 
 - A covered job gets `needs: cinema` and `if: ${{ !cancelled() && needs.cinema.outputs.skip_<job> != 'true' && <its needs succeeded> && (<its own if>) }}`: skipped (0 minutes, shown as skipped) when reused, run as before otherwise. If the `cinema` job fails, its outputs are empty and nothing is skipped.
 - A matrix job with legs the machine can't run gets `exclude: ${{ fromJSON(needs.cinema.outputs.exclude_<job> || '[]') }}`, and never the whole-job skip. verify emits a leg only if it is exactly one leg the checked-out workflow's matrix expands to (by the matrix's own keys), and skips a matrix job whole only when every real leg was reused.
 - Left alone: jobs other jobs need, `if:`s with status functions or over several lines, matrices with object or non-string values or their own `exclude:`.
+- Required checks: a skipped job reports its check as passed, but an excluded leg reports nothing, and a matrix job skipped whole reports one check under the job's name. So a leg the default branch requires by name (rulesets, and classic protection when readable, via `gh`) stays in CI. If `gh` can't say, setup prints a note instead.
 - The edit is textual (positions from the YAML parse); everything else stays byte-for-byte. Rerunning `setup` starts from the original; `cinema setup --undo` removes the edits.
 
 The single-job and parallel gates below remain for repos that want a separate required check.

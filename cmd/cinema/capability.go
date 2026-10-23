@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
 	"os/exec"
 	"path"
 	"regexp"
@@ -242,4 +243,71 @@ func printCapability(m machine, jobs []catMin, priced bool) {
 	if !priced {
 		fmt.Println("\n  add --minutes to price these from your recent PR runs (uses gh)")
 	}
+}
+
+var ghAPI = func(path string) ([]byte, error) { return exec.Command("gh", "api", path).Output() } // a var for tests
+
+// requiredChecks are the status checks the default branch requires, from its
+// rulesets (readable by anyone who can read the repo) and classic branch
+// protection (admins only; skipped if not readable). An error means gh can't
+// say, not that nothing is required.
+func requiredChecks() ([]string, error) {
+	out, err := ghAPI("repos/{owner}/{repo}")
+	if err != nil {
+		return nil, fmt.Errorf("gh api: %v (is gh installed and logged in?)", err)
+	}
+	var repo struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if err := json.Unmarshal(out, &repo); err != nil || repo.DefaultBranch == "" {
+		return nil, fmt.Errorf("gh api: no default branch")
+	}
+	b := url.PathEscape(repo.DefaultBranch)
+	var req []string
+	out, err = ghAPI("repos/{owner}/{repo}/rules/branches/" + b)
+	if err != nil {
+		return nil, fmt.Errorf("gh api rules: %v", err)
+	}
+	var rules []struct {
+		Type       string `json:"type"`
+		Parameters struct {
+			Checks []struct {
+				Context string `json:"context"`
+			} `json:"required_status_checks"`
+		} `json:"parameters"`
+	}
+	if json.Unmarshal(out, &rules) == nil {
+		for _, r := range rules {
+			if r.Type == "required_status_checks" {
+				for _, c := range r.Parameters.Checks {
+					req = append(req, c.Context)
+				}
+			}
+		}
+	}
+	if out, err := ghAPI("repos/{owner}/{repo}/branches/" + b + "/protection/required_status_checks"); err == nil {
+		var classic struct {
+			Contexts []string `json:"contexts"`
+		}
+		if json.Unmarshal(out, &classic) == nil {
+			req = append(req, classic.Contexts...)
+		}
+	}
+	return req, nil
+}
+
+// requiredLeg reports whether j is a matrix leg that a required check names.
+// An excluded leg (or a matrix job skipped whole, which reports one check under
+// the job's name) never reports that check, so the PR could never merge.
+func requiredLeg(j analyze.Job, required []string) bool {
+	if len(j.Combo) == 0 {
+		return false // a skipped job reports its check as passed
+	}
+	_, name, _ := strings.Cut(analyzedKey(j), "\x00")
+	for _, r := range required {
+		if _, rn, _ := strings.Cut(jobKey("", r), "\x00"); rn == name {
+			return true
+		}
+	}
+	return false
 }
