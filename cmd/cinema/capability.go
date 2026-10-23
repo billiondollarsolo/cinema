@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cmp"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -48,8 +47,8 @@ func readiness(j analyze.Job, m machine) (category, detail string) {
 		return "stays in CI", firstReason(j)
 	case j.Proposal == nil:
 		return "review", firstReason(j)
-	case cmp.Or(j.Proposal.Platform, "linux/amd64") != m.Platform:
-		return "stays in CI", "runs on " + cmp.Or(j.Proposal.Platform, "linux/amd64") + "; this machine is " + m.Platform
+	case m.Platform != "linux/amd64":
+		return "stays in CI", "drafts are linux/amd64; this machine is " + m.Platform
 	}
 	var need []string
 	if j.Proposal.Container != "" && !m.Docker {

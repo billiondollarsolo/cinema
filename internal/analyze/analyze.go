@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,7 +52,6 @@ type Proposal struct {
 	Outputs []string `json:"outputs,omitempty"`
 	// Container: the job's container image; cinema runs the steps inside it.
 	Container string `json:"container,omitempty"`
-	Platform  string `json:"platform"` // linux/amd64, or darwin/* for macOS jobs (evidence from a Mac)
 }
 
 type workflow struct {
@@ -232,19 +230,8 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		return r
 	}
 	r.RunsOn = sub(scalarOrList(&j.RunsOn))
-	platform := "linux/amd64"
 	switch os := strings.ToLower(r.RunsOn); {
-	case strings.Contains(os, "macos"):
-		// Evidence from a Mac: GitHub's macos-13 and -large labels are Intel,
-		// the rest Apple silicon. macOS minutes cost ~10x Linux.
-		platform = "darwin/arm64"
-		if strings.Contains(os, "macos-13") || strings.HasSuffix(os, "-large") || strings.Contains(os, "intel") {
-			platform = "darwin/amd64"
-		}
-		if !j.Container.IsZero() || len(j.Services) > 0 {
-			skip("runs on " + r.RunsOn + " with containers")
-		}
-	case strings.Contains(os, "windows"):
+	case strings.Contains(os, "windows"), strings.Contains(os, "macos"):
 		skip("runs on " + r.RunsOn)
 	case strings.Contains(os, "${{"):
 		review("runs-on is an expression: " + r.RunsOn)
@@ -264,14 +251,7 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 		skip("needs service containers (" + strings.Join(sortedKeys(j.Services), ", ") + ")")
 	}
 
-	p := &Proposal{ID: taskID(id, combo), Container: image, Platform: platform}
-	if platform != "linux/amd64" {
-		combo = maps.Clone(combo)
-		if combo == nil {
-			combo = map[string]string{}
-		}
-		combo[runnerKey+"runner.os"], combo[runnerKey+"runner.arch"] = "macOS", map[string]string{"darwin/arm64": "ARM64", "darwin/amd64": "X64"}[platform]
-	}
+	p := &Proposal{ID: taskID(id, combo), Container: image}
 	if image != "" {
 		note("runs in " + image + " as in CI: cinema runs the steps inside it, as root, and fingerprints the image digest")
 	}
@@ -620,9 +600,6 @@ func agrees(inc, c map[string]string) bool {
 	return any
 }
 
-// runnerKey prefixes runner.* values in a combo; a matrix key can't start with NUL.
-const runnerKey = "\x00"
-
 var (
 	statusFn = regexp.MustCompile(`\b(failure|cancelled)\(\)`)
 	ghFiles  = regexp.MustCompile(`\$\{?GITHUB_(ENV|PATH|OUTPUT)\b`)
@@ -930,11 +907,8 @@ func (p *ifParser) unary() string {
 	case t == "github.event_name": // drafts are evidence for the pull request gate
 		p.i++
 		return "pull_request"
-	case t == "runner.os", t == "runner.arch": // the draft's platform (runnerKey in combo), else linux/amd64
+	case t == "runner.os", t == "runner.arch": // drafts are linux/amd64 tasks
 		p.i++
-		if v, ok := p.combo[runnerKey+t]; ok {
-			return v
-		}
 		return map[string]string{"runner.os": "Linux", "runner.arch": "X64"}[t]
 	case t == "true", t == "false", t == "success()", t == "always()":
 		p.i++

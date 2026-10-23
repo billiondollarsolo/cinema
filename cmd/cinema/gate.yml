@@ -15,8 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.verify.outputs.run_tasks }}
-      other: ${{ steps.verify.outputs.other_platforms }}
-      other_count: ${{ steps.verify.outputs.other_count }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0, persist-credentials: false }
@@ -54,29 +52,8 @@ jobs:
           TASK: ${{ matrix.task }}
           CINEMA_TRUSTED_KEYS: "${{ vars.CINEMA_TRUSTED_KEYS }}"
         run: cinema verify --event "$GITHUB_EVENT_PATH" --execute --task "$TASK"
-  other:
-    needs: plan
-    if: needs.plan.outputs.other_count != '0' && needs.plan.outputs.other_count != ''
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.plan.outputs.other) }}
-    runs-on: ${{ matrix.runner }}
-    name: ${{ matrix.platform }} tasks
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { fetch-depth: 0, persist-credentials: false }
-      - name: install cinema
-        run: |
-          go install github.com/billiondollarsolo/cinema/cmd/cinema@CINEMA_VERSION
-          sudo mv "$(go env GOPATH)/bin/cinema" /usr/local/bin/cinema
-      - name: reuse or run this platform's tasks
-        env:
-          CINEMA_TRUSTED_KEYS: "${{ vars.CINEMA_TRUSTED_KEYS }}"
-          CINEMA_FETCH_TOKEN: "${{ github.token }}"
-        run: cinema verify --event "$GITHUB_EVENT_PATH" --execute --only-platform
   gate:
-    needs: [plan, run, other]
+    needs: [plan, run]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -84,11 +61,7 @@ jobs:
         env:
           PLAN: ${{ needs.plan.result }}
           RUN: ${{ needs.run.result }}
-          OTHER: ${{ needs.other.result }}
-          OTHER_COUNT: ${{ needs.plan.outputs.other_count }}
         run: |
           echo "plan=$PLAN run=$RUN"
           [ "$PLAN" = success ] || exit 1
           case "$RUN" in success|skipped) ;; *) exit 1 ;; esac
-          # tasks for other platforms (macOS evidence) must have been judged on their runner
-          [ "${OTHER_COUNT:-0}" = 0 ] || [ "$OTHER" = success ] || exit 1

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -72,7 +71,6 @@ func cmdVerify(args []string) int {
 	reportPath := fs.String("report", "", "write gate-report.json to `FILE`")
 	remote := fs.String("remote", "origin", "fetch evidence from `REMOTE`")
 	only := fs.String("task", "", "with --execute: run just `ID` (one job of a parallel matrix)")
-	onlyHere := fs.Bool("only-platform", false, "with --execute: judge only this runner's platform's tasks; the plan job hands the others to their own runners")
 	if err := fs.Parse(args); err != nil || *eventPath == "" || (*only != "" && !*execute) {
 		fmt.Fprintln(os.Stderr, "usage: cinema verify --event FILE [--execute [--task ID]] [--report FILE]")
 		return exitBadArgs
@@ -172,8 +170,7 @@ func cmdVerify(args []string) int {
 
 	ids := sortedIDs(cfg)
 	executed := map[string]bool{}
-	// A receipt's environment can only be checked on its own platform: tasks for
-	// other platforms (macOS evidence) are judged by a job on that runner.
+	// Tasks for another platform can't be judged on this runner (below).
 	elsewhere := map[string][]string{}
 	for _, id := range ids {
 		t := cfg.Tasks[id]
@@ -200,21 +197,15 @@ func cmdVerify(args []string) int {
 	}
 
 	printGatePlan(rep)
-	others, err := otherPlatforms(elsewhere)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "cinema verify: %v\n", err)
-		return exitUnsatisfied
-	}
-	for _, o := range others {
-		fmt.Printf("  %d task(s) for %s: judged on %s\n", len(elsewhere[o.Platform]), o.Platform, o.Runner)
-	}
-	if *execute && len(others) > 0 && !*onlyHere {
-		// The single-job gate can't vouch for another platform's tasks: fail closed.
-		fmt.Printf("gate: FAIL (tasks for other platforms can't be verified on %s; use the parallel gate)\n", task.Platform())
+	if len(elsewhere) > 0 {
+		// A receipt's environment can only be checked on its own platform, and the
+		// gate runs on Linux: fail closed rather than run them here or skip them.
+		for p, ids := range elsewhere {
+			fmt.Printf("gate: FAIL (tasks %s are for %s; cinema supports linux tasks only for now)\n", strings.Join(ids, ", "), p)
+		}
 		return exitUnsatisfied
 	}
 	if !*execute {
-		writePlatformOutputs(others)
 		// Plan job of the parallel gate: hand the RUN list to a matrix (one job per task).
 		var run []string
 		for _, tr := range rep.Tasks {
@@ -486,55 +477,4 @@ func writeStepSummary(rep gateReport) {
 		f.WriteString(b.String())
 		f.Close()
 	}
-}
-
-type platformRunner struct {
-	Platform string `json:"platform"`
-	Runner   string `json:"runner"`
-}
-
-// gateRunners maps task platforms to GitHub-hosted runner labels.
-var gateRunners = map[string]string{
-	"linux/amd64":  "ubuntu-latest",
-	"linux/arm64":  "ubuntu-24.04-arm",
-	"darwin/arm64": "macos-latest",
-	"darwin/amd64": "macos-13",
-}
-
-// otherPlatforms lists, sorted, the platforms judged elsewhere with their
-// runners; a platform with no hosted runner fails closed.
-func otherPlatforms(elsewhere map[string][]string) ([]platformRunner, error) {
-	var out []platformRunner
-	ps := make([]string, 0, len(elsewhere))
-	for p := range elsewhere {
-		ps = append(ps, p)
-	}
-	slices.Sort(ps)
-	for _, p := range ps {
-		r, ok := gateRunners[p]
-		if !ok {
-			return nil, fmt.Errorf("tasks %s are for %s, which has no GitHub-hosted runner to verify them on", strings.Join(elsewhere[p], ", "), p)
-		}
-		out = append(out, platformRunner{p, r})
-	}
-	return out, nil
-}
-
-// writePlatformOutputs sets other_platforms (a JSON matrix) and other_count.
-func writePlatformOutputs(others []platformRunner) {
-	path := os.Getenv("GITHUB_OUTPUT")
-	if path == "" {
-		return
-	}
-	if others == nil {
-		others = []platformRunner{}
-	}
-	b, _ := json.Marshal(others)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "cinema verify: GITHUB_OUTPUT: %v\n", err)
-		return
-	}
-	fmt.Fprintf(f, "other_platforms=%s\nother_count=%d\n", b, len(others))
-	f.Close()
 }

@@ -273,44 +273,30 @@ func TestGateParallelModes(t *testing.T) { // plan job → matrix → aggregate
 	}
 }
 
-// Tasks for another platform (macOS evidence on a Linux gate) are handed to a
-// job on their own runner, and the single-job gate refuses to vouch for them.
-func TestGateOtherPlatforms(t *testing.T) {
-	other, runner := "darwin/arm64", "macos-latest"
+// A task for another platform fails the gate closed: it can't be judged here.
+func TestGateOtherPlatformFailsClosed(t *testing.T) {
+	other := "darwin/arm64"
 	if task.Platform() == other {
-		other, runner = "linux/amd64", "ubuntu-latest"
+		other = "linux/amd64"
 	}
 	g := newGateEnv(t)
 	g.write(".cinema/tasks.yaml", gateTasks+"  elsewhere:\n    argv: [\"true\"]\n    platform: "+other+"\n    reuse: { allowed: true, max_age: 1h }\n")
 	g.git("add", "-A")
 	g.git("commit", "-qm", "other platform")
 	g.cinema("trust")
-	g.cinema("run", "--commit", "HEAD", "check")
 	g.cinema("push")
 	ci := filepath.Join(t.TempDir(), "ci")
 	mustRun(t, "", "git", "clone", "-q", g.bare, ci)
 	ev := filepath.Join(t.TempDir(), "e.json")
 	os.WriteFile(ev, []byte(`{"repository":{"full_name":"Example/Repo"}}`), 0o644)
-	out := filepath.Join(t.TempDir(), "gh-output")
-	run := func(args ...string) (string, int) {
+	for _, args := range [][]string{nil, {"--execute"}} {
 		cmd := exec.Command(bin, append([]string{"verify", "--event", ev}, args...)...)
 		cmd.Dir = ci
 		cmd.Env = append(os.Environ(), "GITHUB_REPOSITORY=Example/Repo", "CINEMA_TRUSTED_KEYS="+g.keys,
-			"GITHUB_OUTPUT="+out, "CINEMA_DATA_DIR="+t.TempDir())
+			"GITHUB_OUTPUT="+filepath.Join(t.TempDir(), "o"), "CINEMA_DATA_DIR="+t.TempDir())
 		b, _ := cmd.CombinedOutput()
-		return string(b), cmd.ProcessState.ExitCode()
-	}
-	if o, code := run(); code != 0 {
-		t.Fatalf("plan job failed:\n%s", o)
-	}
-	b, _ := os.ReadFile(out)
-	if !strings.Contains(string(b), `other_platforms=[{"platform":"`+other+`","runner":"`+runner+`"}]`) || !strings.Contains(string(b), "other_count=1") || strings.Contains(string(b), "elsewhere") {
-		t.Fatalf("outputs: %s", b)
-	}
-	if o, code := run("--execute"); code == 0 || !strings.Contains(o, "other platforms") {
-		t.Fatalf("single-job gate vouched for another platform: %d\n%s", code, o)
-	}
-	if o, code := run("--execute", "--only-platform"); code != 0 {
-		t.Fatalf("this platform's tasks: %d\n%s", code, o)
+		if cmd.ProcessState.ExitCode() == 0 || !strings.Contains(string(b), "linux tasks only") {
+			t.Fatalf("verify %v passed with a %s task:\n%s", args, other, b)
+		}
 	}
 }
