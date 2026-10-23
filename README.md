@@ -42,7 +42,7 @@ The gate workflow (plan job, one matrix job per task that must run, and a single
 
 ### From existing CI
 
-`cinema analyze` reads `.github/workflows` and proposes a task per Linux job and matrix combination, with exact runtimes. It says why it can't propose the rest: other OSes, secrets, service containers, artifacts passed between jobs, or actions it can't translate. It never writes tasks.yaml. Check a draft before relying on it:
+`cinema analyze` reads `.github/workflows` and proposes a task per Linux job and matrix combination, with exact runtimes. It says why it can't propose the rest: other OSes, secrets, service containers, artifacts passed between jobs, or actions it can't translate. It also says what *this machine* can take over: each job is `ready`, `needs docker` / `needs shellcheck` (and what installing it would add), `review`, or `stays in CI`; `--minutes` prices each group from the repo's recent PR runs. It never writes tasks.yaml. Check a draft before relying on it:
 
 ```sh
 cinema analyze --yaml > draft.yaml

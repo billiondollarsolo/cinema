@@ -22,8 +22,9 @@ func cmdAnalyze(args []string) int {
 	fs := flag.NewFlagSet("analyze", flag.ContinueOnError)
 	asYAML := fs.Bool("yaml", false, "print proposed tasks as a tasks.yaml draft")
 	asJSON := fs.Bool("json", false, "machine-readable result")
+	withMinutes := fs.Bool("minutes", false, "price each job from the repo's recent PR runs (median billed minutes, via the gh CLI)")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: cinema analyze [--yaml | --json]")
+		fmt.Fprintln(os.Stderr, "usage: cinema analyze [--yaml | --json] [--minutes]")
 		return exitBadArgs
 	}
 	cwd, _ := os.Getwd()
@@ -37,9 +38,29 @@ func cmdAnalyze(args []string) int {
 		fmt.Fprintf(os.Stderr, "cinema analyze: %v\n", err)
 		return exitBadArgs
 	}
+	m := probeMachine()
+	var mins map[string]float64
+	if *withMinutes && !*asYAML {
+		if mins, err = jobMinutes(30); err != nil {
+			fmt.Fprintf(os.Stderr, "cinema analyze: minutes: %v\n", err)
+		}
+	}
+	type localJob struct {
+		analyze.Job
+		Local   string   `json:"local"`
+		Minutes *float64 `json:"median_billed_minutes,omitempty"`
+	}
+	local := make([]localJob, len(jobs))
+	for i, j := range jobs {
+		cat, _ := readiness(j, m)
+		local[i] = localJob{Job: j, Local: cat}
+		if v, ok := mins[analyzedKey(j)]; ok {
+			local[i].Minutes = &v
+		}
+	}
 	switch {
 	case *asJSON:
-		if err := envelope("analyze", map[string]any{"jobs": jobs}); err != nil {
+		if err := envelope("analyze", map[string]any{"jobs": local, "machine": m}); err != nil {
 			return exitInternal
 		}
 	case *asYAML:
@@ -51,14 +72,20 @@ func cmdAnalyze(args []string) int {
 		os.Stdout.Write(out)
 	default:
 		tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "VERDICT\tWORKFLOW\tJOB\tWHY")
+		fmt.Fprintln(tw, "VERDICT\tLOCAL\tWORKFLOW\tJOB\tWHY")
 		counts := map[string]int{}
-		for _, j := range jobs {
+		for _, lj := range local {
+			j := lj.Job
 			counts[j.Verdict]++
 			why := strings.Join(j.Reasons, "; ")
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", j.Verdict, analyze.Printable(j.Workflow), analyze.Printable(jobName(j)), analyze.Printable(why))
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", j.Verdict, lj.Local, analyze.Printable(j.Workflow), analyze.Printable(jobName(j)), analyze.Printable(why))
 		}
 		tw.Flush()
+		cm := make([]catMin, len(local))
+		for i, l := range local {
+			cm[i] = catMin{l.Local, l.Minutes}
+		}
+		printCapability(m, cm, mins != nil)
 		fmt.Printf("\n%d task, %d review, %d skip. `cinema analyze --yaml` drafts tasks for the first two;\n"+
 			"run each with `cinema run --commit HEAD <id>` and compare with CI before relying on it.\n",
 			counts[analyze.Task], counts[analyze.Review], counts[analyze.Skip])

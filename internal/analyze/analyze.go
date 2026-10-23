@@ -5,6 +5,7 @@
 package analyze
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -33,6 +34,7 @@ type Job struct {
 	Workflow string            `json:"workflow"`
 	ID       string            `json:"job"`
 	Combo    map[string]string `json:"matrix,omitempty"`
+	Name     string            `json:"name"` // as Actions shows it: name: with matrix values substituted, else the id
 	RunsOn   string            `json:"runs_on"`
 	Verdict  string            `json:"verdict"`
 	Reasons  []string          `json:"reasons,omitempty"`
@@ -66,6 +68,7 @@ type defaults struct {
 }
 
 type job struct {
+	Name      string         `yaml:"name"`
 	RunsOn    yaml.Node      `yaml:"runs-on"`
 	If        string         `yaml:"if"`
 	Uses      string         `yaml:"uses"` // reusable workflow
@@ -176,7 +179,7 @@ func workflowAt(root, name string, src []byte) ([]Job, error) {
 		}
 		combos, err := expand(&j.Strategy.Matrix)
 		if err != nil {
-			out = append(out, Job{Workflow: name, ID: id, Verdict: Review, Reasons: []string{"matrix: " + err.Error()}})
+			out = append(out, Job{Workflow: name, ID: id, Name: cmp.Or(j.Name, id), Verdict: Review, Reasons: []string{"matrix: " + err.Error()}})
 			continue
 		}
 		for _, c := range combos {
@@ -197,6 +200,10 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 	}
 	sub := func(s string) string { return substitute(s, combo) }
 	note := func(s string) { r.Notes = append(r.Notes, s) }
+	r.Name = sub(j.Name)
+	if r.Name == "" {
+		r.Name = id
+	}
 
 	if j.Uses != "" {
 		skip("calls reusable workflow " + j.Uses)
