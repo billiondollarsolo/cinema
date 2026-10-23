@@ -115,7 +115,9 @@ func artifactSteps(root string, w *workflow, consumer *job, with map[string]any,
 			steps = append(steps, s)
 		}
 		steps = append(steps, step{Run: place + "\nrm -rf " + p, Dir: "."})
-		return fmt.Sprintf("(\n  rm -rf %[1]s && mkdir -p %[1]s && cp -a . %[1]s/\n)", p), steps, id, ""
+		// mkdir, not mkdir -p: atomic, and fails on anything already there (a
+		// planted dir or symlink, when TMPDIR is the shared /tmp).
+		return fmt.Sprintf("(\n  mkdir -m 700 %[1]s && cp -a . %[1]s/\n)", p), steps, id, ""
 	}
 	return "", nil, "", "needs artifacts from another job (download-artifact: no job it needs uploads " + name + ")"
 }
