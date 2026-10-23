@@ -40,8 +40,17 @@ type Config struct {
 // RunsCommands reports whether computing t's environment executes commands
 // from the config (toolchain cmd entries). Those require a trusted config.
 func (t *Task) RunsCommands() bool {
-	return t.Runtime.set() || slices.ContainsFunc(t.Toolchain, func(tc Toolchain) bool {
-		return len(tc.Cmd) > 0 || (tc.Image != "" && !strings.Contains(tc.Image, "@sha256:"))
+	unpinned := func(img string) bool { return img != "" && !strings.Contains(img, "@sha256:") } // resolving it runs docker pull
+	if t.Runtime.set() || unpinned(t.Container) {
+		return true
+	}
+	for _, svc := range t.Services {
+		if unpinned(svc.Image) {
+			return true
+		}
+	}
+	return slices.ContainsFunc(t.Toolchain, func(tc Toolchain) bool {
+		return len(tc.Cmd) > 0 || unpinned(tc.Image)
 	})
 }
 
@@ -241,6 +250,9 @@ func (t *Task) validate() error {
 			return fmt.Errorf("outputs: %q overlaps extra_inputs", c)
 		}
 		t.Outputs[i] = c
+	}
+	if t.Container != "" && !imageRE.MatchString(t.Container) {
+		return fmt.Errorf("container: invalid image reference %q", t.Container)
 	}
 	if t.Container != "" {
 		if t.Runtime.set() {

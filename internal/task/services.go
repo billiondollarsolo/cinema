@@ -30,7 +30,14 @@ func validateServices(s map[string]Service) error {
 		if svc.Image == "" {
 			return fmt.Errorf("service %s: image is required", name)
 		}
-		if _, err := shellWords(svc.Options); err != nil {
+		if !imageRE.MatchString(svc.Image) {
+			return fmt.Errorf("service %s: invalid image reference %q", name, svc.Image)
+		}
+		opts, err := shellWords(svc.Options)
+		if err != nil {
+			return fmt.Errorf("service %s: options: %v", name, err)
+		}
+		if err := allowedOptions(opts); err != nil {
 			return fmt.Errorf("service %s: options: %v", name, err)
 		}
 	}
@@ -162,4 +169,32 @@ func sortedKeys(m map[string]string) []string {
 	}
 	sort.Strings(ks)
 	return ks
+}
+
+// serviceFlags are the docker run flags a service's options may use: what CI
+// services need (health checks, scratch space), never host access (volumes,
+// --privileged, capabilities, networks, devices, entrypoint).
+var serviceFlags = map[string]bool{
+	"--health-cmd": true, "--health-interval": true, "--health-timeout": true, "--health-retries": true,
+	"--health-start-period": true, "--health-start-interval": true, "--no-healthcheck": true,
+	"--tmpfs": true, "--shm-size": true, "--ulimit": true, "--hostname": true, "-e": true, "--env": true,
+}
+
+// noValue flags take no argument.
+var noValue = map[string]bool{"--no-healthcheck": true}
+
+func allowedOptions(opts []string) error {
+	for i := 0; i < len(opts); i++ {
+		flag, _, inline := strings.Cut(opts[i], "=")
+		if !serviceFlags[flag] {
+			return fmt.Errorf("%q isn't allowed for services (allowed: health checks, --tmpfs, --shm-size, --ulimit, --hostname, -e)", opts[i])
+		}
+		if !inline && !noValue[flag] {
+			i++ // the flag's value
+			if i >= len(opts) {
+				return fmt.Errorf("%s needs a value", flag)
+			}
+		}
+	}
+	return nil
 }
