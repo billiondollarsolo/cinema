@@ -70,6 +70,10 @@ type Task struct {
 	// digest is part of the environment fingerprint, and the run uses exactly
 	// that digest (container.go).
 	Container string `yaml:"container"`
+	// Services are sidecar containers started for the run (services.go), like a
+	// GitHub job's services:. Their image digests are fingerprinted. Tasks with
+	// services run alone under -j (fixed host ports).
+	Services map[string]Service `yaml:"services"`
 	// Runtime pins Go/Node versions that cinema provisions for the task and its
 	// probes, on the evidence machine and in the gate alike (runtime.go).
 	Runtime Runtime `yaml:"runtime"`
@@ -248,6 +252,9 @@ func (t *Task) validate() error {
 			}
 		}
 	}
+	if err := validateServices(t.Services); err != nil {
+		return err
+	}
 	if err := t.Runtime.validate(); err != nil {
 		return err
 	}
@@ -379,6 +386,17 @@ func (t *Task) ContractDigest(root string) (string, error) {
 	if t.Container != "" { // only when set: existing contracts keep their digests
 		e.str("container")
 		e.str(t.Container)
+	}
+	for _, n := range sortedServices(t.Services) { // likewise only when set
+		svc := t.Services[n]
+		e.str("service")
+		e.str(n)
+		e.str(svc.Image)
+		for _, k := range sortedKeys(svc.Env) {
+			e.str(k + "=" + svc.Env[k])
+		}
+		e.list(svc.Ports)
+		e.str(svc.Options)
 	}
 	return e.sum(), nil
 }

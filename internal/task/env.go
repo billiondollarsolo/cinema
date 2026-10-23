@@ -68,6 +68,16 @@ func (t *Task) EnvFingerprint(root string, env []string) (Env, error) {
 		fp.Image = img
 		fp.Inputs = append(fp.Inputs, "container "+img)
 	}
+	for _, n := range sortedServices(t.Services) {
+		img, err := PinnedImage(t.Services[n].Image)
+		if err != nil {
+			return Env{}, fmt.Errorf("service %s: %w", n, err)
+		}
+		e.str("service")
+		e.str(n)
+		e.str(img)
+		fp.Inputs = append(fp.Inputs, "service "+n+" "+img)
+	}
 	dir := filepath.Join(root, filepath.FromSlash(t.Cwd))
 	e.u64(uint64(len(t.Toolchain)))
 	for _, tc := range t.Toolchain {

@@ -38,14 +38,15 @@ func PinnedImage(ref string) (string, error) {
 // reset. stop removes the container if the client was killed (timeout, ^C).
 // cpus (cpus:) becomes --cpuset-cpus: the container's processes are dockerd's
 // children, so the CLI's own CPU affinity wouldn't reach them.
-func (t *Task) ContainerRun(root, image string, cpus []int) (argv []string, stop func()) {
-	b := make([]byte, 6)
-	rand.Read(b)
-	name := "cinema-" + hex.EncodeToString(b)
+func (t *Task) ContainerRun(root, image, network string, cpus []int) (argv []string, stop func()) {
+	name := "cinema-" + randomHex()
 	back := fmt.Sprintf(`"$@"; rc=$?; chown -R %d:%d "$CINEMA_ROOT"; exit $rc`, os.Getuid(), os.Getgid())
 	argv = []string{"docker", "run", "--rm", "--name", name, "--entrypoint", "sh",
 		"-v", root + ":" + root, "-w", filepath.Join(root, filepath.FromSlash(t.Cwd)),
 		"-e", "CI=true", "-e", "CINEMA_ROOT=" + root}
+	if network != "" {
+		argv = append(argv, "--network", network) // services by name, as in a container job
+	}
 	if len(cpus) > 0 {
 		set := make([]string, len(cpus))
 		for i, c := range cpus {
@@ -56,4 +57,10 @@ func (t *Task) ContainerRun(root, image string, cpus []int) (argv []string, stop
 	argv = append(argv, image, "-c", back, "sh")
 	argv = append(argv, t.Argv...)
 	return argv, func() { _ = exec.Command("docker", "rm", "-f", name).Run() }
+}
+
+func randomHex() string {
+	b := make([]byte, 6)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }

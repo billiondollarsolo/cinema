@@ -267,6 +267,14 @@ func executeGateTask(root string, t *task.Task, tr *gateTaskReport) {
 		defer os.RemoveAll(tmp)
 		env = task.PrivateGlobals(env, tmp)
 	}
+	network, stopServices, err := t.StartServices()
+	if err != nil {
+		fmt.Println("::endgroup::")
+		fmt.Printf("%s FAILED: %v\n", t.ID, err)
+		tr.Executed, tr.ExitCode = true, 1
+		return
+	}
+	defer stopServices()
 	argv := t.Argv
 	if t.Container != "" {
 		img, err := task.PinnedImage(t.Container)
@@ -277,7 +285,7 @@ func executeGateTask(root string, t *task.Task, tr *gateTaskReport) {
 			return
 		}
 		var stop func()
-		argv, stop = t.ContainerRun(root, img, nil)
+		argv, stop = t.ContainerRun(root, img, network, nil)
 		defer stop()
 	}
 	res, err := record.Run(ctx, record.Options{Argv: argv, Env: env,

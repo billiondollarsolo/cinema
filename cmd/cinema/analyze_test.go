@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/billiondollarsolo/cinema/internal/analyze"
+	"github.com/billiondollarsolo/cinema/internal/task"
 )
 
 // Drafts land in the repo, where its formatter checks them (lab: eslint's
@@ -24,5 +25,25 @@ func TestDraftHasNoFlowMaps(t *testing.T) {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
+	}
+}
+
+// A drafted services: block loads as task services.
+func TestDraftServicesLoad(t *testing.T) {
+	jobs := []analyze.Job{{Workflow: "ci.yml", ID: "db", Verdict: analyze.Task, Proposal: &analyze.Proposal{ID: "db", Body: "(\nmake test\n)",
+		Services: map[string]analyze.Service{"postgres": {Image: "postgres:16", Env: map[string]string{"POSTGRES_PASSWORD": "pw"}, Ports: []string{"5432:5432"}, Options: "--health-cmd pg_isready"}}}}}
+	out, err := draft(jobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := task.Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if s := cfg.Tasks["db"].Services["postgres"]; s.Image != "postgres:16" || s.Env["POSTGRES_PASSWORD"] != "pw" || s.Options != "--health-cmd pg_isready" {
+		t.Fatalf("%+v\n%s", s, out)
+	}
+	if strings.Contains(string(out), "{") {
+		t.Fatalf("flow map in draft:\n%s", out)
 	}
 }

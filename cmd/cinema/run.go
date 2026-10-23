@@ -154,7 +154,7 @@ func runParallel(ctx context.Context, r *repo, rev string, todo []*task.Task, j 
 	// parallel-safe ones, one at a time.
 	var shared, alone []*task.Task
 	for _, t := range todo {
-		if t.Exclusive {
+		if t.Exclusive || len(t.Services) > 0 { // services publish fixed host ports
 			alone = append(alone, t)
 		} else {
 			shared = append(shared, t)
@@ -224,6 +224,12 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 	}
 	opts := record.Options{Argv: t.Argv, Dir: filepath.Join(w.root, filepath.FromSlash(t.Cwd))}
 	opts.CPUs = cpuSet(t.CPUs, slot, runtime.NumCPU())
+	network, stopServices, err := t.StartServices()
+	if err != nil {
+		say("✗ %s  %v\n", t.ID, err)
+		return true, false
+	}
+	defer stopServices()
 	if t.Container != "" {
 		img, err := task.PinnedImage(t.Container) // the same digest the fingerprint records
 		if err != nil {
@@ -231,7 +237,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 			return true, false
 		}
 		var stop func()
-		opts.Argv, stop = t.ContainerRun(w.root, img, opts.CPUs)
+		opts.Argv, stop = t.ContainerRun(w.root, img, network, opts.CPUs)
 		defer stop()
 		opts.CPUs = nil
 	}

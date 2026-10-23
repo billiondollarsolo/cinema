@@ -281,6 +281,8 @@ Fields added from the lab (all optional):
     exclusive: true                           # never alongside other tasks under -j (fixed ports, networks)
     cpus: 4                                   # Linux: see only 4 CPUs (affinity), like the runner it replaces; scheduling only
     container: golang:1.27                    # run inside this image as root, like a GitHub container job; its digest is fingerprinted
+    services:                                 # sidecars, like a GitHub job's services: (localhost ports, or by name from container:)
+      postgres: { image: postgres:16, env: { POSTGRES_PASSWORD: pw }, ports: ["5432:5432"], options: "--health-cmd pg_isready" }
     timeout: 30m                              # stop a hang; a timeout is a failure (not in the contract)
     accept_tool_cache: false
     reuse: { allowed: true, max_age: 24h, capture: clean }   # capture: clean (default) | workspace (ADR 0002)

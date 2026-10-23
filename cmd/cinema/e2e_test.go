@@ -919,3 +919,55 @@ jobs:
 		t.Fatalf("written tasks.yaml doesn't load: exit %d\n%s", code, out)
 	}
 }
+
+// services: start beside the task (localhost ports, or by name from a
+// container: task), are fingerprinted by digest, and are removed afterwards.
+func TestRunWithServices(t *testing.T) {
+	if exec.Command("docker", "info").Run() != nil {
+		t.Skip("no docker")
+	}
+	e := newEnv(t)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  on-host:
+    argv: [bash, -c, "exec 3<>/dev/tcp/127.0.0.1/16379 && printf 'PING\r\n' >&3 && head -c5 <&3 | grep -q PONG"]
+    platform: linux/amd64
+    services:
+      cache: {image: "redis:7-alpine", ports: ["16379:6379"], options: "--health-cmd 'redis-cli ping' --health-interval 1s"}
+    reuse: {allowed: true, max_age: 1h}
+  in-container:
+    argv: [redis-cli, -h, cache, ping]
+    platform: linux/amd64
+    container: "redis:7-alpine"
+    services:
+      cache: {image: "redis:7-alpine", options: "--health-cmd 'redis-cli ping' --health-interval 1s"}
+    reuse: {allowed: true, max_age: 1h}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	ours := func() map[string]bool { // cinema containers, to diff around our run (other runs may share the host)
+		out, _ := exec.Command("docker", "ps", "-aq", "--filter", "name=cinema-").Output()
+		m := map[string]bool{}
+		for _, id := range strings.Fields(string(out)) {
+			m[id] = true
+		}
+		return m
+	}
+	before := ours()
+	cmd := exec.Command(bin, "run", "--commit", "HEAD", "-j", "2", "on-host", "in-container")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "✓ on-host") || !strings.Contains(string(out), "✓ in-container") {
+		t.Fatalf("err=%v:\n%s", err, out)
+	}
+	for id := range ours() {
+		if !before[id] {
+			t.Fatalf("container left behind: %s", id)
+		}
+	}
+	exp, _ := e.cinema("explain", "--json", "on-host")
+	if !strings.Contains(exp, "service cache redis@sha256:") {
+		t.Fatalf("service image not fingerprinted:\n%s", exp)
+	}
+}

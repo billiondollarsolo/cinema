@@ -52,6 +52,8 @@ type Proposal struct {
 	Outputs []string `json:"outputs,omitempty"`
 	// Container: the job's container image; cinema runs the steps inside it.
 	Container string `json:"container,omitempty"`
+	// Services: the job's service containers, started beside the task.
+	Services map[string]Service `json:"services,omitempty"`
 }
 
 type workflow struct {
@@ -68,13 +70,13 @@ type defaults struct {
 }
 
 type job struct {
-	Name      string         `yaml:"name"`
-	RunsOn    yaml.Node      `yaml:"runs-on"`
-	If        string         `yaml:"if"`
-	Uses      string         `yaml:"uses"` // reusable workflow
-	Container yaml.Node      `yaml:"container"`
-	Services  map[string]any `yaml:"services"`
-	Env       map[string]any `yaml:"env"`
+	Name      string               `yaml:"name"`
+	RunsOn    yaml.Node            `yaml:"runs-on"`
+	If        string               `yaml:"if"`
+	Uses      string               `yaml:"uses"` // reusable workflow
+	Container yaml.Node            `yaml:"container"`
+	Services  map[string]yaml.Node `yaml:"services"`
+	Env       map[string]any       `yaml:"env"`
 	Strategy  struct {
 		Matrix yaml.Node `yaml:"matrix"`
 	} `yaml:"strategy"`
@@ -247,11 +249,22 @@ func analyzeJob(root, wf, id string, j *job, wfEnv map[string]any, combo map[str
 			image = img
 		}
 	}
-	if len(j.Services) > 0 {
-		skip("needs service containers (" + strings.Join(sortedKeys(j.Services), ", ") + ")")
+	services := map[string]Service{}
+	for _, name := range sortedKeys(j.Services) {
+		n := j.Services[name]
+		svc, why := service(&n, sub)
+		if why != "" {
+			review("service " + name + " " + why + ": cinema runs services with a literal image, env, ports and options")
+			continue
+		}
+		services[name] = svc
 	}
 
 	p := &Proposal{ID: taskID(id, combo), Container: image}
+	if len(services) > 0 {
+		p.Services = services
+		note("starts " + strings.Join(sortedKeys(services), ", ") + " as in CI (cinema runs the service containers and fingerprints their image digests)")
+	}
 	if image != "" {
 		note("runs in " + image + " as in CI: cinema runs the steps inside it, as root, and fingerprints the image digest")
 	}
@@ -969,4 +982,53 @@ func containerExtras(n *yaml.Node) string {
 		return ""
 	}
 	return "; with " + strings.Join(extra, ", ")
+}
+
+// Service is a job's service container as a task can run it.
+type Service struct {
+	Image   string            `json:"image" yaml:"image"`
+	Env     map[string]string `json:"env,omitempty" yaml:"env,omitempty"`
+	Ports   []string          `json:"ports,omitempty" yaml:"ports,omitempty,flow"`
+	Options string            `json:"options,omitempty" yaml:"options,omitempty"`
+}
+
+// service translates one services: entry, or says why it can't.
+func service(n *yaml.Node, sub func(string) string) (Service, string) {
+	var raw struct {
+		Image       string         `yaml:"image"`
+		Env         map[string]any `yaml:"env"`
+		Ports       []any          `yaml:"ports"`
+		Options     string         `yaml:"options"`
+		Credentials any            `yaml:"credentials"`
+		Volumes     any            `yaml:"volumes"`
+	}
+	if n.Kind == yaml.ScalarNode {
+		raw.Image = n.Value
+	} else if err := n.Decode(&raw); err != nil {
+		return Service{}, "can't be read"
+	}
+	switch {
+	case raw.Credentials != nil:
+		return Service{}, "needs registry credentials"
+	case raw.Volumes != nil:
+		return Service{}, "mounts volumes"
+	}
+	svc := Service{Image: sub(raw.Image), Options: sub(raw.Options)}
+	if svc.Image == "" || strings.Contains(svc.Image+svc.Options, "${{") {
+		return Service{}, "has an image or options cinema can't evaluate"
+	}
+	for k, v := range raw.Env {
+		if svc.Env == nil {
+			svc.Env = map[string]string{}
+		}
+		val := sub(str(v))
+		if strings.Contains(val, "${{") {
+			return Service{}, "has env " + k + " cinema can't evaluate"
+		}
+		svc.Env[k] = val
+	}
+	for _, p := range raw.Ports {
+		svc.Ports = append(svc.Ports, sub(fmt.Sprint(p)))
+	}
+	return svc, ""
 }

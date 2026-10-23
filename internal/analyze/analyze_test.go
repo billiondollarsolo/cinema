@@ -64,7 +64,7 @@ func TestWorkflow(t *testing.T) {
 		got[key] = j
 	}
 	want := map[string]string{
-		"analyze": Skip, "db": Skip, "lint": Review, // lint: workflow env TOKEN is a secret
+		"analyze": Skip, "db": Review, "lint": Review, // db, lint: workflow env TOKEN is a secret (db's postgres service translates)
 		"test/ubuntu-latest/20.19.0": Review, "test/ubuntu-latest/22.x": Review, "test/windows-latest/20.19.0": Skip,
 	}
 	if len(got) != len(want) {
@@ -497,6 +497,43 @@ jobs:
 		case "with-options":
 			if j.Verdict != Review || !strings.Contains(strings.Join(j.Reasons, " "), "with options") {
 				t.Errorf("with-options: %s %q", j.Verdict, j.Reasons)
+			}
+		}
+	}
+}
+
+func TestServicesTranslated(t *testing.T) {
+	src := `on: pull_request
+jobs:
+  db:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: {POSTGRES_PASSWORD: pw}
+        ports: [5432:5432]
+        options: --health-cmd pg_isready --health-interval 5s
+    steps: [{run: make test-db}]
+  private:
+    runs-on: ubuntu-latest
+    services:
+      app: {image: ghcr.io/x/app:1, credentials: {username: u, password: "${{ secrets.P }}"}}
+    steps: [{run: make e2e}]
+`
+	jobs, err := Workflow("ci.yml", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range jobs {
+		switch j.ID {
+		case "db":
+			s := j.Proposal.Services["postgres"]
+			if j.Verdict != Task || s.Image != "postgres:16" || s.Env["POSTGRES_PASSWORD"] != "pw" || len(s.Ports) != 1 || !strings.Contains(s.Options, "pg_isready") {
+				t.Errorf("db: %s %q %+v", j.Verdict, j.Reasons, s)
+			}
+		case "private":
+			if j.Verdict != Review || !strings.Contains(strings.Join(j.Reasons, " "), "credentials") {
+				t.Errorf("private: %s %q", j.Verdict, j.Reasons)
 			}
 		}
 	}
