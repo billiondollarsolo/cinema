@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -875,5 +876,46 @@ tasks:
 	exp, _ := e.cinema("explain", "--json", "in-image")
 	if !strings.Contains(exp, "container alpine@sha256:") || !strings.Contains(exp, "user=root") {
 		t.Fatalf("explain doesn't show the pinned image:\n%s", exp)
+	}
+}
+
+// setup writes the ready tasks and a pinned gate, and nothing without a yes.
+func TestSetupWritesReadyTasks(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("drafts are linux/amd64")
+	}
+	e := newEnv(t)
+	e.write(".github/workflows/ci.yml", `on: pull_request
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps: [{uses: actions/checkout@v4}, {run: echo ok}]
+  mac:
+    runs-on: macos-latest
+    steps: [{run: echo mac}]
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "ci")
+	cmd := exec.Command(bin, "setup")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+	if out, _ := cmd.CombinedOutput(); !strings.Contains(string(out), "Nothing written") {
+		t.Fatalf("wrote without a yes:\n%s", out)
+	}
+	cmd = exec.Command(bin, "setup", "--yes")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	tasks, _ := os.ReadFile(filepath.Join(e.repo, ".cinema/tasks.yaml"))
+	gate, _ := os.ReadFile(filepath.Join(e.repo, ".github/workflows/cinema.yml"))
+	if !strings.Contains(string(tasks), "unit:") || strings.Contains(string(tasks), "mac:") {
+		t.Fatalf("tasks:\n%s", tasks)
+	}
+	if strings.Contains(string(gate), "CINEMA_VERSION") || !strings.Contains(string(gate), "cinema verify") {
+		t.Fatalf("gate not filled in:\n%s", gate)
+	}
+	if out, code := e.cinema("trust"); code != 0 {
+		t.Fatalf("written tasks.yaml doesn't load: exit %d\n%s", code, out)
 	}
 }

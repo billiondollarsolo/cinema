@@ -30,7 +30,7 @@ cinema push                                          → checks signature, sourc
 ```sh
 go install github.com/billiondollarsolo/cinema/cmd/cinema@latest
 
-cinema init                      # .cinema/tasks.yaml skeleton (or: cinema analyze --yaml)
+cinema setup                     # from existing CI: what this machine can take over, then tasks.yaml + gate (asks first)
 cinema trust                     # after reviewing tasks.yaml
 cinema run --commit HEAD --all   # clean-checkout runs, recorded
 cinema status                    # reusable / stale / missing, with reason codes
@@ -66,7 +66,7 @@ No false greens: upstream passed every Linux check wherever the gate passed. The
 ## Commands
 
 ```
-init · exec · run · status · explain · log · doctor · trust · dashboard · keys · push · verify · analyze
+setup · init · exec · run · status · explain · log · doctor · trust · dashboard · keys · push · verify · analyze
 ```
 
 `cinema <command> -h` for flags. `--json` on reporting commands, for agents ([plan §10.3](plan.md)).
