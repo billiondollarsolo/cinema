@@ -171,6 +171,9 @@ Each finding came from a real project and was fixed with a test.
 36. **The gate workflow must pass the repo's workflow linters.** prometheus runs zizmor on every PR. It flagged the lab gate workflow's `npm i -g corepack@latest` (an unpinned install outside a lockfile, `adhoc-packages`). prometheus doesn't even need corepack (no `packageManager`), so the step was dropped from its template. A shipped workflow must install nothing unpinned. The longer-term fix is for CInema to provision the package manager the way it provisions Node.
 37. **A machine bigger than the runner can break a project's tests.** prettier's jest (`jest-light-runner/child-process`) deadlocks with its default worker count on the 16-core lab box (15 workers): no CPU, nothing running, forever. That's true without CInema too. With `--maxWorkers=3`, as on a 4-vCPU runner, the suite passes in 84 s. Evidence machines should match the runner's parallelism where a tool scales with core count. A deadlock is a safe failure, but it costs hours without a task timeout. (Candidate feature: a per-task `timeout:`.)
 38. **Parallel tasks share caches outside the repo.** eslint's four mocha tasks ran `npm install` at the same time. Each triggers cypress's postinstall download into the shared `~/.cache/Cypress`, and two failed with "could not be downloaded". Same class as finding 15: a shared, unfingerprinted cache. Safe (no receipts), but such tasks run `-j 1` or `exclusive`.
+39. **Ignored files leaked between tasks in one run: a false-green path.** Slots were fully reset between runs but not between tasks, so one task's `node_modules` and build outputs were visible to the next (eslint `pnpm-test`). Each task now starts from a fully clean checkout (see the analyze section).
+40. **Global installs must not touch the shared runtime.** Parallel `npm i -g pnpm` broke the provisioned Node for both tasks. Global npm/pnpm installs now go to the run's scratch dir, in evidence and gate runs.
+41. **Drafts must never publish.** prometheus's UI release job was drafted and ran a `pnpm publish` dry run. OIDC-token jobs are now skipped as publish/deploy.
 
 ## The parallel gate with no evidence (fork-like): first runs
 
@@ -185,30 +188,54 @@ With no receipts, the gate is no longer a regression *when each task is about on
 
 ## `cinema analyze` against the mirrors
 
-Deterministic drafts from each project's `.github/workflows`, one per Linux job and matrix combination:
+Deterministic drafts from each project's `.github/workflows`, one per Linux job and matrix combination (current analyzer):
 
 | Project | task | review | skip |
 |---|---:|---:|---:|
-| eslint | 17 | 10 | 6 |
-| traefik | 7 | 2 | 58 |
-| prettier | 4 | 4 | 26 |
-| cli | 2 | 2 | 7 |
-| vite | 2 | 9 | 4 |
-| prometheus | 0 | 35 | 9 |
+| eslint | 11 | 10 | 12 |
+| traefik | 6 | 4 | 35 |
+| prettier | 5 | 5 | 25 |
+| cli | 2 | 2 | 12 |
+| vite | 0 | 12 | 4 |
+| prometheus | 2 | 13 | 26 |
 
 - **Before version handling:** 4 jobs in total were "task".
 - **Version files** (`.go-version`, `go.mod`, `.nvmrc`; ~74 jobs) and **ranges** resolved to today's release (`1.26` → 1.26.10, `22` → 22.23.4) made most of the difference.
-- **Matrix-only `if:` evaluation** fixed prettier's per-Node conditionals.
-- **What remains review or skip:** jobs built from actions (goreleaser, golangci-lint-action, prometheus's `promci`, test-splitting, docker login/buildx), other OSes, secrets, and artifacts passed between jobs. Those are what I translated by hand in the lab.
+- **`if:` evaluation** covers `matrix.*`, `runner.*`, `github.event_name` (always `pull_request`) and the status functions, with short-circuiting, so `failure() && …` steps drop out.
+- **Skipped as not checks:** other OSes, secrets, jobs that check out another repository, aggregator jobs that report `needs.*.result`, OIDC (`id-token: write`) publish jobs, steps reading `github.event.*`, and artifacts passed between jobs.
+- **Artifact uploads** become `outputs:`, so a job that writes what it uploads isn't flagged as changing the tree.
 
-**traefik's 7 drafts, run unmodified in a clean checkout:**
-- **Passed (4):** build, test-ui-unit, validate-generate, test-unit.
-- **Didn't pass (3):**
-  - **validate** needs `shellcheck`, which is on the GitHub runner image and not the VPS. It also pipes an installer fetched from `HEAD` into `sh` (now flagged).
-  - **The two gateway-conformance jobs** regenerate a tracked report. That's correct behavior, but it makes them not evidence until it's declared in `outputs:`. `cinema run` now names the changed files.
-  - **merged conformance under `-j 3`:** it failed, apparently colliding with the other conformance job's cluster. It passed alone, so those two need `exclusive`.
+### Verification: every draft, run unmodified
 
-**So:** a draft is a starting point. The verification run is what tells you what to fix. That's the planned next step, "verification mode": run every draft and compare with the same commit's CI.
+Every draft with a proposal (task *and* review verdicts, except those using `sudo`) was run as-is with `cinema run --commit HEAD -j 2` in clean checkouts on the VPS, on each mirror's default branch. Nothing was edited, tuned or installed for the projects: a failure is either a CInema bug (fixed, then everything re-run) or recorded below as a limit.
+
+| Project | Passed as drafted | of which verdict task | of which verdict review |
+|---|---:|---:|---:|
+| eslint | 19/20 | 11/11 | 8/9 |
+| prometheus | 8/9 | 2/2 | 6/7 |
+| cli | 3/4 | 2/2 | 1/2 |
+| traefik | 4/9 | 4/6 | 0/3 |
+| vite | 1/6 | – | 1/6 |
+| prettier | 1/8 | 0/5 | 1/3 |
+| **total** | **36/56** | **19/26** | **17/30** |
+
+**Failures, by cause:**
+
+- **Machine prerequisites (7):** traefik validate (`shellcheck`), vite preview (`yq`), vite's four test jobs (Playwright's Chromium won't launch: missing system libraries), eslint test-on-browser (no X display). These are on the GitHub runner image; an evidence machine needs them installed. Not a CInema bug.
+- **Project's tests hang on a 16-core box (5):** prettier's jest jobs hit the 1 h `timeout:` (finding 37). Unchanged by CInema; a safe failure.
+- **Writes files during the run (3), correctly not evidence:** traefik's gateway conformance rewrites a tracked report; prettier `test` leaves c8 `coverage/tmp/*.json` files; prettier `lint` downloads `./actionlint` into the repo root. The last two are new untracked files that GitHub would ignore. Open question: whether new untracked files (as opposed to modified tracked ones) should block evidence. Today they do, because untracked non-ignored files are part of the source fingerprint (plan §6, ACC-012).
+- **Needs the CI environment (3):** cli integration-tests (`GH_TOKEN`), traefik knative (`ko-build/setup-ko` exports `KO_DOCKER_REPO`), traefik docs (`setup-python`; Debian's system pip refuses installs). All three were verdict review with that reason.
+- **Containers / parallel collisions (2):** prometheus test-go-more runs in the project's builder image (verdict review, "runs in a container"); traefik's merged conformance collides with the other conformance cluster under `-j` and passed alone (needs `exclusive`).
+
+**CInema bugs this exposed, all fixed:**
+- **Ignored files leaked between tasks in one run: a false-green path.** Slots were reset with `git clean -ffdxq` between runs but only `-fdq` between tasks, so `node_modules` and build outputs from one task were visible to the next. eslint's `pnpm-test` refused to run ("Delete node_modules…"); a task that depended on another's build could have passed here and failed on GitHub. Each task now starts from a fully clean checkout. The earlier verification pass was discarded and re-run.
+- **Global installs went into the shared runtime.** `npm i -g pnpm` in two parallel tasks wrote into the same provisioned Node and broke both (`Cannot find module …/bin/pnpm`), and would have leaked into later runs. Global npm/pnpm installs now go to the run's scratch directory, in evidence and gate runs alike, with both `$PNPM_HOME` and pnpm 11's `$PNPM_HOME/bin` on `PATH`.
+- **A publish job was drafted and ran.** prometheus's `publish_ui_release` became a task and ran `pnpm publish` (a dry run that 404'd; nothing was published). Jobs that request an OIDC token are now skipped as publish/deploy, as are status aggregators, steps reading the PR body, and third-party artifact restores.
+- **Analyzer translation gaps:** object-valued matrix entries (`matrix.package.directory`), checkouts of other repositories, `failure() && …` steps included unconditionally, and artifact uploads reported as source changes.
+
+**So:** with clean environments fixed, about two-thirds of drafts pass unmodified. On jobs the analyzer calls task, every failure was a machine limit (prettier's deadlock, a `-j` collision) or the tree-change rule. Review is earned: those drafts fail where their reason says they would.
+
+**Caveat on the earlier lab numbers:** the hand-written lab task files behind the savings table were tuned in places (e.g. prettier's `--maxWorkers=3`, `exclusive` on heavy tasks, pinned lint binaries). The savings are what CInema does with a reviewed tasks.yaml, not with raw drafts.
 
 ## Local runs (`run-lab.sh`, VPS, root pass)
 

@@ -76,7 +76,7 @@ init · exec · run · status · explain · log · trust · dashboard · keys ·
 - [plan.md](plan.md): the MVP build plan, the invariant, reason codes, cleanup contract
 - [vision.md](vision.md): the long-range design
 - [docs/adr](docs/adr): decisions on the false-green boundary
-- [spikes/lab/RESULTS.md](spikes/lab/RESULTS.md): the lab, findings 1–38
+- [spikes/lab/RESULTS.md](spikes/lab/RESULTS.md): the lab, findings 1–41
 
 ## License
 
