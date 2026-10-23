@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -365,10 +366,12 @@ func excludeSlot(job *yaml.Node, keys []string) (line int, indent, why string) {
 		return 0, "", "is written on one line or as an expression"
 	case mapValue(m, "exclude") != nil:
 		return 0, "", "already has an exclude:"
-	case mapValue(m, "include") != nil:
-		// GitHub applies exclude before include: an include that extended an
-		// excluded leg would become a new, incomplete leg.
-		return 0, "", "has an include:"
+	case extendsBaseLeg(m, keys):
+		// GitHub applies exclude before include: an include entry that extends a
+		// leg (agrees with it on every shared key) would, with that leg excluded,
+		// become a new, possibly incomplete leg. Entries that differ from every
+		// leg already stand alone, and are fine (lab: eslint's test matrix).
+		return 0, "", "has an include: entry that extends one of its legs"
 	}
 	for _, k := range keys {
 		v := mapValue(m, k)
@@ -387,4 +390,48 @@ func excludeSlot(job *yaml.Node, keys []string) (line int, indent, why string) {
 	}
 	first := m.Content[0]
 	return first.Line, strings.Repeat(" ", first.Column-1), ""
+}
+
+// extendsBaseLeg reports whether some include: entry of matrix m agrees with
+// some combination of its own keys' values on every key they share. An entry
+// cinema can't read counts as extending (fail closed).
+func extendsBaseLeg(m *yaml.Node, keys []string) bool {
+	inc := mapValue(m, "include")
+	if inc == nil {
+		return false
+	}
+	var entries []map[string]any
+	if inc.Decode(&entries) != nil {
+		return true
+	}
+	values := map[string][]string{}
+	for _, k := range keys {
+		var vs []string
+		if v := mapValue(m, k); v != nil && v.Kind == yaml.SequenceNode {
+			for _, x := range v.Content {
+				vs = append(vs, x.Value)
+			}
+		} else if v != nil {
+			vs = []string{v.Value}
+		}
+		values[k] = vs
+	}
+	for _, e := range entries {
+		compatible := true // with some base leg: every shared key has a matching value
+		for k, ev := range e {
+			vs, shared := values[k]
+			if !shared {
+				continue
+			}
+			s, ok := ev.(string)
+			if !ok {
+				return true
+			}
+			compatible = compatible && slices.Contains(vs, s)
+		}
+		if compatible {
+			return true
+		}
+	}
+	return false
 }

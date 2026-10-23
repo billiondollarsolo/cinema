@@ -377,7 +377,19 @@ jobs:
 	mac := leg
 	mac.Combo = map[string]string{"os": "macos-latest"}
 	p, err = planSkips("ci.yml", []byte(inc), []analyze.Job{leg, mac}, []analyze.Job{leg}, "v")
-	if err != nil || len(p.covered) != 0 || !strings.Contains(strings.Join(p.left, " "), "has an include:") {
+	if err != nil || len(p.covered) != 0 || !strings.Contains(strings.Join(p.left, " "), "extends one of its legs") {
 		t.Errorf("include matrix: %v %+v", err, p)
+	}
+	// eslint's shape: every include entry differs from every leg on some key, so
+	// it stands alone and the reused legs can be excluded.
+	standalone := "on: [pull_request]\njobs:\n  test:\n    strategy:\n      matrix:\n        os: [ubuntu-latest]\n        node: [24.x, 22.x]\n        flags: [\"\"]\n        include:\n          - os: windows-latest\n            node: \"lts/*\"\n          - os: ubuntu-latest\n            node: 24.x\n            flags: \"--experimental\"\n    runs-on: ${{ matrix.os }}\n    steps: [{run: make}]\n"
+	l1 := analyze.Job{Workflow: "ci.yml", ID: "test", Verdict: analyze.Task, Combo: map[string]string{"os": "ubuntu-latest", "node": "24.x", "flags": ""}, MatrixKeys: []string{"os", "node", "flags"}, Proposal: &analyze.Proposal{ID: "a"}}
+	l2 := l1
+	l2.Combo = map[string]string{"os": "ubuntu-latest", "node": "22.x", "flags": ""}
+	win := l1
+	win.Combo = map[string]string{"os": "windows-latest", "node": "lts/*"}
+	p, err = planSkips("ci.yml", []byte(standalone), []analyze.Job{l1, l2, win}, []analyze.Job{l1, l2}, "v")
+	if err != nil || strings.Join(p.matrix, ",") != "test" {
+		t.Errorf("standalone include entries: %v covered %v left %v", err, p.covered, p.left)
 	}
 }
