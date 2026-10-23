@@ -38,7 +38,7 @@ cinema keys init && cinema keys export   # register the public key as CINEMA_TRU
 cinema push                      # sign + push branch and receipts
 ```
 
-`cinema setup` edits your workflows in place: each gets a small `cinema` job that verifies receipts, and each covered job gets `needs: cinema` plus an `if:` that skips it when its tasks were reused. Your checks stay the same; reused ones show as skipped. If the `cinema` job fails, nothing is skipped. (The lab's separate parallel gate is in [`spikes/lab/workflows`](spikes/lab/workflows).)
+`cinema setup` edits your workflows in place: each gets a small `cinema` job that verifies receipts, and each covered job gets `needs: cinema` plus an `if:` that skips it when its tasks were reused. Your checks stay the same; reused ones show as skipped, and a matrix drops just its reused legs. If the `cinema` job fails, nothing is skipped. Rerun `cinema setup` any time (it starts from your original workflows); `cinema setup --undo` takes cinema's edits back out. (The lab's separate parallel gate is in [`spikes/lab/workflows`](spikes/lab/workflows).)
 
 ### From existing CI
 

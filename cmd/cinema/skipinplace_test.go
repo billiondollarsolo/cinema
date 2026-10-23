@@ -248,3 +248,40 @@ func TestPlanSkipsMatrixExclude(t *testing.T) {
 		}
 	}
 }
+
+// unsetup gives back exactly the workflow setup started from.
+func TestUnsetupRoundTrip(t *testing.T) {
+	job := func(id string, combo map[string]string, keys []string) analyze.Job {
+		return analyze.Job{Workflow: "ci.yml", ID: id, Combo: combo, MatrixKeys: keys, Verdict: analyze.Task, Proposal: &analyze.Proposal{ID: id}}
+	}
+	plain := []analyze.Job{job("build", nil, nil), job("lint", nil, nil), job("unit", nil, nil), job("e2e", nil, nil), job("report", nil, nil),
+		job("matrix", map[string]string{"go": "1.26"}, nil), job("matrix", map[string]string{"go": "1.27"}, nil)}
+	var mall, mready []analyze.Job
+	for _, os := range []string{"ubuntu-latest", "macos-latest"} {
+		for _, n := range []string{"20.x", "22.x"} {
+			j := job("test", map[string]string{"os": os, "node": n}, []string{"os", "node"})
+			mall = append(mall, j)
+			if os == "ubuntu-latest" {
+				mready = append(mready, j)
+			}
+		}
+	}
+	for name, c := range map[string]struct {
+		src        string
+		all, ready []analyze.Job
+	}{
+		"plain":  {skipWorkflow, plain, plain[:5]},
+		"matrix": {matrixWorkflow, mall, mready},
+	} {
+		p, err := planSkips("ci.yml", []byte(c.src), c.all, c.ready, "v0.1.0")
+		if err != nil || len(p.covered) == 0 {
+			t.Fatalf("%s: %v %+v", name, err, p)
+		}
+		if got := string(unsetup(p.out)); got != c.src {
+			t.Errorf("%s: unsetup didn't give back the original:\n%s", name, got)
+		}
+		if got := string(unsetup([]byte(c.src))); got != c.src {
+			t.Errorf("%s: unsetup changed a workflow setup never touched", name)
+		}
+	}
+}

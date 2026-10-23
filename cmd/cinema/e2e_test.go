@@ -921,6 +921,28 @@ jobs:
 	if out, code := e.cinema("trust"); code != 0 {
 		t.Fatalf("written tasks.yaml doesn't load: exit %d\n%s", code, out)
 	}
+	// Rerunning setup gives the same files; --undo restores the workflow.
+	setup := func(args ...string) string {
+		cmd := exec.Command(bin, append([]string{"setup"}, args...)...)
+		cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("setup %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	setup("--yes")
+	if again, _ := os.ReadFile(filepath.Join(e.repo, ".github/workflows/ci.yml")); string(again) != string(ci) {
+		t.Fatalf("rerun changed the workflow:\n%s", again)
+	}
+	setup("--undo", "--yes")
+	orig, _ := exec.Command("git", "-C", e.repo, "show", "HEAD:.github/workflows/ci.yml").Output()
+	if back, _ := os.ReadFile(filepath.Join(e.repo, ".github/workflows/ci.yml")); string(back) != string(orig) {
+		t.Fatalf("undo didn't restore the workflow:\n%s", back)
+	}
+	if out := setup("--undo", "--yes"); !strings.Contains(out, "nothing to undo") {
+		t.Fatalf("second undo: %s", out)
+	}
 }
 
 // services: start beside the task (localhost ports, or by name from a

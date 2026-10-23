@@ -25,8 +25,9 @@ func cmdSetup(args []string) int {
 	withReview := fs.Bool("include-review", false, "also draft jobs with open issues (marked REVIEW): check each before relying on it")
 	yes := fs.Bool("yes", false, "write without asking")
 	withMinutes := fs.Bool("minutes", false, "price the jobs that will skip themselves from the repo's recent PR runs (gh CLI)")
+	undo := fs.Bool("undo", false, "remove what setup added to the workflows (tasks.yaml stays)")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: cinema setup [--include-review] [--minutes] [--yes]")
+		fmt.Fprintln(os.Stderr, "usage: cinema setup [--include-review] [--minutes] [--yes] | --undo [--yes]")
 		return exitBadArgs
 	}
 	cwd, _ := os.Getwd()
@@ -34,6 +35,9 @@ func cmdSetup(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cinema setup: %v\n", err)
 		return exitBadArgs
+	}
+	if *undo {
+		return setupUndo(root, *yes)
 	}
 	jobs, err := analyze.Repo(root)
 	if err != nil {
@@ -91,7 +95,7 @@ func cmdSetup(args []string) int {
 			fmt.Fprintf(os.Stderr, "cinema setup: %v\n", err)
 			return exitInternal
 		}
-		p, err := planSkips(wf, src, jobs, picked, version)
+		p, err := planSkips(wf, unsetup(src), jobs, picked, version) // a rerun starts from the original
 		if err != nil {
 			summary = append(summary, fmt.Sprintf("  %s: left as is (%v)", wf, err))
 			continue
@@ -260,4 +264,44 @@ func sortedSet(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// setupUndo puts every workflow back the way it was before setup.
+func setupUndo(root string, yes bool) int {
+	files, _ := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.y*ml"))
+	type change struct {
+		path string
+		body []byte
+	}
+	var changes []change
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		if out := unsetup(src); string(out) != string(src) {
+			changes = append(changes, change{f, out})
+		}
+	}
+	if len(changes) == 0 {
+		fmt.Println("No workflow has cinema's edits; nothing to undo.")
+		return 0
+	}
+	fmt.Println("cinema setup --undo would restore:")
+	for _, c := range changes {
+		rel, _ := filepath.Rel(root, c.path)
+		fmt.Println("  " + rel)
+	}
+	if !yes && !confirm("\nRestore these files? [y/N] ") {
+		fmt.Println("Nothing written.")
+		return 0
+	}
+	for _, c := range changes {
+		if err := os.WriteFile(c.path, c.body, 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "cinema setup: %v\n", err)
+			return exitInternal
+		}
+	}
+	fmt.Println("Restored (see git diff). .cinema/tasks.yaml is still there; delete it if you're done with cinema.")
+	return 0
 }
