@@ -63,6 +63,10 @@ type Proposal struct {
 	Exclusive bool `json:"exclusive,omitempty"`
 	// Services: the job's service containers, started beside the task.
 	Services map[string]Service `json:"services,omitempty"`
+	// Event: the job's steps depend on the triggering event (github.event_name,
+	// github.ref, GITHUB_REF…), so the draft is only evidence for the event it
+	// was drafted for (plan §11.2).
+	Event string `json:"event,omitempty"`
 }
 
 type workflow struct {
@@ -466,6 +470,9 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 		}
 		b.WriteString(strings.Join(body, "\n"))
 		p.Body = b.String()
+		if eventDependent(j) {
+			p.Event = "pull_request" // drafts evaluate github.event_name as the PR gate's
+		}
 		r.Proposal = p
 	}
 	return r
@@ -1182,4 +1189,35 @@ func onePin(had, v, tool string, review func(string)) string {
 		return had
 	}
 	return cmp.Or(v, had)
+}
+
+var eventRef = regexp.MustCompile(`github\.(event_name|ref|ref_name|ref_type|base_ref|head_ref)\b|\$\{?GITHUB_(EVENT_NAME|REF|REF_NAME|REF_TYPE|BASE_REF|HEAD_REF)\b`)
+
+// eventDependent: the job's conditions or scripts read which event or ref
+// triggered it, so its work can differ between a PR and a push.
+func eventDependent(j *job) bool {
+	if eventRef.MatchString(j.If) {
+		return true
+	}
+	for _, v := range j.Env {
+		if eventRef.MatchString(str(v)) {
+			return true
+		}
+	}
+	for _, s := range j.Steps {
+		if eventRef.MatchString(s.If) || eventRef.MatchString(s.Run) {
+			return true
+		}
+		for _, v := range s.Env {
+			if eventRef.MatchString(str(v)) {
+				return true
+			}
+		}
+		for _, v := range s.With {
+			if eventRef.MatchString(str(v)) {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -69,11 +69,20 @@ type Task struct {
 	// bind fixed ports or create a fixed docker network. Scheduling only: not
 	// part of the contract digest.
 	Exclusive bool `yaml:"exclusive"`
+	// Event: the covered job's work depends on the triggering event, so a
+	// receipt only counts for this event (pull_request | push | merge_group).
+	// Empty: any. Metadata, read from the base branch like the task list.
+	Event string `yaml:"event"`
 	// CPUs caps how many CPUs the task sees locally (Linux: CPU affinity), to
 	// match the runner it replaces: tools size worker pools by core count, and
 	// some suites deadlock or time out on a bigger box (lab: prettier's jest on
 	// 16 cores). Scheduling only: not part of the contract digest.
 	CPUs int `yaml:"cpus"`
+	// Memory is the runner's memory, "16g" (a sandbox's limit). With cpus:, the
+	// runner size a sandboxed run reports in its environment, which the CI runner
+	// measures on its side (plan §11.2). Default 16g, cpus 4: ubuntu-latest on
+	// public repos.
+	Memory string `yaml:"memory"`
 	// Container runs the task inside this image, as a GitHub container job does
 	// (root inside it; files are handed back afterwards). The image's resolved
 	// digest is part of the environment fingerprint, and the run uses exactly
@@ -301,6 +310,14 @@ func (t *Task) validate() error {
 	default:
 		return errors.New(`reuse.capture must be "clean" or "workspace"`)
 	}
+	switch t.Event {
+	case "", "pull_request", "push", "merge_group":
+	default:
+		return fmt.Errorf("event must be pull_request, push or merge_group, got %q", t.Event)
+	}
+	if t.Memory != "" && t.MemoryGB() == 0 {
+		return fmt.Errorf("memory must be whole gigabytes like 16g, got %q", t.Memory)
+	}
 	if t.CPUs < 0 {
 		return errors.New("cpus must be a positive number")
 	}
@@ -493,3 +510,27 @@ func (e *enc) sum() string {
 }
 
 func sorted(l []string) []string { c := slices.Clone(l); slices.Sort(c); return c }
+
+// RunnerSize is the runner a sandbox imitates: cpus and memory, defaulting to
+// GitHub's ubuntu-latest on public repos (4 CPUs, 16 GB).
+func (t *Task) RunnerSize() (cpus, memGB int) {
+	cpus, memGB = t.CPUs, t.MemoryGB()
+	if cpus <= 0 {
+		cpus = 4
+	}
+	if memGB <= 0 {
+		memGB = 16
+	}
+	return
+}
+
+// MemoryGB parses memory: ("16g"); 0 if unset or malformed.
+func (t *Task) MemoryGB() int {
+	n := 0
+	if v, ok := strings.CutSuffix(t.Memory, "g"); ok {
+		if _, err := fmt.Sscan(v, &n); err != nil || n <= 0 || fmt.Sprint(n) != v {
+			return 0
+		}
+	}
+	return n
+}

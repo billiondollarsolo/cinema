@@ -30,6 +30,9 @@ const (
 	RunFailed              = "RUN_FAILED"
 	VCSMismatch            = "VCS_MISMATCH"       // vcs_context: exact and the commit differs (or tree dirty)
 	WorkspaceEvidence      = "WORKSPACE_EVIDENCE" // receipt from a working tree; CI needs a clean checkout (ADR 0002)
+	EventMismatch          = "EVENT_MISMATCH"     // the task is evidence for another event (event:)
+	FailedElsewhere        = "FAILED_ELSEWHERE"   // a trusted key published a failure for the same inputs
+	TooCloseToTimeout      = "TOO_CLOSE_TO_TIMEOUT"
 )
 
 // Local states for `cinema status` (plan §10.4). Kept separate from "accepted by CI".

@@ -51,12 +51,15 @@ type Where struct {
 	Root     bool                                            // runs as root
 	Probe    func(cwd string, argv []string) (string, error) // cwd: the task's, repo-relative
 	Inputs   []string                                        // shown in explain; not part of the digest
+	CPUs     int                                             // the runner size it was given
+	MemGB    int
+	OS       string // the image's OS release, "ubuntu-24.04"
 }
 
 // EnvFingerprintIn is EnvFingerprint for a task running at w.
 func (t *Task) EnvFingerprintIn(root string, env []string, w *Where) (Env, error) {
 	var fp Env
-	e := newEnc("cinema.env.v1")
+	e := newEnc("cinema.env.v2")
 	platform := PlatformAny
 	if t.Platform != PlatformAny {
 		platform = Platform()
@@ -74,6 +77,22 @@ func (t *Task) EnvFingerprintIn(root string, env []string, w *Where) (Env, error
 	}
 	e.str(user)
 	fp.Inputs = append(fp.Inputs, user)
+	// The runner's shape (plan §9.2, §11.2): a Linux job's result depends on the
+	// machine size (worker pools, memory) and on its OS release (ubuntu-latest
+	// moves). The CI runner measures itself; a sandbox reports what it was
+	// given. A host process reports the host, which a runner rarely is.
+	if strings.HasPrefix(platform, "linux/") {
+		cpus, mem, rel := HostShape()
+		if w != nil {
+			cpus, mem, rel = w.CPUs, w.MemGB, w.OS
+		}
+		shape := fmt.Sprintf("runner=%dcpu-%dg", cpus, mem)
+		if t.Container == "" { // a job container's OS is its image, pinned above
+			shape += " os=" + rel
+		}
+		e.str(shape)
+		fp.Inputs = append(fp.Inputs, shape)
+	}
 
 	if t.Container != "" {
 		img, err := PinnedImage(t.Container)
@@ -242,4 +261,43 @@ func imageDigest(ref string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no registry digest for %s (built locally?)", ref)
+}
+
+// HostShape is this machine as a runner: CPUs, memory in GiB (rounded), and
+// its OS release ("ubuntu-24.04"; "" where there's no /etc/os-release).
+func HostShape() (cpus, memGB int, osRelease string) {
+	cpus = runtime.NumCPU()
+	if b, err := os.ReadFile("/proc/meminfo"); err == nil {
+		for _, l := range strings.Split(string(b), "\n") {
+			if f := strings.Fields(l); len(f) >= 2 && f[0] == "MemTotal:" {
+				var kb float64
+				fmt.Sscan(f[1], &kb)
+				memGB = int(kb/(1<<20) + 0.5)
+			}
+		}
+	}
+	if b, err := os.ReadFile("/etc/os-release"); err == nil {
+		osRelease = OSRelease(string(b))
+	}
+	return
+}
+
+// OSRelease is "ID-VERSION_ID" from an os-release file's content.
+func OSRelease(content string) string {
+	var id, ver string
+	for _, l := range strings.Split(content, "\n") {
+		k, v, ok := strings.Cut(l, "=")
+		v = strings.Trim(v, `"'`)
+		switch {
+		case !ok:
+		case k == "ID":
+			id = v
+		case k == "VERSION_ID":
+			ver = v
+		}
+	}
+	if id == "" {
+		return ""
+	}
+	return id + "-" + ver
 }

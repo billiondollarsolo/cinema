@@ -371,3 +371,21 @@ jobs:
 		t.Fatalf("a job whose steps changed was skipped:\n%s", got)
 	}
 }
+
+// A task drafted for pull_request (its job reads the event) is no evidence for
+// a push: the job may do other work there (ACC-114).
+func TestGateEventMismatch(t *testing.T) {
+	g := newGateEnv(t)
+	g.write(".cinema/tasks.yaml", strings.Replace(gateTasks, "  check:\n", "  check:\n    event: pull_request\n", 1))
+	g.git("commit", "-qam", "event")
+	g.cinema("trust")
+	g.cinema("run", "--commit", "HEAD", "check")
+	g.git("push", "-q", g.bare, "HEAD:main")
+	if out, code := g.cinema("push"); code != 0 {
+		t.Fatalf("push: %s", out)
+	}
+	got, out, _ := g.gate(t, g.keys, nil) // a push event
+	if got["check"] != "RUN/EVENT_MISMATCH" {
+		t.Fatalf("push event, pull_request task: %v\n%s", got, out)
+	}
+}

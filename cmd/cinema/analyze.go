@@ -107,7 +107,12 @@ func jobName(j analyze.Job) string {
 
 // draft renders proposals as a tasks.yaml, with each job's open issues as
 // comments. Values go through the YAML encoder, so scripts are quoted safely.
-func draft(jobs []analyze.Job) ([]byte, error) {
+func draft(jobs []analyze.Job) ([]byte, error) { return draftFor(jobs, 4, 16) }
+
+// draftFor drafts for a runner size: GitHub's standard Linux runner is 4 CPUs
+// / 16 GB on public repos, 2 / 8 GB on private ones. A sandboxed run reports
+// it and the CI runner measures its own, so it must be the repo's.
+func draftFor(jobs []analyze.Job, cpus, memGB int) ([]byte, error) {
 	m := func(kv ...*yaml.Node) *yaml.Node { return &yaml.Node{Kind: yaml.MappingNode, Content: kv} }
 	s := func(v string) *yaml.Node {
 		n := &yaml.Node{Kind: yaml.ScalarNode, Value: v}
@@ -174,8 +179,11 @@ func draft(jobs []analyze.Job) ([]byte, error) {
 			t.Content = append(t.Content, s("outputs"), flow(seq(p.Outputs...)))
 			j.Notes = append(j.Notes, "outputs: are the paths the job uploads as artifacts; they're left out of the source fingerprint")
 		}
-		// GitHub's standard Linux runner has 4 vCPUs (public repos; 2 on private ones).
-		t.Content = append(t.Content, s("cpus"), s("4"), s("timeout"), s("60m"),
+		if p.Event != "" {
+			t.Content = append(t.Content, s("event"), s(p.Event))
+			j.Notes = append(j.Notes, "the job reads the triggering event or ref: this task is evidence for "+p.Event+" runs only")
+		}
+		t.Content = append(t.Content, s("cpus"), s(fmt.Sprint(cpus)), s("memory"), s(fmt.Sprintf("%dg", memGB)), s("timeout"), s("60m"),
 			s("reuse"), m(s("allowed"), s("true"), s("max_age"), s("24h")))
 		key := s(p.ID)
 		key.HeadComment = analyze.Printable(fmt.Sprintf("%s: %s", j.Workflow, jobName(j)))

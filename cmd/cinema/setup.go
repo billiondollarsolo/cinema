@@ -169,7 +169,14 @@ func cmdSetup(args []string) int {
 		fmt.Println("\nNo job can skip itself yet (see why above); nothing written.")
 		return exitUnsatisfied
 	}
-	tasks, err := draft(kept)
+	cpus, mem := 4, 16
+	switch private, err := repoPrivate(); {
+	case err != nil:
+		fmt.Printf("  note: couldn't tell whether the repo is private (%v); tasks assume a public repo's runner (4 CPUs, 16 GB)\n", err)
+	case private:
+		cpus, mem = 2, 8 // GitHub's standard Linux runner on private repos
+	}
+	tasks, err := draftFor(kept, cpus, mem)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cinema setup: %v\n", err)
 		return exitInternal

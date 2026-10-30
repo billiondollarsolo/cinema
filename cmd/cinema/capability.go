@@ -317,3 +317,18 @@ func requiredLeg(j analyze.Job, required []string) bool {
 	}
 	return false
 }
+
+// repoPrivate reports whether the repo is private (its runners are smaller).
+func repoPrivate() (bool, error) {
+	out, err := ghAPI("repos/{owner}/{repo}")
+	if err != nil {
+		return false, fmt.Errorf("gh api: %v", err)
+	}
+	var r struct {
+		Private *bool `json:"private"`
+	}
+	if err := json.Unmarshal(out, &r); err != nil || r.Private == nil {
+		return false, fmt.Errorf("gh api: no visibility")
+	}
+	return *r.Private, nil
+}

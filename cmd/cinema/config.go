@@ -135,7 +135,8 @@ func probeWhere(r *repo, t *task.Task, pl placement) (*task.Where, error) {
 	if err != nil {
 		return nil, err
 	}
-	key := pl.platform + "|" + r.id + "|" + strings.Join(bins, ":")
+	cpus, mem := t.RunnerSize()
+	key := fmt.Sprintf("%s|%s|%d|%d|%s", pl.platform, r.id, cpus, mem, strings.Join(bins, ":"))
 	probeMu.Lock()
 	defer probeMu.Unlock()
 	if sb := probeBoxes[key]; sb != nil {
@@ -143,6 +144,7 @@ func probeWhere(r *repo, t *task.Task, pl placement) (*task.Where, error) {
 	}
 	sb, err := task.StartSandbox(context.Background(), task.SandboxSpec{Image: loadUserConfig().Image, Platform: pl.platform,
 		Emulated: pl.emulated, Root: r.root, RepoName: filepath.Base(r.id), RepoID: r.id, DataDir: r.dataDir, Bins: bins,
+		CPUs: cpus, MemoryMB: mem * 1024,
 		ProbeOnly: true, Lifetime: 30 * time.Minute})
 	if err != nil {
 		return nil, err
@@ -164,7 +166,8 @@ func stopProbeSandboxes() {
 // containerWhere fingerprints a container: task as what it is: the image's
 // platform (not this host's), root, no probes (container tasks have none).
 func containerWhere(t *task.Task, pl placement) *task.Where {
-	return &task.Where{Platform: pl.platform, Root: true, Inputs: []string{
+	cpus, mem := t.RunnerSize()
+	return &task.Where{Platform: pl.platform, Root: true, CPUs: cpus, MemGB: mem, Inputs: []string{
 		fmt.Sprintf("executor=container image=%s emulated=%t", t.Container, pl.emulated)}}
 }
 

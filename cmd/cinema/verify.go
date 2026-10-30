@@ -189,7 +189,9 @@ func cmdVerify(args []string) int {
 			continue
 		}
 		var d plan.GateDecision
-		if allRun != "" {
+		if t.Event != "" && t.Event != eventName(ev) && allRun == "" {
+			d = plan.GateDecision{Task: id, Decision: plan.GateRun, Reason: plan.EventMismatch}
+		} else if allRun != "" {
 			d = plan.GateDecision{Task: id, Decision: plan.GateRun, Reason: allRun}
 			if !t.Reuse.Allowed {
 				d.Reason = plan.ReuseDisabled
@@ -576,4 +578,19 @@ func candidateLegs(root, wf string) map[string][]analyze.Job {
 		out[j.ID] = append(out[j.ID], j)
 	}
 	return out
+}
+
+// eventName is the triggering event: GitHub's own name when set, else what
+// the payload says.
+func eventName(ev ghEvent) string {
+	if n := os.Getenv("GITHUB_EVENT_NAME"); n != "" {
+		return n
+	}
+	switch {
+	case ev.PullRequest != nil:
+		return "pull_request"
+	case ev.MergeGroup != nil:
+		return "merge_group"
+	}
+	return "push"
 }

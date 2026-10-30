@@ -25,6 +25,9 @@ type Sandbox struct {
 	Emulated bool
 	Image    string // pinned repo@sha256:…
 	Workdir  string // the checkout inside: /home/runner/work/<repo>/<repo>
+	CPUs     int
+	MemGB    int
+	OS       string // the image's os-release, "ubuntu-24.04"
 	env      []string
 }
 
@@ -63,6 +66,7 @@ func StartSandbox(ctx context.Context, sp SandboxSpec) (*Sandbox, error) {
 	s := &Sandbox{Name: "cinema-" + randomHex(), Platform: sp.Platform, Emulated: sp.Emulated, Image: img,
 		Workdir: path.Join("/home/runner/work", sp.RepoName, sp.RepoName)}
 	cpus, mem, shm := cmpInt(sp.CPUs, 4), cmpInt(sp.MemoryMB, 16384), cmpInt(sp.ShmMB, 2048)
+	s.CPUs, s.MemGB = cpus, mem/1024
 	h := sha256.Sum256([]byte(sp.RepoID))
 	vol := "cinema-cache-" + hex.EncodeToString(h[:6])
 	args := []string{"run", "-d", "--rm", "--name", s.Name, "--platform", sp.Platform,
@@ -99,6 +103,9 @@ func StartSandbox(ctx context.Context, sp SandboxSpec) (*Sandbox, error) {
 	if out, err := docker("exec", s.Name, "test", "-e", sentinel).CombinedOutput(); err != nil && !sp.ProbeOnly {
 		s.Stop()
 		return nil, fmt.Errorf("the engine can't see %s (the container shows an empty directory): share it with the engine's VM, e.g. Colima's mounts in ~/.colima/default/colima.yaml%s", sp.Root, strings.TrimSpace(" "+string(out)))
+	}
+	if out, err := docker("exec", s.Name, "cat", "/etc/os-release").Output(); err == nil {
+		s.OS = OSRelease(string(out))
 	}
 	// The runner user takes the host user's uid/gid: files it writes into the
 	// checkout belong to the user, and git sees no "dubious ownership".
@@ -163,7 +170,7 @@ func (s *Sandbox) Probe(cwd string, argv []string) (string, error) {
 
 // Where is the sandbox as a fingerprint location.
 func (s *Sandbox) Where() *Where {
-	return &Where{Platform: s.Platform, Probe: s.Probe, Inputs: []string{
+	return &Where{Platform: s.Platform, Probe: s.Probe, CPUs: s.CPUs, MemGB: s.MemGB, OS: s.OS, Inputs: []string{
 		fmt.Sprintf("executor=container image=%s emulated=%t", s.Image, s.Emulated)}}
 }
 

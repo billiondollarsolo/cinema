@@ -22,3 +22,37 @@ func TestProbeUsesTaskPath(t *testing.T) {
 		t.Fatalf("got %q, %v", out, err)
 	}
 }
+
+// A Linux task's environment includes the runner's shape: a 16-core machine
+// (or a 2-CPU private runner) doesn't match a 4-CPU ubuntu-latest receipt, nor
+// does a new OS release when ubuntu-latest moves.
+func TestRunnerShapeInEnv(t *testing.T) {
+	if got := OSRelease("NAME=\"Ubuntu\"\nID=ubuntu\nVERSION_ID=\"24.04\"\n"); got != "ubuntu-24.04" {
+		t.Fatalf("OSRelease = %q", got)
+	}
+	tk := &Task{Argv: []string{"true"}, Platform: "linux/amd64"}
+	fp := func(w *Where) string {
+		env, err := tk.EnvFingerprintIn(t.TempDir(), nil, w)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return env.Digest
+	}
+	base := &Where{Platform: "linux/amd64", CPUs: 4, MemGB: 16, OS: "ubuntu-24.04"}
+	a := fp(base)
+	for name, w := range map[string]*Where{
+		"cpus": {Platform: "linux/amd64", CPUs: 2, MemGB: 16, OS: "ubuntu-24.04"},
+		"mem":  {Platform: "linux/amd64", CPUs: 4, MemGB: 8, OS: "ubuntu-24.04"},
+		"os":   {Platform: "linux/amd64", CPUs: 4, MemGB: 16, OS: "ubuntu-26.04"},
+	} {
+		if fp(w) == a {
+			t.Errorf("%s change must change the environment", name)
+		}
+	}
+	if fp(&Where{Platform: "linux/amd64", CPUs: 4, MemGB: 16, OS: "ubuntu-24.04"}) != a {
+		t.Fatal("same shape, same environment")
+	}
+	if (&Task{Memory: "16gb"}).MemoryGB() != 0 || (&Task{Memory: "8g"}).MemoryGB() != 8 {
+		t.Fatal("memory parsing")
+	}
+}
