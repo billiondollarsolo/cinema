@@ -1043,11 +1043,16 @@ func TestRunInSandbox(t *testing.T) {
 		}
 		t.Cleanup(func() { os.RemoveAll(d) })
 		e.data = d
+		repo := filepath.Join(d, "repo")
+		if err := os.Rename(e.repo, repo); err != nil {
+			t.Fatal(err)
+		}
+		e.repo = repo
 	}
 	e.write(".cinema/tasks.yaml", `schema_version: 1
 tasks:
   sb:
-    argv: [bash, -c, 'echo "who=$(id -un) ws=$GITHUB_WORKSPACE pwd=$(pwd) home=$HOME secret=${CINEMA_TEST_SECRET:+passed}"; touch made-here.txt']
+    argv: [bash, -c, 'echo "who=$(id -un) ws=$GITHUB_WORKSPACE pwd=$(pwd) home=$HOME secret=${CINEMA_TEST_SECRET:+passed}"; git log -1 --format=%s 2>&1; touch made-here.txt']
     platform: linux/`+runtime.GOARCH+`
     toolchain: [{cmd: [bash, --version]}]
     env: [CINEMA_TEST_SECRET]
@@ -1074,7 +1079,7 @@ tasks:
 	}
 	name := filepath.Base(e.repo)
 	ws := "/home/runner/work/" + name + "/" + name
-	if log, _ := e.cinemaEnv(sbEnv, "log", "sb"); !strings.Contains(log, "who=runner ws="+ws+" pwd="+ws+" home=/home/runner secret=passed") || strings.Contains(log, "s3cret-value") {
+	if log, _ := e.cinemaEnv(sbEnv, "log", "sb"); !strings.Contains(log, "who=runner ws="+ws+" pwd="+ws+" home=/home/runner secret=passed") || !strings.Contains(log, "\ntasks") || strings.Contains(log, "s3cret-value") {
 		t.Fatalf("not run like a runner:\n%s", log)
 	}
 	exp, _ := e.cinemaEnv(sbEnv, "explain", "--json", "sb")

@@ -67,6 +67,7 @@ func StartSandbox(ctx context.Context, sp SandboxSpec) (*Sandbox, error) {
 		Workdir: path.Join("/home/runner/work", sp.RepoName, sp.RepoName)}
 	cpus, mem, shm := cmpInt(sp.CPUs, 4), cmpInt(sp.MemoryMB, 16384), cmpInt(sp.ShmMB, 2048)
 	s.CPUs, s.MemGB = cpus, mem/1024
+	var alternates []string
 	h := sha256.Sum256([]byte(sp.RepoID))
 	vol := "cinema-cache-" + hex.EncodeToString(h[:6])
 	args := []string{"run", "-d", "--rm", "--name", s.Name, "--platform", sp.Platform,
@@ -81,6 +82,17 @@ func StartSandbox(ctx context.Context, sp SandboxSpec) (*Sandbox, error) {
 	}
 	if !sp.ProbeOnly {
 		args = append(args, "-v", sp.Root+":"+s.Workdir)
+		// A clean checkout borrows the real repo's objects (git alternates, by
+		// host path): mount them read-only at that path, or git inside the
+		// container sees a broken repo (P4: go build's VCS stamping failed).
+		if b, err := os.ReadFile(filepath.Join(sp.Root, ".git", "objects", "info", "alternates")); err == nil {
+			for _, l := range strings.Split(string(b), "\n") {
+				if l = strings.TrimSpace(l); filepath.IsAbs(l) {
+					args = append(args, "-v", l+":"+l+":ro")
+					alternates = append(alternates, l)
+				}
+			}
+		}
 	}
 	if sp.Artifacts != "" {
 		args = append(args, "-v", sp.Artifacts+":/opt/cinema/artifacts")
@@ -107,6 +119,12 @@ func StartSandbox(ctx context.Context, sp SandboxSpec) (*Sandbox, error) {
 	if out, err := docker("exec", s.Name, "cat", "/etc/os-release").Output(); err == nil {
 		s.OS = OSRelease(string(out))
 	}
+	for _, l := range alternates {
+		if err := docker("exec", s.Name, "test", "-d", path.Join(l, "pack")).Run(); err != nil {
+			s.Stop()
+			return nil, fmt.Errorf("the engine can't see the repo's git objects at %s: share that directory with the engine's VM (Colima shares only your home directory by default)", l)
+		}
+	}
 	// The runner user takes the host user's uid/gid: files it writes into the
 	// checkout belong to the user, and git sees no "dubious ownership".
 	uid, gid := os.Getuid(), os.Getgid()
@@ -115,7 +133,10 @@ id runner >/dev/null
 [ "$(id -u runner)" = %[1]d ] || usermod -o -u %[1]d runner
 [ "$(id -g runner)" = %[2]d ] || groupmod -o -g %[2]d runner
 mkdir -p /home/runner/work/_temp /home/runner/go/bin %[4]s
-chown %[1]d:%[2]d /home/runner /home/runner/work /home/runner/work/%[3]s /home/runner/work/_temp /home/runner/go /home/runner/go/bin /home/runner/go/pkg /home/runner/go/pkg/mod /home/runner/.cache /home/runner/.npm 2>/dev/null || true`, uid, gid, sp.RepoName, s.Workdir)
+chown %[1]d:%[2]d /home/runner /home/runner/work /home/runner/work/%[3]s /home/runner/work/_temp /home/runner/go /home/runner/go/bin /home/runner/go/pkg /home/runner/go/pkg/mod /home/runner/.cache /home/runner/.npm 2>/dev/null || true
+# As actions/checkout does: VM file sharing can show the checkout under another
+# owner, and git then refuses it ("dubious ownership").
+printf '[safe]\n\tdirectory = %[4]s\n' > /home/runner/.gitconfig && chown %[1]d:%[2]d /home/runner/.gitconfig`, uid, gid, sp.RepoName, s.Workdir)
 	if out, err := docker("exec", "-u", "0", s.Name, "sh", "-c", setup).CombinedOutput(); err != nil {
 		s.Stop()
 		return nil, fmt.Errorf("sandbox setup (does the image have a runner user?): %v: %s", err, firstLine(string(out)))
