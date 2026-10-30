@@ -191,6 +191,9 @@ func cmdVerify(args []string) int {
 		var d plan.GateDecision
 		if t.Event != "" && t.Event != eventName(ev) && allRun == "" {
 			d = plan.GateDecision{Task: id, Decision: plan.GateRun, Reason: plan.EventMismatch}
+		} else if why := floatingMoved(t); why != "" && allRun == "" {
+			d = plan.GateDecision{Task: id, Decision: plan.GateRun, Reason: plan.EnvironmentMismatch}
+			fmt.Fprintf(os.Stderr, "cinema verify: %s: %s\n", id, why)
 		} else if allRun != "" {
 			d = plan.GateDecision{Task: id, Decision: plan.GateRun, Reason: allRun}
 			if !t.Reuse.Allowed {
@@ -594,3 +597,22 @@ func eventName(ev ghEvent) string {
 	}
 	return "push"
 }
+
+// floatingMoved resolves a task's floating: specs as CI's setup actions would
+// today. A pin that isn't today's release, or a spec that can't be resolved,
+// means the job runs: the receipt describes yesterday's toolchain (plan §11.2).
+func floatingMoved(t *task.Task) string {
+	for tool, spec := range t.Floating {
+		pin := map[string]string{"go": t.Runtime.Go, "node": t.Runtime.Node}[tool]
+		got, err := floatingResolve(map[string]string{"go": "Go", "node": "Node"}[tool], spec)
+		switch {
+		case err != nil:
+			return fmt.Sprintf("can't resolve %s %q today (%v): running it", tool, spec, err)
+		case got != pin:
+			return fmt.Sprintf("%s %q is %s today; the task pins %s: running it (rerun cinema setup to pin the new release)", tool, spec, got, pin)
+		}
+	}
+	return ""
+}
+
+var floatingResolve = analyze.Resolve // a var for tests

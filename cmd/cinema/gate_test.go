@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"github.com/billiondollarsolo/cinema/internal/task"
 	"os"
 	"os/exec"
@@ -420,5 +421,25 @@ func TestFailurePublishedAndFlakyStreak(t *testing.T) {
 	g.cinema("push")
 	if got, out, _ := g.gate(t, g.keys, nil); got["check"] != "REUSE/" {
 		t.Fatalf("three passes in a row: %v\n%s", got, out)
+	}
+}
+
+// A pin resolved from a floating spec stops matching when the spec resolves to
+// a newer release, or can't be resolved (ACC-112).
+func TestFloatingMoved(t *testing.T) {
+	old := floatingResolve
+	defer func() { floatingResolve = old }()
+	tk := &task.Task{Runtime: task.Runtime{Go: "1.26.10"}, Floating: map[string]string{"go": "stable"}}
+	floatingResolve = func(tool, spec string) (string, error) { return "1.26.10", nil }
+	if why := floatingMoved(tk); why != "" {
+		t.Fatalf("unchanged: %s", why)
+	}
+	floatingResolve = func(tool, spec string) (string, error) { return "1.27.0", nil }
+	if why := floatingMoved(tk); !strings.Contains(why, "1.27.0") {
+		t.Fatalf("moved: %q", why)
+	}
+	floatingResolve = func(tool, spec string) (string, error) { return "", errors.New("offline") }
+	if why := floatingMoved(tk); why == "" {
+		t.Fatal("unresolvable must run")
 	}
 }
