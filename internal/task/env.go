@@ -41,18 +41,35 @@ type Env struct {
 // env is the environment the task runs with (RuntimeEnv; nil = inherited):
 // probes run in it, so they report the runtime the task will actually use.
 func (t *Task) EnvFingerprint(root string, env []string) (Env, error) {
+	return t.EnvFingerprintIn(root, env, nil)
+}
+
+// Where says where a task runs, for its fingerprint: a container (Sandbox)
+// reports its own platform and user and runs the probes inside. nil = this host.
+type Where struct {
+	Platform string                                          // linux/amd64, the container's
+	Root     bool                                            // runs as root
+	Probe    func(cwd string, argv []string) (string, error) // cwd: the task's, repo-relative
+	Inputs   []string                                        // shown in explain; not part of the digest
+}
+
+// EnvFingerprintIn is EnvFingerprint for a task running at w.
+func (t *Task) EnvFingerprintIn(root string, env []string, w *Where) (Env, error) {
 	var fp Env
 	e := newEnc("cinema.env.v1")
 	platform := PlatformAny
 	if t.Platform != PlatformAny {
 		platform = Platform()
+		if w != nil {
+			platform = w.Platform
+		}
 	}
 	e.str(platform)
 	fp.Inputs = append(fp.Inputs, "platform="+platform)
 	// Root changes results: permission tests fail (or skip, i.e. pass) as root.
 	// GitHub's runners are non-root, container jobs often root; they must match.
 	user := "user=nonroot"
-	if os.Geteuid() == 0 || t.Container != "" {
+	if (w == nil && os.Geteuid() == 0) || (w != nil && w.Root) || t.Container != "" {
 		user = "user=root" // container tasks run as root inside the image, like GitHub's
 	}
 	e.str(user)
@@ -82,7 +99,13 @@ func (t *Task) EnvFingerprint(root string, env []string) (Env, error) {
 	e.u64(uint64(len(t.Toolchain)))
 	for _, tc := range t.Toolchain {
 		if len(tc.Cmd) > 0 {
-			out, err := toolOutput(dir, tc.Cmd, env)
+			var out string
+			var err error
+			if w != nil {
+				out, err = w.Probe(t.Cwd, tc.Cmd)
+			} else {
+				out, err = toolOutput(dir, tc.Cmd, env)
+			}
 			if err != nil {
 				return Env{}, fmt.Errorf("toolchain %q: %w", strings.Join(tc.Cmd, " "), err)
 			}
@@ -127,6 +150,9 @@ func (t *Task) EnvFingerprint(root string, env []string) (Env, error) {
 		fp.Inputs = append(fp.Inputs, "env "+n+" "+state) // never the value
 	}
 	fp.Digest = e.sum()
+	if w != nil {
+		fp.Inputs = append(fp.Inputs, w.Inputs...)
+	}
 	return fp, nil
 }
 

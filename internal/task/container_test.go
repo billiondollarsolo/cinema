@@ -20,9 +20,9 @@ func TestContainerValidation(t *testing.T) {
 
 func TestContainerRunArgv(t *testing.T) {
 	tk := &Task{Argv: []string{"make", "test"}, Cwd: "web"}
-	argv, _ := tk.ContainerRun("/w/slot", "quay.io/x/y@sha256:abc", "", []int{4, 5})
+	argv, _ := tk.ContainerRun("/w/slot", "quay.io/x/y@sha256:abc", "", []int{4, 5}, "linux/amd64")
 	s := strings.Join(argv, " ")
-	for _, want := range []string{"docker run --rm --name cinema-", "-v /w/slot:/w/slot", "-w /w/slot/web", "--cpuset-cpus 4,5", "quay.io/x/y@sha256:abc -c", "sh make test"} {
+	for _, want := range []string{"docker run --rm --name cinema-", "--platform linux/amd64", "-v /w/slot:/w/slot", "-w /w/slot/web", "--cpuset-cpus 4,5", "quay.io/x/y@sha256:abc -c", "sh make test"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("missing %q in %s", want, s)
 		}

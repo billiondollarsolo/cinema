@@ -81,6 +81,11 @@ type Timing struct {
 type Executor struct {
 	Kind    string `json:"kind"`
 	Version string `json:"version"`
+	// Where it ran (plan §7.1). Container runs name the runner image, the arch
+	// the code ran as and whether that was emulated. Never a hostname.
+	Where    string `json:"where,omitempty"` // container | host-process
+	Image    string `json:"image,omitempty"`
+	Emulated bool   `json:"emulated,omitempty"`
 }
 
 // Envelope is a DSSE envelope.

@@ -76,7 +76,7 @@ func loadForReport(cmd string, asJSON bool) (*repo, int) {
 }
 
 func decide(r *repo, t *task.Task) (taskStatus, plan.Current, []store.TaskRun) {
-	ts := taskStatus{Platform: t.Platform, Local: t.Platform == task.PlatformAny || t.Platform == task.Platform()}
+	ts := taskStatus{Platform: t.Platform, Local: placeable(t)}
 	ts.Task = t.ID
 	runs, err := r.st.TaskRuns(r.id, t.ID, 50)
 	if err != nil {
@@ -103,6 +103,7 @@ func decide(r *repo, t *task.Task) (taskStatus, plan.Current, []store.TaskRun) {
 }
 
 func cmdStatus(args []string) int {
+	defer stopProbeSandboxes()
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "write one JSON envelope to stdout")
 	if err := fs.Parse(args); err != nil {
@@ -156,6 +157,7 @@ func cmdStatus(args []string) int {
 }
 
 func cmdExplain(args []string) int {
+	defer stopProbeSandboxes()
 	fs := flag.NewFlagSet("explain", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "write one JSON envelope to stdout")
 	if err := fs.Parse(args); err != nil {
@@ -348,3 +350,5 @@ func firstWith(ss []string, p string) string {
 	}
 	return "unresolved"
 }
+
+func placeable(t *task.Task) bool { _, ok := place(t); return ok }

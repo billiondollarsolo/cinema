@@ -28,6 +28,7 @@ import (
 const tmpPrefix = "cinema-run-"
 
 func cmdRun(args []string) int {
+	defer stopProbeSandboxes()
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	all := fs.Bool("all", false, "run every task this machine can satisfy that isn't already reusable")
 	force := fs.Bool("force", false, "with --all: rerun tasks that are already reusable")
@@ -80,7 +81,7 @@ func cmdRun(args []string) int {
 	if *all {
 		for _, id := range sortedIDs(w.cfg) {
 			t := w.cfg.Tasks[id]
-			if t.Platform != task.PlatformAny && t.Platform != task.Platform() {
+			if _, ok := place(t); !ok {
 				continue // can't produce evidence here
 			}
 			if !t.Reuse.Allowed {
@@ -101,7 +102,7 @@ func cmdRun(args []string) int {
 				fmt.Fprintf(os.Stderr, "cinema run: no task %q (have: %s)\n", id, strings.Join(sortedIDs(w.cfg), ", "))
 				return exitBadArgs
 			}
-			if t.Platform != task.PlatformAny && t.Platform != task.Platform() {
+			if _, ok := place(t); !ok {
 				fmt.Fprintf(os.Stderr, "cinema run: %s needs %s; running anyway, but it won't count as evidence here\n", id, t.Platform)
 			}
 			todo = append(todo, t)
@@ -230,6 +231,42 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 		return true, false
 	}
 	defer stopServices()
+	pl, _ := place(t)
+	if pl.sandbox {
+		// A runner-like container (plan §9.2). Only from a clean checkout: the
+		// bind-mounted tree must be exactly the commit.
+		if w.capture != "clean" {
+			say("✗ %s  runs in a container only from a clean checkout: use --commit\n", t.ID)
+			return true, false
+		}
+		// ponytail: services are reachable by name from the sandbox, not on
+		// localhost as on a runner host; tasks that use localhost ports fail
+		// (never pass) until the sandbox shares the services' network namespace.
+		bins, err := t.RuntimeBins(w.dataDir, "linux", strings.TrimPrefix(pl.platform, "linux/"))
+		if err != nil {
+			say("✗ %s  runtime: %v\n", t.ID, err)
+			return true, false
+		}
+		art, _ := artifactsRoot()
+		sb, err := task.StartSandbox(ctx, task.SandboxSpec{Image: loadUserConfig().Image, Platform: pl.platform, Emulated: pl.emulated,
+			Root: w.root, RepoName: filepath.Base(w.id), RepoID: w.id, DataDir: w.dataDir, Bins: bins, Artifacts: art,
+			CPUs: t.CPUs, Network: network})
+		if err != nil {
+			say("✗ %s  %v\n", t.ID, err)
+			return true, false
+		}
+		defer sb.Stop()
+		var extra []string // allowlisted env inputs keep their host values, as fingerprinted
+		for _, n := range t.Env {
+			if v, ok := os.LookupEnv(n); ok {
+				extra = append(extra, n+"="+v)
+			}
+		}
+		opts.Argv, opts.Env, opts.CPUs = sb.Exec(t.Cwd, t.Argv, extra), os.Environ(), nil
+		c := *w
+		c.where = sb.Where()
+		w = &c
+	}
 	if t.Container != "" {
 		img, err := task.PinnedImage(t.Container) // the same digest the fingerprint records
 		if err != nil {
@@ -237,7 +274,10 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 			return true, false
 		}
 		var stop func()
-		opts.Argv, stop = t.ContainerRun(w.root, img, network, opts.CPUs)
+		opts.Argv, stop = t.ContainerRun(w.root, img, network, opts.CPUs, pl.platform)
+		c := *w
+		c.where = containerWhere(t, pl)
+		w = &c
 		defer stop()
 		opts.CPUs = nil
 	}
@@ -246,16 +286,18 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 		ctx, cancel = context.WithTimeout(ctx, t.Timeout)
 		defer cancel()
 	}
-	renv, err := t.RuntimeEnv(w.dataDir)
-	if err != nil {
-		say("✗ %s  runtime: %v\n", t.ID, err)
-		return true, false
+	if !pl.sandbox {
+		renv, err := t.RuntimeEnv(w.dataDir)
+		if err != nil {
+			say("✗ %s  runtime: %v\n", t.ID, err)
+			return true, false
+		}
+		opts.Env = renv // provisioned runtime (nil: inherit)
+		if opts.Env == nil {
+			opts.Env = os.Environ()
+		}
 	}
-	opts.Env = renv // provisioned runtime (nil: inherit)
-	if opts.Env == nil {
-		opts.Env = os.Environ()
-	}
-	if w.capture == "clean" {
+	if w.capture == "clean" && !pl.sandbox {
 		// A private TMPDIR, removed afterwards: tools killed mid-run (go's
 		// /tmp/go-build* work dirs) can't leave junk behind (plan §13.1). Only in
 		// cinema's own checkouts; `cinema exec` keeps the caller's environment.

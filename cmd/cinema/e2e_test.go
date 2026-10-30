@@ -82,6 +82,14 @@ func (e *env) cinema(args ...string) (string, int) {
 	return string(out), cmd.ProcessState.ExitCode()
 }
 
+func (e *env) cinemaEnv(env []string, args ...string) (string, int) {
+	cmd := exec.Command(bin, args...)
+	cmd.Dir = e.repo
+	cmd.Env = append(append(os.Environ(), "CINEMA_DATA_DIR="+e.data), env...)
+	out, _ := cmd.Output()
+	return string(out), cmd.ProcessState.ExitCode()
+}
+
 func (e *env) states() map[string]string {
 	out, _ := e.cinema("status", "--json")
 	var v struct {
@@ -855,7 +863,8 @@ func TestRunInContainer(t *testing.T) {
 	e := newEnv(t)
 	e.write(".cinema/tasks.yaml", `schema_version: 1
 tasks:
-  in-image: {argv: [sh, -c, "id -u > uid.txt && cat /etc/alpine-release"], platform: linux/amd64, container: "alpine:3.20", reuse: {allowed: true, max_age: 1h}}
+  in-image: {argv: [sh, -c, "id -u > uid.txt && cat /etc/alpine-release"], platform: linux/`+runtime.GOARCH+`, container: "alpine:3.20", reuse: {allowed: true, max_age: 1h}}
+  other-arch: {argv: [sh, -c, "uname -m"], platform: linux/`+map[string]string{"amd64": "arm64", "arm64": "amd64"}[runtime.GOARCH]+`, container: "alpine:3.20", reuse: {allowed: true, max_age: 1h}}
 `)
 	e.git("add", "-A")
 	e.git("commit", "-qm", "tasks")
@@ -874,8 +883,23 @@ tasks:
 		t.Fatalf("didn't run in the image:\n%s", log)
 	}
 	exp, _ := e.cinema("explain", "--json", "in-image")
-	if !strings.Contains(exp, "container alpine@sha256:") || !strings.Contains(exp, "user=root") {
-		t.Fatalf("explain doesn't show the pinned image:\n%s", exp)
+	if !strings.Contains(exp, "container alpine@sha256:") || !strings.Contains(exp, "user=root") || !strings.Contains(exp, "platform=linux/"+runtime.GOARCH) {
+		t.Fatalf("explain doesn't show the pinned image and the container's platform:\n%s", exp)
+	}
+	// Another arch is emulated only when the user opts in, and the run says so.
+	cmd = exec.Command(bin, "run", "--commit", "HEAD", "other-arch")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data, "CINEMA_EMULATE=")
+	if out, _ := cmd.CombinedOutput(); !strings.Contains(string(out), "won't count as evidence") {
+		t.Fatalf("other arch without opt-in must not be evidence:\n%s", out)
+	}
+	cmd = exec.Command(bin, "run", "--commit", "HEAD", "other-arch")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data, "CINEMA_EMULATE=amd64,arm64")
+	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "✓ other-arch") {
+		t.Skipf("this engine can't emulate the other arch: %v\n%s", err, out)
+	}
+	exp, _ = e.cinemaEnv([]string{"CINEMA_EMULATE=amd64,arm64"}, "explain", "--json", "other-arch")
+	if !strings.Contains(exp, "emulated=true") {
+		t.Fatalf("an emulated run must say so:\n%s", exp)
 	}
 }
 
@@ -994,5 +1018,65 @@ tasks:
 	exp, _ := e.cinema("explain", "--json", "on-host")
 	if !strings.Contains(exp, "service cache redis@sha256:") {
 		t.Fatalf("service image not fingerprinted:\n%s", exp)
+	}
+}
+
+// A Linux task runs in a runner-like sandbox (plan §9.2) when an engine is
+// configured: as the runner user at the runner's workspace path, probes inside
+// the container, and status agrees it's reusable. Nothing is left running.
+func TestRunInSandbox(t *testing.T) {
+	if testing.Short() || exec.Command("docker", "info").Run() != nil {
+		t.Skip("no docker (or -short)")
+	}
+	img := "cinema-runner-test:latest"
+	if out, err := exec.Command("docker", "build", "-q", "-t", img, "../../runner").CombinedOutput(); err != nil {
+		t.Skipf("can't build the runner image: %v\n%s", err, out)
+	}
+	e := newEnv(t)
+	if runtime.GOOS == "darwin" {
+		// VM-based engines (Colima) share only the home directory; the default
+		// temp dir isn't in it. Real data dirs are (~/Library/Application Support).
+		home, _ := os.UserHomeDir()
+		d, err := os.MkdirTemp(filepath.Join(home, "Library", "Caches"), "cinema-test-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(d) })
+		e.data = d
+	}
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  sb:
+    argv: [bash, -c, 'echo "who=$(id -un) ws=$GITHUB_WORKSPACE pwd=$(pwd) home=$HOME"; touch made-here.txt']
+    platform: linux/`+runtime.GOARCH+`
+    toolchain: [{cmd: [bash, --version]}]
+    reuse: {allowed: true, max_age: 1h}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	sbEnv := []string{"CINEMA_ENGINE=docker", "CINEMA_RUNNER_IMAGE=" + img}
+	cmd := exec.Command(bin, "run", "--commit", "HEAD", "sb")
+	cmd.Dir, cmd.Env = e.repo, append(append(os.Environ(), "CINEMA_DATA_DIR="+e.data), sbEnv...)
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "✓ sb") {
+		t.Fatalf("err=%v:\n%s", err, out)
+	}
+	name := filepath.Base(e.repo)
+	ws := "/home/runner/work/" + name + "/" + name
+	if log, _ := e.cinemaEnv(sbEnv, "log", "sb"); !strings.Contains(log, "who=runner ws="+ws+" pwd="+ws+" home=/home/runner") {
+		t.Fatalf("not run like a runner:\n%s", log)
+	}
+	exp, _ := e.cinemaEnv(sbEnv, "explain", "--json", "sb")
+	for _, want := range []string{"platform=linux/" + runtime.GOARCH, "user=nonroot", "GNU bash", "executor=container"} {
+		if !strings.Contains(exp, want) {
+			t.Fatalf("explain lacks %q (probes must run in the container):\n%s", want, exp)
+		}
+	}
+	if st, _ := e.cinemaEnv(sbEnv, "status", "--json"); !strings.Contains(st, `"state": "reusable"`) {
+		t.Fatalf("status must agree with the sandbox run:\n%s", st)
+	}
+	if left, _ := exec.Command("docker", "ps", "-aq", "--filter", "label=cinema.sandbox=1").Output(); len(strings.TrimSpace(string(left))) > 0 {
+		t.Fatalf("sandboxes left behind: %s", left)
 	}
 }

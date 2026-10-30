@@ -301,7 +301,7 @@ func executeGateTask(root string, t *task.Task, tr *gateTaskReport) {
 			return
 		}
 		var stop func()
-		argv, stop = t.ContainerRun(root, img, network, nil)
+		argv, stop = t.ContainerRun(root, img, network, nil, t.Platform)
 		defer stop()
 	}
 	res, err := record.Run(ctx, record.Options{Argv: argv, Env: env,

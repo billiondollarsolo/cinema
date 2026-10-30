@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -142,7 +143,12 @@ var nodeDist = "https://nodejs.org/dist"
 // downloading and verifying it on first use. Install is atomic (extract to a
 // temp dir, then rename), so a crash never leaves a half-installed runtime.
 func provisionNode(dataDir, ver string) (string, error) {
-	osName, arch := runtime.GOOS, runtime.GOARCH
+	return provisionNodeFor(dataDir, ver, runtime.GOOS, runtime.GOARCH)
+}
+
+// provisionNodeFor is provisionNode for another OS/arch: a Linux build for a
+// container on a Mac, say (it's mounted in, never run on the host).
+func provisionNodeFor(dataDir, ver, osName, arch string) (string, error) {
 	switch arch {
 	case "amd64":
 		arch = "x64"
@@ -276,6 +282,96 @@ func extractTarGz(data []byte, dir, prefix string) error {
 			}
 		}
 	}
+}
+
+// goDist is go.dev's download host (a variable so tests can point it at a fake).
+var goDist = "https://go.dev/dl"
+
+// provisionGoFor returns the bin dir of the official Go <ver> release for
+// osName/arch under dataDir/runtimes/go, downloading it on first use and
+// checking it against the SHA-256 go.dev publishes. Unlike GOTOOLCHAIN it needs
+// no go already installed (P4-1: a clean container has none).
+func provisionGoFor(dataDir, ver, osName, arch string) (string, error) {
+	name := fmt.Sprintf("go%s.%s-%s", ver, osName, arch)
+	root := filepath.Join(dataDir, "runtimes", "go")
+	dest := filepath.Join(root, name)
+	if fi, err := os.Stat(filepath.Join(dest, "bin", "go")); err == nil && fi.Mode().IsRegular() {
+		now := time.Now()
+		_ = os.Chtimes(dest, now, now)
+		return filepath.Join(dest, "bin"), nil
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: 10 * time.Minute}
+	idx, err := httpGet(client, goDist+"/?mode=json&include=all", 32<<20)
+	if err != nil {
+		return "", err
+	}
+	var rels []struct {
+		Version string `json:"version"`
+		Files   []struct {
+			Filename string `json:"filename"`
+			SHA256   string `json:"sha256"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(idx, &rels); err != nil {
+		return "", fmt.Errorf("go.dev release index: %w", err)
+	}
+	want := ""
+	for _, r := range rels {
+		for _, f := range r.Files {
+			if r.Version == "go"+ver && f.Filename == name+".tar.gz" {
+				want = f.SHA256
+			}
+		}
+	}
+	if len(want) != 64 {
+		return "", fmt.Errorf("%s.tar.gz not in go.dev's release index", name)
+	}
+	tarball, err := httpGet(client, goDist+"/"+name+".tar.gz", 300<<20)
+	if err != nil {
+		return "", err
+	}
+	if h := sha256.Sum256(tarball); hex.EncodeToString(h[:]) != want {
+		return "", errors.New("checksum mismatch")
+	}
+	tmp, err := os.MkdirTemp(root, ".install-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmp)
+	if err := extractTarGz(tarball, tmp, "go/"); err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		if _, serr := os.Stat(filepath.Join(dest, "bin", "go")); serr == nil {
+			return filepath.Join(dest, "bin"), nil
+		}
+		return "", err
+	}
+	return filepath.Join(dest, "bin"), nil
+}
+
+// RuntimeBins provisions t's pinned runtimes for osName/arch and returns their
+// bin dirs, in PATH order. For a container: they're mounted in read-only.
+func (t *Task) RuntimeBins(dataDir, osName, arch string) ([]string, error) {
+	var bins []string
+	if v := t.Runtime.Node; v != "" {
+		b, err := provisionNodeFor(dataDir, v, osName, arch)
+		if err != nil {
+			return nil, fmt.Errorf("node %s: %w", v, err)
+		}
+		bins = append(bins, b)
+	}
+	if v := t.Runtime.Go; v != "" {
+		b, err := provisionGoFor(dataDir, v, osName, arch)
+		if err != nil {
+			return nil, fmt.Errorf("go %s: %w", v, err)
+		}
+		bins = append(bins, b)
+	}
+	return bins, nil
 }
 
 // provisionGo makes the go command fetch the pinned toolchain now. On a fresh

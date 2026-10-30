@@ -53,6 +53,7 @@ type repo struct {
 	cachePath    string
 	snaps        map[string]string // memoized source digests by extra-inputs key
 	dataDir      string            // for provisioned runtimes
+	where        *task.Where       // the task runs in a sandbox (place): its platform, user and probes
 }
 
 func openRepo() (*repo, error) {
@@ -137,11 +138,23 @@ func (r *repo) current(t *task.Task) (plan.Current, task.Env, error) {
 	if t.RunsCommands() && !r.trusted() {
 		return cur, task.Env{}, errUntrusted
 	}
-	renv, err := t.RuntimeEnv(r.dataDir)
-	if err != nil {
-		return cur, task.Env{}, err
+	where := r.where
+	if where == nil {
+		if pl, ok := place(t); ok && pl.sandbox {
+			if where, err = probeWhere(r, t, pl); err != nil {
+				return cur, task.Env{}, err
+			}
+		} else if ok && t.Container != "" {
+			where = containerWhere(t, pl)
+		}
 	}
-	env, err := t.EnvFingerprint(r.root, renv)
+	var renv []string
+	if where == nil { // in a sandbox, runtimes are the container's (RuntimeBins)
+		if renv, err = t.RuntimeEnv(r.dataDir); err != nil {
+			return cur, task.Env{}, err
+		}
+	}
+	env, err := t.EnvFingerprintIn(r.root, renv, where)
 	if err != nil {
 		return cur, env, err
 	}

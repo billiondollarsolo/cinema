@@ -77,6 +77,7 @@ func repositoryID(remoteURL string) (string, error) {
 }
 
 func cmdPush(args []string) int {
+	defer stopProbeSandboxes()
 	fs := flag.NewFlagSet("push", flag.ContinueOnError)
 	remote := fs.String("remote", "origin", "git `REMOTE` to push to")
 	notesOnly := fs.Bool("notes-only", false, "push evidence only, not the branch (e.g. from a VPS)")
@@ -279,13 +280,13 @@ func receiptsFor(r *repo, sha, repoID string, priv ed25519.PrivateKey, blobs *sn
 			Subject: []evidence.Subject{{Name: "cinema-action:" + t.ID,
 				Digest: map[string]string{"sha256": strings.TrimPrefix(task.ActionKey(contract, snap.Digest, run.Env, vcs), "sha256:")}}},
 			Predicate: evidence.Predicate{
-				SchemaVersion: 1, RunID: run.ID, RepositoryID: repoID, Platform: task.Platform(),
+				SchemaVersion: 1, RunID: run.ID, RepositoryID: repoID, Platform: runPlatform(run),
 				Task:      evidence.TaskRef{ID: t.ID, ContractDigest: contract},
 				Source:    evidence.SourceRef{Digest: snap.Digest, ObservedCommit: sha, Capture: captureName(run.Capture)},
 				EnvDigest: run.Env, VCS: vcs,
 				Result:   evidence.Result{Status: "passed", ExitCode: 0, Origin: "fresh"},
 				Timing:   evidence.Timing{StartedAt: run.Started.UTC(), DurationMS: run.DurationMS, TimeAuthority: "local-clock"},
-				Executor: evidence.Executor{Kind: "cinema-cli", Version: version},
+				Executor: runExecutor(run),
 			},
 		}
 		env, err := evidence.Sign(st, priv)
@@ -313,7 +314,7 @@ func runMissingClean(r *repo, jobs int) int {
 	var todo []*task.Task
 	for _, id := range sortedIDs(r.cfg) {
 		t := r.cfg.Tasks[id]
-		if !t.Reuse.Allowed || (t.Platform != task.PlatformAny && t.Platform != task.Platform()) {
+		if _, ok := place(t); !t.Reuse.Allowed || !ok {
 			continue
 		}
 		snap, err := snapshot.TakeCommit(r.root, sha, t.ExtraInputs, t.Outputs, blobs)
@@ -418,4 +419,38 @@ func decodePayload(env evidence.Envelope) ([]byte, error) {
 		return nil, errors.New("empty")
 	}
 	return base64.StdEncoding.DecodeString(env.Payload)
+}
+
+// runPlatform is the platform a run had (its environment inputs record it: a
+// sandbox's, not this host's).
+func runPlatform(run *store.TaskRun) string {
+	for _, in := range run.EnvInputs {
+		if p, ok := strings.CutPrefix(in, "platform="); ok {
+			if p == task.PlatformAny {
+				return task.Platform()
+			}
+			return p
+		}
+	}
+	return task.Platform()
+}
+
+// runExecutor describes where a run happened, from its environment inputs.
+func runExecutor(run *store.TaskRun) evidence.Executor {
+	ex := evidence.Executor{Kind: "cinema-cli", Version: version, Where: "host-process"}
+	for _, in := range run.EnvInputs {
+		if rest, ok := strings.CutPrefix(in, "executor=container "); ok {
+			ex.Where = "container"
+			for _, f := range strings.Fields(rest) {
+				k, v, _ := strings.Cut(f, "=")
+				switch k {
+				case "image":
+					ex.Image = v
+				case "emulated":
+					ex.Emulated = v == "true"
+				}
+			}
+		}
+	}
+	return ex
 }

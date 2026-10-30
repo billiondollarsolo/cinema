@@ -2,10 +2,10 @@ package main
 
 import (
 	"encoding/json"
-	"os"
 	"fmt"
 	"math"
 	"net/url"
+	"os"
 	"os/exec"
 	"path"
 	"regexp"

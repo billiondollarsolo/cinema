@@ -37,14 +37,19 @@ func PinnedImage(ref string) (string, error) {
 // reset. stop removes the container if the client was killed (timeout, ^C).
 // cpus (cpus:) becomes --cpuset-cpus: the container's processes are dockerd's
 // children, so the CLI's own CPU affinity wouldn't reach them.
-func (t *Task) ContainerRun(root, image, network string, cpus []int) (argv []string, stop func()) {
+// platform ("linux/amd64") selects the image variant; always passed (P4-1: a
+// tag pulled for one arch otherwise stands in for the other).
+func (t *Task) ContainerRun(root, image, network string, cpus []int, platform string) (argv []string, stop func()) {
 	name := "cinema-" + randomHex()
 	back := fmt.Sprintf(`"$@"; rc=$?; chown -R %d:%d "$CINEMA_ROOT"; exit $rc`, os.Getuid(), os.Getgid())
 	argv = append(append([]string{"env"}, DockerEnv()...), "docker", "run", "--rm", "--name", name, "--entrypoint", "sh",
-		"-v", root + ":" + root, "-w", filepath.Join(root, filepath.FromSlash(t.Cwd)),
+		"-v", root+":"+root, "-w", filepath.Join(root, filepath.FromSlash(t.Cwd)),
 		"-e", "CI=true", "-e", "CINEMA_ROOT="+root)
 	if network != "" {
 		argv = append(argv, "--network", network) // services by name, as in a container job
+	}
+	if platform != "" {
+		argv = append(argv, "--platform", platform)
 	}
 	if len(cpus) > 0 {
 		set := make([]string, len(cpus))
@@ -62,4 +67,40 @@ func randomHex() string {
 	b := make([]byte, 6)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// PinnedImageFor is PinnedImage for one platform: pulled for it if missing (a
+// tag pulled for another arch must not stand in: P4-1), resolved to the
+// registry digest. An image built locally has no registry digest; it's pinned
+// by its local ID, which no other machine can match.
+func PinnedImageFor(ref, platform string) (string, error) {
+	if strings.Contains(ref, "@sha256:") {
+		return ref, nil
+	}
+	inspect := func() ([]byte, error) {
+		return docker("image", "inspect", "--platform", platform, "--format", "{{json .RepoDigests}} {{.Id}}", ref).Output()
+	}
+	out, err := inspect()
+	if err != nil {
+		if pout, perr := docker("pull", "-q", "--platform", platform, ref).CombinedOutput(); perr != nil {
+			return "", fmt.Errorf("docker pull --platform %s: %v: %s", platform, perr, firstLine(string(pout)))
+		}
+		if out, err = inspect(); err != nil {
+			return "", fmt.Errorf("docker image inspect: %v", err)
+		}
+	}
+	digests, id, _ := strings.Cut(strings.TrimSpace(string(out)), " ")
+	repo := ref
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		repo = ref[:i]
+	}
+	for _, rd := range strings.Split(strings.Trim(digests, "[]\""), "\",\"") {
+		if r, d, ok := strings.Cut(rd, "@"); ok && (r == repo || strings.HasSuffix(r, "/"+repo)) {
+			return repo + "@" + d, nil
+		}
+	}
+	if strings.HasPrefix(id, "sha256:") {
+		return id, nil
+	}
+	return "", fmt.Errorf("no digest for %s", ref)
 }
