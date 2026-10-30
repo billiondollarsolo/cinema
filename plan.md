@@ -317,7 +317,7 @@ Fields for container execution (§9), all optional:
     image: ghcr.io/billiondollarsolo/cinema-runner:ubuntu-24.04@sha256:…   # the runner-like image; default: cinema's pinned image for the job's runs-on
     arch: any                 # explicit claim: the result doesn't depend on the CPU (lint, format, pure-JS tests). Default: the covered job's runner arch
     memory: 16g               # memory limit, like the runner it replaces
-    pipeline: ./ci/test.dagger # optional: a code-defined stand-in for a job the analyzer can't translate (§9.6)
+    docker: host              # explicit claim: the job may use the host engine's socket (docker build, Testcontainers)
 ```
 
 - `arch: any` lets an arm64 Mac run an amd64 job natively, at full speed, for checks that don't depend on the CPU. Like `platform: any`, it's the repo owner's claim, part of the contract, and shown in the PR summary (§11.6).
@@ -435,7 +435,7 @@ refs/notes/cinema/v1/<key-fingerprint>
 A `pre-push` hook can't add refs to an in-flight push, so `cinema push` is the supported path. An optional `pre-push` hook warns when a plain `git push` would go out without evidence for HEAD (and how many CI minutes that costs), and lets it through.
 
 **Not waiting on it.** Local CI can take a while, longer under emulation. Notes that land after CI has started don't help: skipped jobs have already been decided. So:
-- `cinema push` (default) runs, then pushes branch and notes together, showing progress and an estimate up front.
+- `cinema push` (default, decided) runs, then pushes branch and notes together, showing the plan, progress and an estimate up front.
 - `cinema push --background` returns immediately; a detached one-shot process runs the tasks and pushes branch and notes together when done, then exits. Its status shows in `cinema status` and the dashboard. (One process per push, not a daemon.)
 - `cinema push --now` pushes the branch immediately and accepts that CI runs everything.
 
@@ -472,12 +472,12 @@ One small interface (`internal/engine`): pull an image by digest, create a conta
 
 A local pass must mean CI would pass. So the container imitates the job's runner, not the developer's machine:
 
-- **Image.** A pinned runner-like image per `runs-on` label (`ubuntu-24.04`, `ubuntu-22.04`, …): the OS release, the common tools CI scripts call (how much of GitHub's image is open, §17), a non-root `runner` user with passwordless sudo, as on GitHub. Its digest is in every fingerprint. `container:` jobs use their own image, as now.
+- **Image.** A pinned runner-like image per `runs-on` label (`ubuntu-24.04`, `ubuntu-22.04`, …): the OS release, a non-root `runner` user with passwordless sudo, as on GitHub, and only the tools jobs need. Decided: slim, not GitHub's ~60 GB image. The analyzer and `cinema doctor` find the tools each job calls, and the task's image layer adds them (pinned, part of the digest). A tool it misses is a failed local run, never a false green. Its digest is in every fingerprint. `container:` jobs use their own image, as now.
 - **Resources.** CPUs and memory match the runner size (`ubuntu-latest`: 4 vCPU / 16 GB on public repos, 2 / 7 GB on private ones; larger runners by label). Tests that size worker pools from the core count, or that would run out of memory in CI, behave as in CI.
 - **User, paths, env.** Non-root `runner` user, `HOME=/home/runner` fresh per run, and the checkout at the runner's path, `/home/runner/work/<repo>/<repo>`: tests that embed absolute paths (snapshots, coverage, error messages) see the same ones. `CI=true`, `TZ=UTC`, `LANG=C.UTF-8`, and `GITHUB_*` variables only where the job reads them (from the analyzer).
 - **Limits.** `ulimit -n` and process limits as on runners; `/dev/shm` sized like the runner's (Docker's 64 MB default crashes headless browsers); no swap beyond the runner's.
 - **sudo.** Passwordless, as on runners. A job that runs `sudo apt-get install` (lab: prometheus, prettier) changes only its own throwaway container, so it no longer has to be review-only or `exclusive`. Package downloads float exactly as they do in CI.
-- **Docker inside a job.** Many jobs call `docker build`, `docker compose` or Testcontainers, and runners have a Docker daemon. Inside a container that needs an engine of its own: the host's socket (fast; the job can then control the host's engine), or a nested daemon (isolated, needs privileges, and Apple `container` has neither). Open question, §17. Until decided, such jobs stay review.
+- **Docker inside a job.** Many jobs call `docker build`, `docker compose` or Testcontainers, and runners have a Docker daemon. Inside a container that needs an engine of its own. Decided: the host engine's socket, opt-in per task with `docker: host`, an explicit claim because the job can then control the host's engine (the analyzer drafts it, marked, and `cinema setup` lists it). The job's containers are labeled with the run and removed with it. Not available with Apple `container`; those tasks need a Docker-compatible engine or stay in CI.
 - **Network.** Internet as on runners; services on a private network, reachable by name and on localhost ports as in Actions.
 - **Time.** Job `timeout-minutes` applies, scaled for emulation (§17).
 - **Caches.** Download and build caches are named volumes per repo, tool **and tool version** (`cinema-cache-<repo>-go-1.26.10-build`, `…-golangci-2.14.0`): a cache shared across versions is how golangci-lint replayed another build's results (lab rule 4). Package stores that are content-addressed (Go modules, npm, pnpm) can be shared per repo. Each volume has a size cap (default 10 GiB) and is trimmed oldest-first. `cinema doctor` shows the engine's disk use; Docker Desktop's VM disk filling up is a real failure mode. Results are never cached; the checkout is always fresh.
@@ -540,7 +540,7 @@ policy:
 
 ### 9.6 Jobs the analyzer can't translate: code-defined pipelines
 
-For a job whose actions have no command equivalent, a repo can add a stand-in: a task with `pipeline:` (a Dagger-style program: containers, mounts and steps defined in code, run through the same engine) or with plain `argv`. It's still a claim that the stand-in tests what the job tests, so:
+For a job whose actions have no command equivalent, a repo can add a stand-in: a task with plain `argv` today, and in P5 a code-defined `pipeline:` (Dagger-style: containers, mounts and steps in code, run through the same engine; whether that means real Dagger modules or cinema's own format is decided then). It's still a claim that the stand-in tests what the job tests, so:
 
 - it must name the job it covers (`covers:`) and is bound to that job's definition (`job_digest`);
 - it goes through shadow mode like any draft (§11.5) and only skips CI after agreeing with it;
@@ -1037,12 +1037,10 @@ Changing anything in §1, §5.1, §7.2, or §11.2 needs a written ADR in `docs/a
 | Cobra vs stdlib `flag` | Cobra if subcommand count stays > 8 |
 | Should the gate also verify receipts on the PR head when base moved but the change can't affect inputs? | No. Whole-source only in the MVP; P0-3 data informs later |
 | Store `CINEMA_TRUSTED_KEYS` in a repo variable vs an org variable | Repo variable; org variables work identically if users want them |
-| How faithful is the runner-like image? GitHub's own is ~60 GB of tools | A slim pinned image plus what the analyzer and `doctor` find a job needs; a "full" image as an option. P4-1 measures how many drafts each passes |
 | Emulated amd64 by default on Apple silicon? | Yes, unless P4-1 shows it's too slow; `arch: any` for CPU-independent checks |
 | Scale job timeouts under emulation? | Local timeouts scale by the measured slowdown (capped at 3×); the gate's check uses the local-to-CI ratio (§11.2) |
 | Shadow graduation threshold | 3 agreeing PRs, spot checks 1 in 20 |
 | Which provider plugin first? | One with SSH + Docker (boat-style) first: it reuses the ssh host path |
-| `pipeline:` format: Dagger modules, or cinema's own container steps? | Open (ADR 0003) |
-| Docker inside jobs (`docker build`, Testcontainers): host socket or nested daemon? | Open; such jobs stay review until decided |
+| `pipeline:` format: Dagger modules, or cinema's own container steps? | Deferred to P5; plain `argv` stand-ins until real jobs show the need |
 | Backtest depth for graduation | Last 20 merged commits, must include CI failures if any exist |
 | Failed-run publishing: K consecutive passes before a flaky action_key can be signed again | K = 3 |

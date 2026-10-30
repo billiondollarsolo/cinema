@@ -30,7 +30,8 @@ Evidence for Linux jobs came from a Linux box the developer controls (a VPS), wi
 - No hardware beyond the developer's machine. A VPS still works, as an ssh host.
 - Emulated amd64 on Apple silicon is slower. P4-1 measures by how much; `arch: any` is the honest escape for CPU-independent checks.
 - Emulation and container limits can change behaviour (CPU features under Rosetta, `/dev/shm`). Receipts record emulation, and shadow mode catches what slips through.
-- Jobs needing Docker inside them need a decision (host socket or nested daemon) before they can run locally.
+- Jobs needing Docker inside them get the host engine's socket, opt-in per task (`docker: host`); not available with Apple `container`.
+- The runner image is slim: tools come from what each job is found to need, not GitHub's ~60 GB image.
 - New reason codes: `ARCH_MISMATCH`, `EMULATED`, `IMAGE_UNTRUSTED`, `SHADOW`, `CHECKOUT_MISMATCH`, `EVENT_MISMATCH`, `TOO_CLOSE_TO_TIMEOUT`, `FAILED_ELSEWHERE`, `HOST_PROCESS_EVIDENCE`.
 - Existing skip-in-place setups stop skipping until their jobs graduate. Backtest graduation keeps that to one command.
 - Publishing failed runs reveals that a commit failed somewhere; notes never carry logs.
