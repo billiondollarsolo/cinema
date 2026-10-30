@@ -179,6 +179,15 @@ func draftFor(jobs []analyze.Job, cpus, memGB int) ([]byte, error) {
 			t.Content = append(t.Content, s("outputs"), flow(seq(p.Outputs...)))
 			j.Notes = append(j.Notes, "outputs: are the paths the job uploads as artifacts; they're left out of the source fingerprint")
 		}
+		if len(p.Floating) > 0 {
+			fl := m()
+			for _, k := range []string{"go", "node"} {
+				if v := p.Floating[k]; v != "" {
+					fl.Content = append(fl.Content, s(k), s(v))
+				}
+			}
+			t.Content = append(t.Content, s("floating"), fl)
+		}
 		if p.Event != "" {
 			t.Content = append(t.Content, s("event"), s(p.Event))
 			j.Notes = append(j.Notes, "the job reads the triggering event or ref: this task is evidence for "+p.Event+" runs only")

@@ -256,7 +256,8 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 		cpus, mem := t.RunnerSize()
 		sb, err := task.StartSandbox(ctx, task.SandboxSpec{Image: loadUserConfig().Image, Platform: pl.platform, Emulated: pl.emulated,
 			Root: w.root, RepoName: filepath.Base(w.id), RepoID: w.id, DataDir: w.dataDir, Bins: bins, Artifacts: art,
-			CPUs: cpus, MemoryMB: mem * 1024, Network: network})
+			Objects: filepath.Join(w.id, ".git", "objects"),
+			CPUs:    cpus, MemoryMB: mem * 1024, Network: network})
 		if err != nil {
 			say("✗ %s  %v\n", t.ID, err)
 			return true, false

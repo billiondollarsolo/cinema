@@ -73,6 +73,10 @@ type Task struct {
 	// receipt only counts for this event (pull_request | push | merge_group).
 	// Empty: any. Metadata, read from the base branch like the task list.
 	Event string `yaml:"event"`
+	// Floating: the workflow's version specs the runtime: pins came from
+	// ({go: stable, node: "lts/*"}). The gate resolves them again on every run
+	// and runs the job if today's release isn't the pin (plan §11.2). Metadata.
+	Floating map[string]string `yaml:"floating"`
 	// CPUs caps how many CPUs the task sees locally (Linux: CPU affinity), to
 	// match the runner it replaces: tools size worker pools by core count, and
 	// some suites deadlock or time out on a bigger box (lab: prettier's jest on
@@ -309,6 +313,11 @@ func (t *Task) validate() error {
 	case "clean", "workspace":
 	default:
 		return errors.New(`reuse.capture must be "clean" or "workspace"`)
+	}
+	for k := range t.Floating {
+		if k != "go" && k != "node" {
+			return fmt.Errorf("floating: only go and node, got %q", k)
+		}
 	}
 	switch t.Event {
 	case "", "pull_request", "push", "merge_group":

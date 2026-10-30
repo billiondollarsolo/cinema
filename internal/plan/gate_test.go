@@ -57,10 +57,21 @@ func TestGateTask(t *testing.T) {
 		{"workspace receipt, task opts in", workspaceTask(), []evidence.VerifiedStatement{stmt(func(p *evidence.Predicate) { p.Source.Capture = "workspace-observed" })}, nil, GateReuse, ""},
 		{"one good among bad", tsk, []evidence.VerifiedStatement{stmt(func(p *evidence.Predicate) { p.EnvDigest = dg("f") }), stmt(nil)}, []string{SignerNotAllowed}, GateReuse, ""},
 		// ACC-115: a failure of the same work from any trusted key outweighs passes.
-		{"failed elsewhere", tsk, []evidence.VerifiedStatement{stmt(nil), stmt(func(p *evidence.Predicate) { p.Result = evidence.Result{Status: "failed", ExitCode: 1, Origin: "fresh"}; p.RunID = "run_2" })}, nil, GateRun, FailedElsewhere},
-		{"failure on other inputs doesn't block", tsk, []evidence.VerifiedStatement{stmt(nil), stmt(func(p *evidence.Predicate) { p.Result = evidence.Result{Status: "failed", ExitCode: 1, Origin: "fresh"}; p.Source.Digest = dg("6") })}, nil, GateReuse, ""},
-		{"expired failure doesn't block", tsk, []evidence.VerifiedStatement{stmt(nil), stmt(func(p *evidence.Predicate) { p.Result = evidence.Result{Status: "failed", ExitCode: 1, Origin: "fresh"}; p.Timing.StartedAt = now.Add(-73 * time.Hour) })}, nil, GateReuse, ""},
-		{"a failure is never reused", tsk, []evidence.VerifiedStatement{stmt(func(p *evidence.Predicate) { p.Result = evidence.Result{Status: "failed", ExitCode: 1, Origin: "fresh"} })}, nil, GateRun, FailedElsewhere},
+		{"failed elsewhere", tsk, []evidence.VerifiedStatement{stmt(nil), stmt(func(p *evidence.Predicate) {
+			p.Result = evidence.Result{Status: "failed", ExitCode: 1, Origin: "fresh"}
+			p.RunID = "run_2"
+		})}, nil, GateRun, FailedElsewhere},
+		{"failure on other inputs doesn't block", tsk, []evidence.VerifiedStatement{stmt(nil), stmt(func(p *evidence.Predicate) {
+			p.Result = evidence.Result{Status: "failed", ExitCode: 1, Origin: "fresh"}
+			p.Source.Digest = dg("6")
+		})}, nil, GateReuse, ""},
+		{"expired failure doesn't block", tsk, []evidence.VerifiedStatement{stmt(nil), stmt(func(p *evidence.Predicate) {
+			p.Result = evidence.Result{Status: "failed", ExitCode: 1, Origin: "fresh"}
+			p.Timing.StartedAt = now.Add(-73 * time.Hour)
+		})}, nil, GateReuse, ""},
+		{"a failure is never reused", tsk, []evidence.VerifiedStatement{stmt(func(p *evidence.Predicate) {
+			p.Result = evidence.Result{Status: "failed", ExitCode: 1, Origin: "fresh"}
+		})}, nil, GateRun, FailedElsewhere},
 	} {
 		d := GateTask(tc.t, exp, tc.stmts, tc.rejected)
 		if d.Decision != tc.decision || d.Reason != tc.reason {

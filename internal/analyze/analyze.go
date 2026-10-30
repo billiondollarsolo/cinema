@@ -67,6 +67,9 @@ type Proposal struct {
 	// github.ref, GITHUB_REF…), so the draft is only evidence for the event it
 	// was drafted for (plan §11.2).
 	Event string `json:"event,omitempty"`
+	// Floating: the version specs the pins were resolved from ("Go": "stable"),
+	// so the gate re-resolves them (plan §11.2).
+	Floating map[string]string `json:"floating,omitempty"`
 }
 
 type workflow struct {
@@ -206,6 +209,7 @@ func workflowAt(root, name string, src []byte) ([]Job, error) {
 		}
 		for _, c := range combos {
 			r := analyzeJob(root, name, id, j, &w, c)
+			r.Notes = slices.DeleteFunc(r.Notes, func(n string) bool { return strings.HasPrefix(n, floatingNote) })
 			r.MatrixKeys = keys
 			out = append(out, r)
 		}
@@ -470,6 +474,21 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 		}
 		b.WriteString(strings.Join(body, "\n"))
 		p.Body = b.String()
+		var notes []string
+		for _, n := range r.Notes {
+			if kv, ok := strings.CutPrefix(n, floatingNote); ok {
+				tool, spec, _ := strings.Cut(kv, "=")
+				if (tool == "Go" && p.Go != "") || (tool == "Node" && p.Node != "") {
+					if p.Floating == nil {
+						p.Floating = map[string]string{}
+					}
+					p.Floating[strings.ToLower(tool)] = spec
+				}
+				continue
+			}
+			notes = append(notes, n)
+		}
+		r.Notes = notes
 		if eventDependent(j) {
 			p.Event = "pull_request" // drafts evaluate github.event_name as the PR gate's
 		}
@@ -715,7 +734,8 @@ func exactVersion(root, v, pattern, tool, file string, review, note func(string)
 	if v != "" && !strings.Contains(v, "${{") {
 		// What setup-go/setup-node would pick today, pinned so evidence and gate agree.
 		if got, err := resolve(tool, v); err == nil && exact.MatchString(got) {
-			note(fmt.Sprintf("%s %q resolved to %s, the newest matching release today: CI will move on; this pin won't", tool, v, got))
+			note(fmt.Sprintf("%s %q resolved to %s, the newest matching release today; CI checks it again on every run (floating:)", tool, v, got))
+			note(floatingNote + tool + "=" + v)
 			return got
 		}
 	}
@@ -1221,3 +1241,5 @@ func eventDependent(j *job) bool {
 	}
 	return false
 }
+
+const floatingNote = "\x00floating:" // internal marker in Notes, turned into Proposal.Floating

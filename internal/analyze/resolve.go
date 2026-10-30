@@ -83,7 +83,11 @@ func list(tool string) ([]release, error) {
 // resolve maps a setup-go/setup-node version spec to the newest matching
 // stable release, as those actions do at run time: "22", "22.x", "22.23",
 // "lts/*", "1.26", "1.26.x", "stable". "" if the spec isn't understood.
-func resolve(tool, spec string) (string, error) {
+func resolve(tool, spec string) (string, error) { return Resolve(tool, spec) }
+
+// Resolve is resolve for the gate: it re-resolves a task's floating: specs at
+// verify time, so a pin from yesterday can't stand in for what CI uses today.
+func Resolve(tool, spec string) (string, error) {
 	spec = strings.TrimSpace(strings.TrimPrefix(spec, "v"))
 	rs, err := list(tool)
 	if err != nil {

@@ -46,6 +46,7 @@ type SandboxSpec struct {
 	MemoryMB  int    // default 16384
 	ShmMB     int    // default 2048
 	Network   string // services network, or ""
+	Objects   string // the real repo's .git/objects, which the clean checkout borrows (alternates)
 	Env       []string
 	ProbeOnly bool          // no checkout: toolchain probes are version commands (allowlisted), they don't read the source
 	Lifetime  time.Duration // the container removes itself after this even if cinema dies (default 24h)
@@ -85,13 +86,16 @@ func StartSandbox(ctx context.Context, sp SandboxSpec) (*Sandbox, error) {
 		// A clean checkout borrows the real repo's objects (git alternates, by
 		// host path): mount them read-only at that path, or git inside the
 		// container sees a broken repo (P4: go build's VCS stamping failed).
+		// Only the expected directory, and only if the checkout still names
+		// exactly it: the file is inside the tree a task can write, and a
+		// rewritten one would otherwise mount any host path into the next task.
 		if b, err := os.ReadFile(filepath.Join(sp.Root, ".git", "objects", "info", "alternates")); err == nil {
-			for _, l := range strings.Split(string(b), "\n") {
-				if l = strings.TrimSpace(l); filepath.IsAbs(l) {
-					args = append(args, "-v", l+":"+l+":ro")
-					alternates = append(alternates, l)
-				}
+			got := strings.TrimSpace(string(b))
+			if sp.Objects == "" || got != sp.Objects || strings.ContainsAny(got, ":,\n") || !filepath.IsAbs(got) {
+				return nil, fmt.Errorf("the checkout's git alternates (%q) aren't the repo's objects: refusing to mount them", got)
 			}
+			args = append(args, "-v", got+":"+got+":ro")
+			alternates = append(alternates, got)
 		}
 	}
 	if sp.Artifacts != "" {
