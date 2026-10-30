@@ -375,6 +375,30 @@ Each rule comes from a real project in `spikes/lab/RESULTS.md`.
 8. **Run evidence as a non-root user** when CI is non-root (GitHub runners). Root changes test results.
 9. **Make `.cinema/tasks.yaml` follow the repo's formatter,** or list it in the formatter's ignore file. Repo-wide formatters and linters will touch it.
 
+
+### 6.5 Languages: runtimes CInema provisions
+
+A job's language toolchain must come from a pin, provisioned identically wherever the task runs, from the official distribution, checksum-verified, never from what a machine or image happens to have (P4-1: a system `go` masked a bug). Each language is one provider: resolve the version from the workflow's setup action or the repo's version file, download for the target OS and arch, verify, install atomically into `<data dir>/runtimes/<lang>/<version>-<os>-<arch>`, and expose its `bin` on PATH (mounted read-only into containers). Version files are read the way the setup action reads them.
+
+| Language | Setup action / version file | Official distribution, verification | Status |
+|---|---|---|---|
+| Go | `actions/setup-go`, `go.mod`/`go.work`, `.go-version` | go.dev tarball, SHA-256 from go.dev's release index | done (via `GOTOOLCHAIN`; tarball in P4) |
+| Node.js | `actions/setup-node`, `.nvmrc`, `.node-version`, `package.json` `engines`/`volta` | nodejs.org tarball, `SHASUMS256.txt` | done |
+| pnpm / yarn / npm | `pnpm/action-setup`, `packageManager` | npm registry tarball (integrity hash) | pnpm done |
+| Python | `actions/setup-python`, `.python-version`, `pyproject.toml` | python-build-standalone release, SHA-256 | P4 |
+| uv / Poetry | `astral-sh/setup-uv`, `uv.lock`, `poetry.lock` | official release, SHA-256 | P4 |
+| Java | `actions/setup-java` (distribution + version), `.java-version`, `.sdkmanrc` | Temurin/Zulu/Corretto archives via their APIs, SHA-256 | P4 |
+| Maven / Gradle | wrapper scripts in the repo (`mvnw`, `gradlew`): already pinned in source | wrapper's own checksum (`distributionSha256Sum`) | P4 (caches only) |
+| Rust | `dtolnay/rust-toolchain`, `actions-rust-lang/setup-rust-toolchain`, `rust-toolchain.toml` | static.rust-lang.org dist, SHA-256 | P4 |
+| Bun | `oven-sh/setup-bun`, `.bun-version`, `packageManager` | GitHub release, `SHASUMS256.txt` | P4 |
+| Deno | `denoland/setup-deno`, `.dvmrc` | GitHub release, SHA-256 | P4 |
+| Ruby | `ruby/setup-ruby`, `.ruby-version`, `.tool-versions` | ruby/ruby-builder prebuilt release, SHA-256 | P5 |
+| .NET | `actions/setup-dotnet`, `global.json` | dotnet-install archives, SHA-512 | P5 |
+| PHP | `shivammathur/setup-php`, `composer.json` | (no single official binary distribution) | review until a faithful source exists |
+| Elixir / Erlang | `erlef/setup-beam`, `.tool-versions` | hex.pm builds, SHA-256 | P5 |
+
+`.tool-versions` (asdf, mise) is read for every language it names. A job whose language has no provider yet stays review with that reason, never runs against whatever is installed.
+
 ---
 
 ## 7. Receipts and keys
@@ -572,6 +596,27 @@ For a job whose actions have no command equivalent, a repo can add a stand-in: a
 - it must name the job it covers (`covers:`) and is bound to that job's definition (`job_digest`);
 - it goes through shadow mode like any draft (§11.5) and only skips CI after agreeing with it;
 - `cinema analyze` shows it as "hand-written stand-in" in the capability report.
+
+### 9.7 Ideas taken from Dagger, and where CInema differs
+
+Dagger (dagger.io) runs pipelines as sandboxed, cached container operations, the same locally and in CI. What CInema takes from it, and what it does that Dagger doesn't:
+
+| Dagger | In CInema |
+|---|---|
+| Sandboxed functions: no host access unless passed in explicitly | Containers get nothing from the host unless a task declares it (§9.2: credentials, `docker: host`) |
+| Cache volumes for package managers | Per-repo, per-tool-version cache volumes with size caps (§9.2) |
+| Local cache pruned under disk pressure | Cache volumes and images trimmed when the engine's disk runs low, not only by age (§13.1) |
+| Services with health checks; `dagger up` | `services:` with health checks; P5: `cinema up` to start a task's services for local development |
+| Secrets as a type, from providers (env, file, 1Password, Vault, AWS, GCP), never in caches or logs | `credentials:` resolved from providers (`env:`, `file:`, `op://`, `vault://`, `aws-sm://`, `gcp://`), passed for that run only, redacted from logs, never in receipts or fingerprints (P4: env and file; P5: the rest) |
+| `dagger check -i`: a shell where a command failed | `cinema run -i` / `cinema debug <task>`: a shell in the task's container at the failing step (§9.2) |
+| A TUI with live progress and traces (OpenTelemetry) | Per-step timing in every run record (each workflow step is a subshell; record where time goes) and the dashboard; P5: OpenTelemetry export |
+| Toolchain detection and official modules (Go, pytest, Jest, Vitest, ESLint, Prettier, Biome, ShellCheck, Helm) | `cinema analyze` reads the CI you already have instead; `cinema init` detects languages for repos without CI (§6.5 covers the languages) |
+| `dagger check` for local, CI and agents | `cinema run --all`, with `cinema check` as an alias; JSON for agents (§10.3) |
+| `dagger generate` + stale-code checks | A run that changes tracked files is never evidence (`SOURCE_CHANGED_DURING_RUN`) |
+| Remote engines (SSH, Kubernetes, Cloud) | Hosts: local, ssh, provider plugins (§9.3) |
+| Test splitting (coming) | Fan-out across hosts (§9.4); shard-aware drafts for jobs that already split |
+| Cloud cache shares results across machines | **Signed receipts are that, verifiable:** CI skips work any trusted machine already proved, without a hosted service and without trusting a cache it can't check |
+| You rewrite CI as Dagger modules | **No rewrite:** CInema reads your workflows. A repo that already uses Dagger keeps it: a step running `dagger call …`/`dagger check` translates as a task (it needs an engine: `docker: host`), so its jobs skip in CI too |
 
 ---
 
@@ -1032,6 +1077,10 @@ Report hashing and wrapper overhead separately, always.
 - [ ] `merge_group` receipts (§5.5); runner prices from one updatable table (§11.6)
 - [ ] Short-lived, labeled keys for agents in sandboxes (§7.3)
 - [ ] Apple `container` engine
+- [ ] Runtime providers (§6.5): Go tarball, Python, uv, Java, Rust, Bun, Deno; `.tool-versions`
+- [ ] `credentials:` from `env:` and `file:` providers, redacted from logs (§9.7)
+- [ ] Per-step timing in run records; `cinema check` alias; disk-pressure pruning (§9.7)
+- [ ] Repos that use Dagger: `dagger` steps translate as tasks (§9.7)
 - [ ] Tests: ACC-101…122, CLEAN-009…011
 
 **Exit:** a developer on a Mac, with no other hardware, pushes a PR whose Linux jobs skip in CI, every skipped job graduated from shadow mode (backtest or live), and the PR summary shows what was saved. Then the same on Windows.
@@ -1043,6 +1092,7 @@ Report hashing and wrapper overhead separately, always.
 - [ ] Fan-out across hosts (§9.4)
 - [ ] Code-defined stand-ins, `pipeline:` (§9.6)
 - [ ] Maintainer-run fork PRs (§8.2)
+- [ ] Ruby, .NET, Elixir/Erlang providers (§6.5); secret providers 1Password, Vault, AWS, GCP; OpenTelemetry export; `cinema up` (§9.7)
 
 ### P3+ — Next, in rough order (details in vision.md)
 
