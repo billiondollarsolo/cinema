@@ -140,6 +140,7 @@ func cmdPush(args []string) int {
 		}
 	}
 
+	os.Setenv("CINEMA_PUSHING", "1") // our own git push: the pre-push hook stays quiet
 	keyID := evidence.KeyID(priv.Public().(ed25519.PublicKey))
 	ref := transport.Ref(keyID)
 	if !*dryRun {

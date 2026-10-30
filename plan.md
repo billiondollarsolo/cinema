@@ -907,6 +907,7 @@ CInema leaves nothing behind that it no longer needs. No daemon, so every rule r
 | Cache volumes (`cinema-cache-<repo>-<tool>-<version>`) | Per repo, tool and tool version, labeled. Size-capped (default 10 GiB each, trimmed oldest-first), swept when unused for 30 days, and by `cinema gc --caches`. Never hold results, only downloads and build caches (CLEAN-011). |
 | Images cinema pulled | Pinned digests, labeled or recorded in the store. Unused for 30 days: removed, unless the user pulled the same image themselves (never remove what cinema didn't add). |
 | Remote leases (§9.3) | Recorded in the store before use; released at the end of every run, on the next start after a crash, or with `cinema hosts --cleanup`. Each lease also has a provider-side TTL. Snapshots cinema made are listed and expire after 30 days unused. |
+| Pre-push hook (`.git/hooks/pre-push`) | Written only by `cinema hook install`, with a marker line, never over a hook cinema didn't write. `cinema hook uninstall` removes it only if the marker is there. |
 | Partial blob/DB writes | Temp file + rename. On startup, sweep `*.tmp` older than 1 h in the data dir. |
 | Provisioned runtimes (`runtimes/<lang>/<version>`) | Installed atomically (temp dir + rename). The daily pass removes versions unused for 90 days and interrupted installs older than 1 h. |
 | Fingerprint caches (`fscache/<repo>.gob`) | One file per repo, rewritten on use. The daily pass deletes caches unused for 90 days, and temp files older than 1 h. |

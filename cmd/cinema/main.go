@@ -14,6 +14,7 @@ const usage = `usage: cinema <command> [args]
 commands:
   setup [--include-review] [--yes]                          from existing CI: what this machine can take over, then the files that do it
   debug [--commit REV] [--shell] <task>                     run a task in its runner container, then open a shell there (not recorded)
+  hook install | uninstall                                  a pre-push hook that warns when a push goes out without evidence (never blocks)
   graduate [--commits N] <task>...                          backtest stand-ins on past commits against CI's results; agreeing ones may skip their jobs
   init                                                      write a .cinema/tasks.yaml skeleton
   exec [--record-json PATH] [--timeout D] -- CMD [ARGS...]   record an arbitrary command
@@ -34,7 +35,7 @@ commands:
 func main() {
 	// ponytail: map + flag.FlagSet per verb; Cobra only if this stops being readable.
 	cmds := map[string]func([]string) int{
-		"init": cmdInit, "exec": cmdExec, "run": cmdRun, "status": cmdStatus, "explain": cmdExplain, "trust": cmdTrust, "dashboard": cmdDashboard, "keys": cmdKeys, "push": cmdPush, "verify": cmdVerify, "log": cmdLog, "analyze": cmdAnalyze, "doctor": cmdDoctor, "setup": cmdSetup, "graduate": cmdGraduate, "debug": cmdDebug,
+		"init": cmdInit, "exec": cmdExec, "run": cmdRun, "status": cmdStatus, "explain": cmdExplain, "trust": cmdTrust, "dashboard": cmdDashboard, "keys": cmdKeys, "push": cmdPush, "verify": cmdVerify, "log": cmdLog, "analyze": cmdAnalyze, "doctor": cmdDoctor, "setup": cmdSetup, "graduate": cmdGraduate, "debug": cmdDebug, "hook": cmdHook,
 	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)

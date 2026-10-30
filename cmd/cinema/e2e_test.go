@@ -1097,3 +1097,35 @@ tasks:
 		}
 	}
 }
+
+// The pre-push hook warns about covered jobs without evidence, never blocks,
+// and is only removed if it's cinema's own.
+func TestPrePushHook(t *testing.T) {
+	e := newEnv(t)
+	e.write(".cinema/tasks.yaml", "schema_version: 1\ntasks:\n  unit: {argv: [\"true\"], platform: any, covers: ci.yml#unit, reuse: {allowed: true, max_age: 1h}}\n")
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	if out, code := e.cinema("hook", "install"); code != 0 {
+		t.Fatalf("install: %s", out)
+	}
+	cmd := exec.Command(bin, "hook", "check")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "CI will run them (unit)") {
+		t.Fatalf("check: %v\n%s", err, out)
+	}
+	e.cinema("run", "unit")
+	cmd = exec.Command(bin, "hook", "check")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+	if out, _ := cmd.CombinedOutput(); len(out) > 0 {
+		t.Fatalf("evidence exists: no warning expected:\n%s", out)
+	}
+	hook := filepath.Join(e.repo, ".git", "hooks", "pre-push")
+	os.WriteFile(hook, []byte("#!/bin/sh\necho mine\n"), 0o755)
+	if out, _ := e.cinema("hook", "uninstall"); !strings.Contains(out, "no cinema pre-push hook") {
+		t.Fatalf("must not remove a foreign hook: %s", out)
+	}
+	if b, _ := os.ReadFile(hook); !strings.Contains(string(b), "mine") {
+		t.Fatal("foreign hook touched")
+	}
+}
