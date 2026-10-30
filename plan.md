@@ -1063,22 +1063,22 @@ Report hashing and wrapper overhead separately, always.
 ### P4 — Local-first container CI on any host (ADR 0003)
 
 - [~] **P4-1 Spike.** (Mac with Colima done: every result matched once three CInema bugs were fixed; Rosetta 1.6–3.8× cold; [results](spikes/local-container/RESULTS.md). Apple `container` needs macOS 26; Windows not yet.) On an Apple-silicon Mac: run tasks that pass on the Linux lab box (eslint's tests, traefik's cross-builds, prometheus's container job, a services job) in Docker, amd64 under Rosetta and arm64 native, then in Apple `container`. Compare results with the lab and with CI; time them; check CPU features under Rosetta. Same on Windows (Docker Desktop, WSL2). **Decides** whether emulated amd64 is fast enough to be the default.
-- [ ] **False-green closers first** (needed before anything skips on container evidence): re-resolve floating versions and tags at verify time; `event` in contract and receipt; signed failures and `FAILED_ELSEWHERE`; container-only evidence; runner size in the environment; duration vs timeout (§11.2)
-- [ ] Shadow mode with backtest graduation, live pairs, spot checks; existing setups start in shadow (§11.5); PR summary (§11.6)
-- [ ] `internal/engine`, Docker-compatible first; `cinema doctor` reports engines, arches, disk
-- [ ] Container checkout from a git bundle, digest cross-check (§5.2); runner-like images per `runs-on`, published, signed and pinned; runner fidelity (§9.2)
+- [x] **False-green closers first** (needed before anything skips on container evidence): re-resolve floating versions and tags at verify time; `event` in contract and receipt; signed failures and `FAILED_ELSEWHERE`; container-only evidence; runner size in the environment; duration vs timeout (§11.2)
+- [~] Shadow mode with backtest graduation and spot checks; existing setups start in shadow (§11.5). Live pairs and the PR summary (§11.6) still open
+- [~] Docker-compatible engine (task.Sandbox; `doctor` engine report still open)
+- [~] Runner fidelity (§9.2) and `runner/Dockerfile`; checkout bind-mounted from the clean checkout (git bundle + cross-check only needed for remote hosts); image publishing still open
 - [ ] Cache volumes per tool version, size caps (§9.2, CLEAN-011)
-- [ ] Merge-result runs; receipts on the PR head; push-to-main lookup (§5.5)
-- [ ] `cinema push --background`; pre-push hook warning (§8.1)
+- [~] Merge-result runs; receipts on the PR head (§5.5). Push-to-main lookup still open
+- [~] Pre-push hook warning (§8.1). `--background` still open
 - [ ] ssh hosts via `DOCKER_HOST=ssh://` (§9.3)
 - [ ] Credentials kept out of containers by default; `credentials:` opt-in (§9.2)
-- [ ] `cinema debug <task>` (§9.2)
+- [x] `cinema debug <task>` (§9.2)
 - [ ] Flaky-task detection from local history (§0.3)
 - [ ] Machine-wide scheduler for concurrent invocations (§9.4)
 - [ ] `merge_group` receipts (§5.5); runner prices from one updatable table (§11.6)
 - [ ] Short-lived, labeled keys for agents in sandboxes (§7.3)
 - [ ] Apple `container` engine
-- [ ] Runtime providers (§6.5): Go tarball, Python, uv, Java, Rust, Bun, Deno; `.tool-versions`
+- [~] Runtime providers (§6.5): Go tarball done; Python, uv, Java, Rust, Bun, Deno, `.tool-versions` open
 - [ ] `credentials:` from `env:` and `file:` providers, redacted from logs (§9.7)
 - [ ] Per-step timing in run records; `cinema check` alias; disk-pressure pruning (§9.7)
 - [ ] Repos that use Dagger: `dagger` steps translate as tasks (§9.7)
