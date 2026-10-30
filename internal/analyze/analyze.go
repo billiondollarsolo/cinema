@@ -359,7 +359,27 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 			steps = slices.Insert(slices.Clone(steps), i+1, step{Run: `echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"`, Dir: "."})
 		case action == "actions/setup-node":
 			p.Node = onePin(p.Node, exactVersion(root, sub(str(s.With["node-version"])), `^[0-9]+\.[0-9]+\.[0-9]+$`, "Node", str(s.With["node-version-file"]), review, note), "Node", review)
-		case action == "golangci/golangci-lint-action", action == "pnpm/action-setup":
+		case action == "pnpm/setup":
+			// pnpm and a runtime in one step (runtime: node@24): the Node pin as
+			// setup-node's, then pnpm as pnpm/action-setup's.
+			name, ver, _ := strings.Cut(sub(str(s.With["runtime"])), "@")
+			switch name {
+			case "":
+			case "node":
+				if ver == "lts" {
+					ver = "lts/*"
+				}
+				p.Node = onePin(p.Node, exactVersion(root, ver, `^[0-9]+\.[0-9]+\.[0-9]+$`, "Node", "", review, note), "Node", review)
+			default:
+				review("uses pnpm/setup with runtime " + name + ": cinema provisions Go and Node only so far")
+			}
+			run, why := pnpmStep(root, s.With, envVals, note)
+			if why != "" {
+				review(strings.Replace(why, "pnpm/action-setup", "pnpm/setup", 1))
+				break
+			}
+			steps = slices.Insert(slices.Clone(steps), i+1, step{Run: run, Dir: "."})
+				case action == "golangci/golangci-lint-action", action == "pnpm/action-setup":
 			tr := golangciStep
 			if action == "pnpm/action-setup" {
 				tr = pnpmStep

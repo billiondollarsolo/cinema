@@ -55,3 +55,37 @@ jobs:
 		}
 	}
 }
+
+// pnpm/setup (pnpm plus a runtime) translates: the Node pin and pnpm itself.
+func TestPnpmSetup(t *testing.T) {
+	jobs, err := Workflow("ci.yml", []byte(`on: pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4
+        with: {runtime: node@24.11.1, version: 11.2.0, cache: true}
+      - run: pnpm test
+  bun:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4
+        with: {runtime: bun@1, version: 11.2.0}
+      - run: pnpm test
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range jobs {
+		switch j.ID {
+		case "test":
+			if j.Verdict != Task || j.Proposal.Node != "24.11.1" || !strings.Contains(j.Proposal.Body, "npm install -g pnpm@11.2.0") {
+				t.Fatalf("test: %v %v %+v", j.Verdict, j.Reasons, j.Proposal)
+			}
+		case "bun":
+			if j.Verdict != Review {
+				t.Fatalf("bun runtime must be review: %v", j.Verdict)
+			}
+		}
+	}
+}
