@@ -6,7 +6,7 @@ You and your coding agents already run `go test`, `npm run lint` and the rest be
 
 The rule that never bends: **unknown means run, never approve.** A macOS result never stands in for Linux. A run on a dirty tree, a run that changed files, a run replayed from a tool cache, a run of a different task definition, or a run on a different toolchain is never evidence.
 
-Status: pre-release. P0–P2 of the [build plan](plan.md) are implemented and tested on six real projects (below). Linux and macOS; GitHub Actions first.
+Status: pre-release. P0–P2 of the [build plan](plan.md) are implemented and tested on six real projects (below); GitHub Actions first. Next (P4): running Linux jobs in containers on your own machine, macOS, Windows or Linux, with remote machines as an option ([machines and engines](docs/hosts.md)).
 
 ## How it works
 
@@ -73,7 +73,8 @@ setup · init · exec · run · status · explain · log · doctor · trust · d
 
 ## Docs
 
-- [plan.md](plan.md): the MVP build plan, the invariant, reason codes, cleanup contract
+- **[docs/](docs/README.md): getting started, how it works, CI integration, tasks reference, machines and engines, gotchas, security, commands**
+- [plan.md](plan.md): the build plan, the invariant, reason codes, cleanup contract
 - [vision.md](vision.md): the long-range design
 - [docs/adr](docs/adr): decisions on the false-green boundary
 - [spikes/lab/RESULTS.md](spikes/lab/RESULTS.md): the lab, findings 1–56
