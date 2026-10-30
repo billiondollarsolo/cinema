@@ -187,6 +187,16 @@ func (s *Sandbox) execArgs(cwd string, argv []string, extraEnv []string) []strin
 	return append(append(out, s.Name), argv...)
 }
 
+// Shell is the argv of an interactive shell in the sandbox, as the runner user
+// with the task's environment (cinema debug).
+func (s *Sandbox) Shell(cwd string, tty bool) []string {
+	args := s.execArgs(cwd, []string{"bash", "-l"}, nil)
+	if tty {
+		args = append([]string{args[0], "-t"}, args[1:]...) // exec -t -i …
+	}
+	return append(append(append([]string{"env"}, DockerEnv()...), "docker"), args...)
+}
+
 // Probe runs a version command inside the sandbox (30 s cap), like toolOutput.
 func (s *Sandbox) Probe(cwd string, argv []string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
