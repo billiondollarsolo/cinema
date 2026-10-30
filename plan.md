@@ -477,6 +477,8 @@ One small interface (`internal/engine`): pull an image by digest, create a conta
 | Docker-compatible CLI | Docker Engine/Desktop, Podman, OrbStack, Colima, Rancher Desktop, nerdctl | One code path. `DOCKER_HOST` (incl. `ssh://`) also reaches remote engines. |
 | Apple `container` | macOS 26+, Apple silicon | Each container is its own lightweight VM. amd64 images run under Rosetta (`--arch amd64`). DNS between containers covers services. |
 
+- **cinema's own engine client config.** cinema talks to the engine with a private, empty client config (`DOCKER_CONFIG` in its data dir), never the user's `~/.docker/config.json`. The user's config can name a keychain credential helper and registry logins; using it pops a keychain password prompt on every pull (seen in P4-1 on a Mac) and would hand those logins to the job's image pulls. Private registries a task needs go through `credentials:` (§9.2).
+- **Always pass the platform.** Every pull and run names `--platform linux/<arch>`. A tag pulled once for one arch otherwise satisfies later runs for the other (P4-1: `alpine:latest` pulled for amd64 then ran as amd64 with no `--platform`).
 - Selection: `cinema doctor` lists the engines it finds and what each can do (arches, emulation, services). The choice goes in the user config (§9.5), not the repo. Never guessed silently between runs: switching engines changes `executor.engine` in receipts.
 - What runs where:
 
