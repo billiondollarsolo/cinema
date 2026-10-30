@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os"
 	"fmt"
 	"math"
 	"net/url"
@@ -28,8 +29,13 @@ type machine struct {
 
 func probeMachine() machine {
 	m := machine{Platform: task.Platform(), CPUs: runtime.NumCPU()}
-	m.Docker = exec.Command("docker", "info").Run() == nil
-	m.Buildx = m.Docker && exec.Command("docker", "buildx", "version").Run() == nil
+	dockerCmd := func(args ...string) *exec.Cmd {
+		c := exec.Command("docker", args...)
+		c.Env = append(os.Environ(), task.DockerEnv()...)
+		return c
+	}
+	m.Docker = dockerCmd("info").Run() == nil
+	m.Buildx = m.Docker && dockerCmd("buildx", "version").Run() == nil
 	return m
 }
 

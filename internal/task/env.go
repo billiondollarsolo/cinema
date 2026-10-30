@@ -139,7 +139,10 @@ func toolOutput(dir string, argv []string, env []string) (string, error) {
 	if env != nil {
 		cmd.Env = env
 		if p, err := record.LookPath(argv[0], env); err == nil {
-			cmd.Path = p // the pinned runtime, not whatever is first on our PATH
+			// The pinned runtime, not whatever is first on our PATH. Clearing Err
+			// matters: exec.Command already failed its own lookup when the tool is
+			// only on the task's PATH (a clean container: nothing preinstalled).
+			cmd.Path, cmd.Err = p, nil
 		}
 	}
 	out, err := cmd.CombinedOutput()
@@ -188,14 +191,14 @@ func imageDigest(ref string) (string, error) {
 		return "sha256:" + d, nil
 	}
 	inspect := func() (string, error) {
-		return toolOutput("", []string{"docker", "image", "inspect", "--format", "{{json .RepoDigests}}", ref}, nil)
+		return toolOutput("", []string{"docker", "image", "inspect", "--format", "{{json .RepoDigests}}", ref}, append(os.Environ(), DockerEnv()...))
 	}
 	out, err := inspect()
 	if err != nil {
 		// Pulls of builder images take minutes; version probes keep their 30 s cap.
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
-		if out, perr := exec.CommandContext(ctx, "docker", "pull", "-q", ref).CombinedOutput(); perr != nil {
+		if out, perr := dockerContext(ctx, "pull", "-q", ref).CombinedOutput(); perr != nil {
 			return "", fmt.Errorf("can't resolve (docker pull: %v: %s)", perr, firstLine(string(out)))
 		}
 		if out, err = inspect(); err != nil {

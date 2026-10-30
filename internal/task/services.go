@@ -3,7 +3,6 @@ package task
 import (
 	"errors"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -64,11 +63,11 @@ func (t *Task) StartServices() (network string, stop func(), err error) {
 	var started []string
 	stop = func() {
 		for _, c := range started {
-			_ = exec.Command("docker", "rm", "-f", c).Run()
+			_ = docker("rm", "-f", c).Run()
 		}
-		_ = exec.Command("docker", "network", "rm", network).Run()
+		_ = docker("network", "rm", network).Run()
 	}
-	if out, err := exec.Command("docker", "network", "create", network).CombinedOutput(); err != nil {
+	if out, err := docker("network", "create", network).CombinedOutput(); err != nil {
 		return "", func() {}, fmt.Errorf("docker network create: %v: %s", err, firstLine(string(out)))
 	}
 	for _, name := range sortedServices(t.Services) {
@@ -88,7 +87,7 @@ func (t *Task) StartServices() (network string, stop func(), err error) {
 		}
 		opts, _ := shellWords(svc.Options)
 		args = append(append(args, opts...), img)
-		if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
+		if out, err := docker(args...).CombinedOutput(); err != nil {
 			stop()
 			return "", func() {}, fmt.Errorf("service %s: docker run: %v: %s", name, err, firstLine(string(out)))
 		}
@@ -106,7 +105,7 @@ func (t *Task) StartServices() (network string, stop func(), err error) {
 func waitHealthy(c string, limit time.Duration) error {
 	deadline := time.Now().Add(limit)
 	for {
-		out, err := exec.Command("docker", "inspect", "-f", "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}", c).Output()
+		out, err := docker("inspect", "-f", "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}", c).Output()
 		state := strings.TrimSpace(string(out))
 		switch {
 		case err != nil:

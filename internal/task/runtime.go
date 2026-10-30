@@ -286,7 +286,7 @@ func provisionGo(env []string) {
 	cmd := exec.Command("go", "version")
 	cmd.Env = env
 	if p, err := record.LookPath("go", env); err == nil {
-		cmd.Path = p
+		cmd.Path, cmd.Err = p, nil
 	}
 	_ = cmd.Run()
 }

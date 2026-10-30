@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -41,9 +40,9 @@ func PinnedImage(ref string) (string, error) {
 func (t *Task) ContainerRun(root, image, network string, cpus []int) (argv []string, stop func()) {
 	name := "cinema-" + randomHex()
 	back := fmt.Sprintf(`"$@"; rc=$?; chown -R %d:%d "$CINEMA_ROOT"; exit $rc`, os.Getuid(), os.Getgid())
-	argv = []string{"docker", "run", "--rm", "--name", name, "--entrypoint", "sh",
+	argv = append(append([]string{"env"}, DockerEnv()...), "docker", "run", "--rm", "--name", name, "--entrypoint", "sh",
 		"-v", root + ":" + root, "-w", filepath.Join(root, filepath.FromSlash(t.Cwd)),
-		"-e", "CI=true", "-e", "CINEMA_ROOT=" + root}
+		"-e", "CI=true", "-e", "CINEMA_ROOT="+root)
 	if network != "" {
 		argv = append(argv, "--network", network) // services by name, as in a container job
 	}
@@ -56,7 +55,7 @@ func (t *Task) ContainerRun(root, image, network string, cpus []int) (argv []str
 	}
 	argv = append(argv, image, "-c", back, "sh")
 	argv = append(argv, t.Argv...)
-	return argv, func() { _ = exec.Command("docker", "rm", "-f", name).Run() }
+	return argv, func() { _ = docker("rm", "-f", name).Run() }
 }
 
 func randomHex() string {

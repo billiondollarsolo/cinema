@@ -71,7 +71,7 @@ func Run(ctx context.Context, o Options) (Result, error) {
 		// exec.Command resolved argv[0] with OUR PATH; the child's PATH (a pinned
 		// runtime first) is the one that must decide which binary runs.
 		if p, err := LookPath(o.Argv[0], o.Env); err == nil {
-			cmd.Path = p
+			cmd.Path, cmd.Err = p, nil // Err: exec.Command's own lookup failed when the tool is only on the child's PATH
 		}
 	}
 	res.Path = cmd.Path
