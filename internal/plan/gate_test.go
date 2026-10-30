@@ -69,6 +69,8 @@ func TestGateTask(t *testing.T) {
 			p.Result = evidence.Result{Status: "failed", ExitCode: 1, Origin: "fresh"}
 			p.Timing.StartedAt = now.Add(-73 * time.Hour)
 		})}, nil, GateReuse, ""},
+		{"too close to the timeout", timeoutTask(30 * time.Minute), []evidence.VerifiedStatement{stmt(func(p *evidence.Predicate) { p.Timing.DurationMS = (16 * time.Minute).Milliseconds() })}, nil, GateRun, TooCloseToTimeout},
+		{"well within the timeout", timeoutTask(30 * time.Minute), []evidence.VerifiedStatement{stmt(func(p *evidence.Predicate) { p.Timing.DurationMS = (10 * time.Minute).Milliseconds() })}, nil, GateReuse, ""},
 		{"a failure is never reused", tsk, []evidence.VerifiedStatement{stmt(func(p *evidence.Predicate) {
 			p.Result = evidence.Result{Status: "failed", ExitCode: 1, Origin: "fresh"}
 		})}, nil, GateRun, FailedElsewhere},
@@ -152,5 +154,11 @@ func TestGateProperties(t *testing.T) {
 func workspaceTask() *task.Task {
 	t := tk("none", true)
 	t.Reuse.Capture = "workspace"
+	return t
+}
+
+func timeoutTask(d time.Duration) *task.Task {
+	t := tk("none", true)
+	t.Timeout = d
 	return t
 }

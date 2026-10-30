@@ -161,6 +161,11 @@ printf '[safe]\n\tdirectory = %[4]s\n' > /home/runner/.gitconfig && chown %[1]d:
 		"GITHUB_ACTIONS=true", "RUNNER_OS=Linux", "RUNNER_ARCH=" + runnerArch,
 		"RUNNER_TEMP=/home/runner/work/_temp", "GITHUB_WORKSPACE=" + s.Workdir,
 		"GOTOOLCHAIN=local", // setup-go sets it too: the pinned Go, never a download
+		// The shared build cache keeps builds fast, but go test would replay
+		// cached results, which are never evidence: run tests fresh (other go
+		// commands ignore the flag). A job that sets GOFLAGS itself replaces it,
+		// and the cache detector still catches a replay.
+		"GOFLAGS=-count=1",
 	}, sp.Env...)
 	if sp.Artifacts != "" {
 		s.env = append(s.env, "CINEMA_ARTIFACTS=/opt/cinema/artifacts")

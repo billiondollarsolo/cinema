@@ -70,6 +70,8 @@ type Proposal struct {
 	// Floating: the version specs the pins were resolved from ("Go": "stable"),
 	// so the gate re-resolves them (plan §11.2).
 	Floating map[string]string `json:"floating,omitempty"`
+	// TimeoutMinutes: the job's timeout-minutes (GitHub's default is 360).
+	TimeoutMinutes int `json:"timeout_minutes,omitempty"`
 }
 
 type workflow struct {
@@ -91,6 +93,7 @@ type job struct {
 	RunsOn    yaml.Node            `yaml:"runs-on"`
 	If        string               `yaml:"if"`
 	Uses      string               `yaml:"uses"` // reusable workflow
+	Timeout   string               `yaml:"timeout-minutes"`
 	Container yaml.Node            `yaml:"container"`
 	Services  map[string]yaml.Node `yaml:"services"`
 	Env       map[string]any       `yaml:"env"`
@@ -489,6 +492,10 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 			notes = append(notes, n)
 		}
 		r.Notes = notes
+		p.TimeoutMinutes = 360 // GitHub's default
+		if n, err := strconv.Atoi(strings.TrimSpace(sub(j.Timeout))); err == nil && n > 0 {
+			p.TimeoutMinutes = n
+		}
 		if eventDependent(j) {
 			p.Event = "pull_request" // drafts evaluate github.event_name as the PR gate's
 		}

@@ -79,6 +79,11 @@ func GateTask(t *task.Task, exp Expected, stmts []evidence.VerifiedStatement, re
 			reason = WorkspaceEvidence
 		case exp.Now.Sub(started) > t.Reuse.MaxAge || started.After(exp.Now.Add(5*time.Minute)):
 			reason = ReceiptExpired
+		// A run that used over half the job's timeout could time out on a
+		// slower CI runner (plan §11.2). ponytail: compares raw local time; scale
+		// by a measured local:CI speed ratio once shadow pairs record one.
+		case t.Timeout > 0 && time.Duration(p.Timing.DurationMS)*time.Millisecond > t.Timeout/2:
+			reason = TooCloseToTimeout
 		}
 		if reason == "" {
 			return GateDecision{Task: t.ID, Decision: GateReuse, RunID: p.RunID, Signer: vs.Signer}
