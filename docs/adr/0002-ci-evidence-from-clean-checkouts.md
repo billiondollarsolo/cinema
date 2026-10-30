@@ -31,4 +31,4 @@ Plan §5.1 already warned that `.gitignore` is not proof an ignored file doesn't
 
 - Correct by construction for the whole class: nothing ignored is present in the run.
 - Costs a clean checkout per pre-push run. A shared clone plus checkout takes seconds. Tasks must include their own setup (dependency install), which is exactly what CI does. Warm local caches (Go module cache, pnpm store) keep that fast.
-- It's the mode the VPS flow (§9) already used.
+- It's the mode the VPS flow already used. Since ADR 0003, CI evidence also has to come from a container (plan §11.2), which is always a clean checkout.
