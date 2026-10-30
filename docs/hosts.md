@@ -38,15 +38,17 @@ You pick the engine; `cinema doctor` shows what's installed and what each can do
 
 A receipt only counts for a job whose runner has the same architecture the run had. **Emulation is an option, off by default:** turn it on with `emulate: [amd64]` in your user config. Without it, an Apple-silicon Mac leaves amd64 jobs to CI or to an amd64 remote host.
 
-What emulation costs, measured in the P4-1 spike (M-series Mac, Colima with Rosetta, 4 CPUs / 16 GB per container, cold caches):
+What emulation costs, measured in the P4-1 spike (M-series Mac, Colima with Rosetta, 4 CPUs / 16 GB per container; [details](../spikes/local-container/RESULTS.md)):
 
-| Task | arm64 native | amd64 under Rosetta | Slower by |
-|---|---:|---:|---:|
-| cli `lint` (golangci-lint + checks) | 1m25s | 7m21s | 5.2× |
-| cli `build` (`go test -race ./...`) | 3m17s | 9m12s | 2.8× |
-| cli `govulncheck` | 10.2s | 29.5s | 2.9× |
-| eslint `test-types` | 47s | 1m15s | 1.6× |
-| traefik cross-build (with its web UI) | 1m59s | 6m15s | 3.1× |
+| Task | arm64 native, cold | amd64 under Rosetta, cold | Slower by | Warm, both arches |
+|---|---:|---:|---:|---|
+| cli `lint` (golangci-lint + checks) | 2m14s | 8m35s | 3.8× | 1m20s, the same |
+| cli `build` (`go test -race ./...`) | 3m24s | 9m50s | 2.9× | ~2m30s |
+| cli `govulncheck` | 10s | 30s | 3.0× | |
+| eslint `test-types` | 47s | 1m15s | 1.6× | |
+| traefik cross-build (with its web UI) | 2m05s | 6m28s | 3.1× | 4s vs 10s |
+
+So: 1.6–3.8× slower cold, and warm caches close most of the gap. For reference, the same cli tasks took 1m26s and 3m26s on a 16-core Linux VPS: native arm64 on a Mac is as fast.
 
 Other emulation gotchas: x86 CPU features differ (code that picks a SIMD path at runtime may take another one); timing-sensitive tests can time out. Receipts record `emulated: true`, and a task can forbid it (`emulation: forbid`).
 

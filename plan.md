@@ -489,7 +489,7 @@ One small interface (`internal/engine`): pull an image by digest, create a conta
 | Linux / Windows (x86-64) | native | emulated (QEMU), or stays in CI |
 | macOS (Apple silicon), Linux / Windows on ARM | emulated (Rosetta) | native |
 
-- **Emulation is an option, off by default** (`emulate: [amd64]` in the user config). P4-1 on an M-series Mac, Colima with Rosetta, cold caches: cli lint 5.2×, cli build 2.8×, govulncheck 2.9×, eslint type tests 1.6× slower than arm64 native. Without it, an arm64 host leaves amd64 jobs to CI or to an amd64 host. Emulation is slower and changes CPU features (Rosetta has no AVX-512, and AVX/AVX2 only on recent macOS; verify in P4-1). Code that picks a SIMD path at runtime takes a different path than on the runner. Receipts record `emulated: true`; a task can require `emulation: forbid`, and then it runs natively or stays in CI.
+- **Emulation is an option, off by default** (`emulate: [amd64]` in the user config). P4-1 on an M-series Mac, Colima with Rosetta, cold caches: cli lint 3.8×, cli build 2.9×, govulncheck 3.0×, traefik cross-build 3.1×, eslint type tests 1.6× slower than arm64 native; warm caches close most of the gap. Without it, an arm64 host leaves amd64 jobs to CI or to an amd64 host. Emulation is slower and changes CPU features (Rosetta has no AVX-512, and AVX/AVX2 only on recent macOS; verify in P4-1). Code that picks a SIMD path at runtime takes a different path than on the runner. Receipts record `emulated: true`; a task can require `emulation: forbid`, and then it runs natively or stays in CI.
 
 ### 9.2 Fidelity: the container is sized and shaped like the runner
 
@@ -1016,7 +1016,7 @@ Report hashing and wrapper overhead separately, always.
 
 ### P4 — Local-first container CI on any host (ADR 0003)
 
-- [ ] **P4-1 Spike.** On an Apple-silicon Mac: run tasks that pass on the Linux lab box (eslint's tests, traefik's cross-builds, prometheus's container job, a services job) in Docker, amd64 under Rosetta and arm64 native, then in Apple `container`. Compare results with the lab and with CI; time them; check CPU features under Rosetta. Same on Windows (Docker Desktop, WSL2). **Decides** whether emulated amd64 is fast enough to be the default.
+- [~] **P4-1 Spike.** (Mac with Colima done: every result matched once three CInema bugs were fixed; Rosetta 1.6–3.8× cold; [results](spikes/local-container/RESULTS.md). Apple `container` needs macOS 26; Windows not yet.) On an Apple-silicon Mac: run tasks that pass on the Linux lab box (eslint's tests, traefik's cross-builds, prometheus's container job, a services job) in Docker, amd64 under Rosetta and arm64 native, then in Apple `container`. Compare results with the lab and with CI; time them; check CPU features under Rosetta. Same on Windows (Docker Desktop, WSL2). **Decides** whether emulated amd64 is fast enough to be the default.
 - [ ] **False-green closers first** (needed before anything skips on container evidence): re-resolve floating versions and tags at verify time; `event` in contract and receipt; signed failures and `FAILED_ELSEWHERE`; container-only evidence; runner size in the environment; duration vs timeout (§11.2)
 - [ ] Shadow mode with backtest graduation, live pairs, spot checks; existing setups start in shadow (§11.5); PR summary (§11.6)
 - [ ] `internal/engine`, Docker-compatible first; `cinema doctor` reports engines, arches, disk
@@ -1070,7 +1070,7 @@ Changing anything in §1, §5.1, §7.2, or §11.2 needs a written ADR in `docs/a
 | Cobra vs stdlib `flag` | Cobra if subcommand count stays > 8 |
 | Should the gate also verify receipts on the PR head when base moved but the change can't affect inputs? | No. Whole-source only in the MVP; P0-3 data informs later |
 | Store `CINEMA_TRUSTED_KEYS` in a repo variable vs an org variable | Repo variable; org variables work identically if users want them |
-| Emulated amd64 by default on Apple silicon? | **Decided: an option, off by default.** P4-1 measured Rosetta at 1.6–5.2× slower than native (cold runs). Documented with its costs; `arch: any` for CPU-independent checks |
+| Emulated amd64 by default on Apple silicon? | **Decided: an option, off by default.** P4-1 measured Rosetta at 1.6–3.8× (cold) slower than native (cold runs). Documented with its costs; `arch: any` for CPU-independent checks |
 | Scale job timeouts under emulation? | Local timeouts scale by the measured slowdown (capped at 3×); the gate's check uses the local-to-CI ratio (§11.2) |
 | Shadow graduation threshold | 3 agreeing PRs, spot checks 1 in 20 |
 | Which provider plugin first? | One with SSH + Docker (boat-style) first: it reuses the ssh host path |
