@@ -343,6 +343,9 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 			skip("needs artifacts from another job (download-artifact)")
 		case action == "actions/setup-go":
 			p.Go = onePin(p.Go, exactVersion(root, sub(str(s.With["go-version"])), `^1\.[0-9]+\.[0-9]+$`, "Go", str(s.With["go-version-file"]), review, note), "Go", review)
+			// setup-go also puts GOPATH/bin on PATH: tools a job `go install`s are
+			// then found (P4-1: cli's go-licenses; the VPS's login PATH hid it).
+			steps = slices.Insert(slices.Clone(steps), i+1, step{Run: `echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"`, Dir: "."})
 		case action == "actions/setup-node":
 			p.Node = onePin(p.Node, exactVersion(root, sub(str(s.With["node-version"])), `^[0-9]+\.[0-9]+\.[0-9]+$`, "Node", str(s.With["node-version-file"]), review, note), "Node", review)
 		case action == "golangci/golangci-lint-action", action == "pnpm/action-setup":

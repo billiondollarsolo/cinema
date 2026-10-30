@@ -148,3 +148,31 @@ jobs:
 		t.Fatalf("new commit: %d builds, want 2", builds())
 	}
 }
+
+// setup-go puts GOPATH/bin on PATH, so a tool a step `go install`s is found
+// by the next one (P4-1: cli's go-licenses).
+func TestSetupGoAddsGopathBin(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go")
+	}
+	src := `on: pull_request
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-go@v5
+        with: {go-version: 1.26.10}
+      - run: mkdir -p "$(go env GOPATH)/bin" && printf '#!/bin/sh\necho installed-tool\n' > "$(go env GOPATH)/bin/zz-installed" && chmod +x "$(go env GOPATH)/bin/zz-installed"
+      - run: zz-installed
+`
+	jobs, err := Workflow("ci.yml", []byte(src))
+	if err != nil || jobs[0].Proposal == nil {
+		t.Fatal(err, jobs)
+	}
+	dir := t.TempDir()
+	cmd := exec.Command("bash", "-ec", jobs[0].Proposal.Body)
+	cmd.Dir, cmd.Env = dir, append(os.Environ(), "GOPATH="+t.TempDir(), "GOTOOLCHAIN=local", "TMPDIR="+t.TempDir())
+	if out, err := cmd.CombinedOutput(); err != nil || !strings.Contains(string(out), "installed-tool") {
+		t.Fatalf("%v\n%s\n--- body:\n%s", err, out, jobs[0].Proposal.Body)
+	}
+}

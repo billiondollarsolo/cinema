@@ -16,7 +16,7 @@
 | What runs locally | **Linux CI jobs**, from any developer machine: macOS, Linux or Windows. Windows and macOS CI jobs stay in CI for now. |
 | Where it runs | **Local first.** Each job runs in a Linux container on the developer's machine (§9). Remote machines (an SSH host, or an on-demand machine billed by the second) are an option the developer picks when they want to scale, never a requirement. |
 | Container engine | Pluggable: any Docker-compatible engine (Docker, Podman, OrbStack, Colima, Rancher Desktop) or Apple `container` on macOS 26+. `cinema doctor` detects what's installed and the user chooses. |
-| Platform reuse | Exact match: a receipt counts only for a job whose runner has the same OS and CPU architecture the run had. An arm64 Mac runs amd64 jobs emulated (Rosetta), and the receipt says so. `arch: any` is an explicit, per-task opt-in, never inferred (§6.1). |
+| Platform reuse | Exact match: a receipt counts only for a job whose runner has the same OS and CPU architecture the run had. On an arm64 host, amd64 jobs run emulated (Rosetta, QEMU) only if the developer turns emulation on; the receipt says so. Otherwise they stay in CI or go to an amd64 host (§9.3). `arch: any` is an explicit, per-task opt-in, never inferred (§6.1). |
 | Accuracy | A job starts skipping in CI only after its local stand-in has agreed with CI on real PRs (shadow mode, §11.5). Disagreement sends it back to CI. |
 | Dashboard | Small, local, embedded in the binary. No Node at runtime, no React stack in the MVP. Never a public bind; a dashboard on another machine is reached through an SSH tunnel (`ssh -L`) or `tailscale serve` with `--allow-host`. |
 | First provider | GitHub Actions. GitLab is next (§16, P3). |
@@ -479,6 +479,7 @@ One small interface (`internal/engine`): pull an image by digest, create a conta
 
 - **cinema's own engine client config.** cinema talks to the engine with a private, empty client config (`DOCKER_CONFIG` in its data dir), never the user's `~/.docker/config.json`. The user's config can name a keychain credential helper and registry logins; using it pops a keychain password prompt on every pull (seen in P4-1 on a Mac) and would hand those logins to the job's image pulls. Private registries a task needs go through `credentials:` (§9.2).
 - **Always pass the platform.** Every pull and run names `--platform linux/<arch>`. A tag pulled once for one arch otherwise satisfies later runs for the other (P4-1: `alpine:latest` pulled for amd64 then ran as amd64 with no `--platform`).
+- **Runtimes need no host tools.** A runtime pin must work in an image with nothing preinstalled. P4-1: Go provisioning went through `GOTOOLCHAIN`, which needs some `go` to bootstrap from (the VPS had one, a clean container didn't). Go is provisioned from the official tarball, checked against its SHA-256, like Node.
 - Selection: `cinema doctor` lists the engines it finds and what each can do (arches, emulation, services). The choice goes in the user config (§9.5), not the repo. Never guessed silently between runs: switching engines changes `executor.engine` in receipts.
 - What runs where:
 
@@ -487,13 +488,13 @@ One small interface (`internal/engine`): pull an image by digest, create a conta
 | Linux / Windows (x86-64) | native | emulated (QEMU), or stays in CI |
 | macOS (Apple silicon), Linux / Windows on ARM | emulated (Rosetta) | native |
 
-- Emulation is slower (measure in P4-1) and changes CPU features (Rosetta has no AVX-512, and AVX/AVX2 only on recent macOS; verify in P4-1). Code that picks a SIMD path at runtime takes a different path than on the runner. Receipts record `emulated: true`; a task can require `emulation: forbid`, and then it runs natively or stays in CI.
+- **Emulation is an option, off by default** (`emulate: [amd64]` in the user config). P4-1 on an M-series Mac, Colima with Rosetta, cold caches: cli lint 5.2×, cli build 2.8×, govulncheck 2.9×, eslint type tests 1.6× slower than arm64 native. Without it, an arm64 host leaves amd64 jobs to CI or to an amd64 host. Emulation is slower and changes CPU features (Rosetta has no AVX-512, and AVX/AVX2 only on recent macOS; verify in P4-1). Code that picks a SIMD path at runtime takes a different path than on the runner. Receipts record `emulated: true`; a task can require `emulation: forbid`, and then it runs natively or stays in CI.
 
 ### 9.2 Fidelity: the container is sized and shaped like the runner
 
 A local pass must mean CI would pass. So the container imitates the job's runner, not the developer's machine:
 
-- **Image.** A pinned runner-like image per `runs-on` label (`ubuntu-24.04`, `ubuntu-22.04`, …): the OS release, a non-root `runner` user with passwordless sudo, as on GitHub, and only the tools jobs need. Decided: slim, not GitHub's ~60 GB image. The analyzer and `cinema doctor` find the tools each job calls, and the task's image layer adds them (pinned, part of the digest). A tool it misses is a failed local run, never a false green. Its digest is in every fingerprint. `container:` jobs use their own image, as now.
+- **Image.** A pinned runner-like image per `runs-on` label (`ubuntu-24.04`, `ubuntu-22.04`, …): the OS release, a non-root `runner` user with passwordless sudo, as on GitHub, and only the tools jobs need. Decided: slim, not GitHub's ~60 GB image. The analyzer and `cinema doctor` find the tools each job calls, and the task's image layer adds them (pinned, part of the digest). A tool it misses is a failed local run, never a false green. "Slim" still means the base set of GitHub's image that tests call without any workflow mentioning it: P4-1 found cli's Go tests exec `ssh` and `ssh-keygen`, which no workflow scan can see. The base set (OpenSSH client, git, curl, wget, jq, zip/unzip, xz, make, gcc/g++, python3, sudo, …) is chosen from GitHub's image manifest; `cinema doctor` reads a failed run's output (`exec: "ssh": executable file not found`) and proposes the missing package. Its digest is in every fingerprint. `container:` jobs use their own image, as now.
 - **Resources.** CPUs and memory match the runner size (`ubuntu-latest`: 4 vCPU / 16 GB on public repos, 2 / 7 GB on private ones; larger runners by label). Tests that size worker pools from the core count, or that would run out of memory in CI, behave as in CI.
 - **User, paths, env.** Non-root `runner` user, `HOME=/home/runner` fresh per run, and the checkout at the runner's path, `/home/runner/work/<repo>/<repo>`: tests that embed absolute paths (snapshots, coverage, error messages) see the same ones. `CI=true`, `TZ=UTC`, `LANG=C.UTF-8`, and `GITHUB_*` variables only where the job reads them (from the analyzer).
 - **Limits.** `ulimit -n` and process limits as on runners; `/dev/shm` sized like the runner's (Docker's 64 MB default crashes headless browsers); no swap beyond the runner's.
@@ -1068,7 +1069,7 @@ Changing anything in §1, §5.1, §7.2, or §11.2 needs a written ADR in `docs/a
 | Cobra vs stdlib `flag` | Cobra if subcommand count stays > 8 |
 | Should the gate also verify receipts on the PR head when base moved but the change can't affect inputs? | No. Whole-source only in the MVP; P0-3 data informs later |
 | Store `CINEMA_TRUSTED_KEYS` in a repo variable vs an org variable | Repo variable; org variables work identically if users want them |
-| Emulated amd64 by default on Apple silicon? | Yes, unless P4-1 shows it's too slow; `arch: any` for CPU-independent checks |
+| Emulated amd64 by default on Apple silicon? | **Decided: an option, off by default.** P4-1 measured Rosetta at 1.6–5.2× slower than native (cold runs). Documented with its costs; `arch: any` for CPU-independent checks |
 | Scale job timeouts under emulation? | Local timeouts scale by the measured slowdown (capped at 3×); the gate's check uses the local-to-CI ratio (§11.2) |
 | Shadow graduation threshold | 3 agreeing PRs, spot checks 1 in 20 |
 | Which provider plugin first? | One with SSH + Docker (boat-style) first: it reuses the ssh host path |
