@@ -40,6 +40,23 @@ Even a fully reused PR still costs one runner start for the gate. The MVP is wor
 
 We also need to know the **real reuse rate** (§12). If both numbers are good, continue. If not, fix the overhead before adding features.
 
+### 0.3 The CI pain this solves (research, 2026-10-30)
+
+What developers report, and what each means for CInema. Most published numbers come from vendors; the direction is consistent, the exact figures aren't to be relied on.
+
+| Pain | What it means here |
+|---|---|
+| **Push, wait, fail, repeat.** The slowest loop in development is the one through CI: a typo found after a 15-minute wait, workflows debugged over 20 commits. | Local runs are the feedback loop; CI stays the gate. A local failure needs to be as easy to dig into as a local test: `cinema debug <task>` opens a shell in the task's container at the failing step (§9.2). |
+| **Flaky tests.** Most developers hit them monthly or more; reruns that pass without a code change are routine. | Reuse must never launder a flake (signed failures, `FAILED_ELSEWHERE`, §11.2). CInema also has what CI throws away: every run's outcome on the same inputs, on every developer's machine. Same `action_key`, different outcomes = a flaky task, reported by name in `cinema status` and the PR summary. |
+| **Cost, and its volatility.** GitHub cut hosted runner prices by up to ~40% on 2026-01-01 and announced, then postponed, a per-minute fee on self-hosted runners. | Savings are priced from rates in one updatable table, never hard-coded, and the summary shows minutes as well as dollars. A per-minute platform fee, if it comes back, makes every skipped job worth more, self-hosted ones too. |
+| **AI agents multiply PRs.** Several agent sessions per developer, each opening PRs, compete for one runner pool; agent PRs fail CI more often. | Agents are first-class users: they run `cinema push` / `cinema status --json` before a PR exists, so broken work never reaches CI. Many sessions on one machine share one scheduler (§9.4: machine-wide slots, not per-invocation `-j`). Agents that live in remote sandboxes are their own "developer machine" and need their own short-lived, scoped keys (§7.3). |
+| **Supply-chain attacks through CI.** The 2025 `tj-actions/changed-files` compromise repointed tags and leaked secrets from thousands of repos. | Running CI locally runs third-party code (actions, install scripts) on the developer's machine. The container is the boundary: no host credentials, SSH agent, cloud config or env inside it unless a task explicitly declares them, and no host Docker socket without `docker: host`. `cinema analyze` already inlines only commit-pinned actions; it should also flag unpinned ones. |
+| **Merge queues run CI twice.** Once on the PR, again on the queued merge (`merge_group`). | A queue entry whose tree equals a PR's merge-result tree (single PR, base unchanged) matches the PR's receipts: skip it too (§5.5). |
+| **Monorepos rerun everything.** Teams use Nx, Turborepo or Bazel to run only affected targets. | Whole-source fingerprints rerun every task on any change. Narrower inputs stay deferred (`vision §11.5`), but shadow mode (§11.5) is now the way to prove them safe per task before trusting them. CInema must not fight a repo's own build cache. |
+| **Parity tools fall short.** `act` emulates actions imperfectly; Dagger means rewriting CI. | The gap CInema fills: no rewrite, honest about what it can't reproduce (review / stays in CI), and shadow mode as proof rather than a promise. |
+
+Sources: [GitHub: 2026 Actions pricing changes](https://resources.github.com/actions/2026-pricing-changes-for-github-actions/), [devclass on the self-hosted fee](https://devclass.com/2025/12/17/github-to-charge-for-self-hosted-runners-from-march-2026/), [Semgrep on tj-actions](https://semgrep.dev/blog/2025/popular-github-action-tj-actionschanged-files-is-compromised), [flaky-test developer survey (arXiv)](https://ar5iv.labs.arxiv.org/html/2203.00483), [Tenki on agent CI load](https://tenki.cloud/blog/hidden-ci-tax-ai-coding-agents), [LinearB 2026 benchmarks](https://linearb.io/resources/ai-engineering-productivity-gap), [Mergify on monorepo CI](https://mergify.com/learn/monorepo-ci), [debugging Actions over 20+ commits](https://dev.to/s1hofmann/debugging-github-actions-19a5).
+
 ---
 
 ## 1. The invariant
@@ -243,6 +260,7 @@ On `pull_request`, GitHub tests the merge of the PR into its base, not the PR he
 
 - No local merge commit is created; nothing in the repo changes. The tree is checked out like any commit (§5.2).
 - If the merge has conflicts, GitHub runs no `pull_request` CI either: nothing to do.
+- **Merge queues.** A `merge_group` run tests the queued merge. When the queue entry is a single PR and the base hasn't moved, its tree is the PR's merge-result tree, so the gate accepts the PR's receipts for it (`merge_group` is an event tasks can be drafted for, §11.2). Batched entries combine several PRs: their trees are new, and they run.
 - If the base moves before CI runs, the receipt no longer matches and the jobs run (correct). `cinema push` reports how far behind the base it tested.
 - Head-only receipts are still made. They cover `push` events and PRs whose base hasn't moved.
 - A merge-result tree has no commit to attach a note to, so its receipts go in the **PR head's** note, marked `source.tree: merge-result`. The gate already reads the head's notes; the fingerprint decides whether they match.
@@ -407,6 +425,7 @@ An in-toto Statement wrapped in a DSSE envelope, signed with Ed25519. The predic
 
 - `cinema keys init` generates an Ed25519 key, stored in the OS keychain or an encrypted file with 0600 permissions (with a warning).
 - One key per developer machine: laptop, desktop, a VPS. Each gets its own fingerprint, so per-machine trust and revocation are trivial. Stored in the macOS keychain, Windows Credential Manager, or libsecret on Linux; file fallback with a warning.
+- **Agents in remote sandboxes.** A coding agent that works inside a remote sandbox has no developer machine behind it. It gets its own key, short-lived (default 7 days) and listed in the trusted keys with an expiry and a name, so its receipts are distinguishable and expire with it. `cinema keys init --expires 7d --label agent:<name>`.
 - **Remote hosts never hold a key** (§9.3). The developer's machine sends the checkout, collects the result, and signs; the receipt names the host. A remote machine is trusted exactly as much as the developer who chose it.
 - `cinema keys export` prints only the public key.
 - **Trusted public keys live in a GitHub repository variable** (`vars.CINEMA_TRUSTED_KEYS`), **not in the repo tree.** A PR can edit files in the tree. It can't edit repo variables.
@@ -480,6 +499,8 @@ A local pass must mean CI would pass. So the container imitates the job's runner
 - **Docker inside a job.** Many jobs call `docker build`, `docker compose` or Testcontainers, and runners have a Docker daemon. Inside a container that needs an engine of its own. Decided: the host engine's socket, opt-in per task with `docker: host`, an explicit claim because the job can then control the host's engine (the analyzer drafts it, marked, and `cinema setup` lists it). The job's containers are labeled with the run and removed with it. Not available with Apple `container`; those tasks need a Docker-compatible engine or stay in CI.
 - **Network.** Internet as on runners; services on a private network, reachable by name and on localhost ports as in Actions.
 - **Time.** Job `timeout-minutes` applies, scaled for emulation (§17).
+- **Credentials stay out.** Nothing from the host enters the container by default: no host env, `~/.ssh`, SSH agent, `~/.aws`/`~/.config/gcloud`, `~/.npmrc` or Docker credentials. A task that needs one (a private package registry) declares it (`credentials: [npm]`), the developer's own credential is passed for that run only, and the job is marked as depending on it. Receipts never contain credentials.
+- **Debugging.** `cinema debug <task>` reruns the task and leaves a shell in its container at the failing step, with the same env and files. Nothing from a debug session is signable.
 - **Caches.** Download and build caches are named volumes per repo, tool **and tool version** (`cinema-cache-<repo>-go-1.26.10-build`, `…-golangci-2.14.0`): a cache shared across versions is how golangci-lint replayed another build's results (lab rule 4). Package stores that are content-addressed (Go modules, npm, pnpm) can be shared per repo. Each volume has a size cap (default 10 GiB) and is trimmed oldest-first. `cinema doctor` shows the engine's disk use; Docker Desktop's VM disk filling up is a real failure mode. Results are never cached; the checkout is always fresh.
 
 ### 9.3 Remote hosts: an option, behind one interface
@@ -517,6 +538,8 @@ Rules that make remote safe and honest:
 - **Warm caches on cold machines.** Ephemeral machines start cold. Plugins that support snapshots keep a warm cache image per repo; others restore cache volumes from an artifact the developer's machine uploads. Without either, remote is slower than it looks: the estimate says so.
 
 ### 9.4 Fan-out
+
+Local runs share one machine-wide scheduler: several `cinema` invocations (a developer plus a few coding-agent sessions, each in its own worktree) take slots from the same pool instead of each starting `-j` containers, so the machine isn't oversubscribed and runner-sized limits stay honest.
 
 A push with many tasks (a 19-leg build matrix, 12 test shards) can spread over several hosts: local takes what fits, the rest goes to the chosen remote, up to `-j` machines. Rebuilt artifacts (§9.6) are built once per host and shared there.
 
@@ -776,7 +799,7 @@ Shadow pairs also measure the local-to-CI speed ratio (§11.2, Duration). Shadow
 
 ### 11.6 The PR summary
 
-The `cinema` job writes a job summary on every run: which jobs and legs skipped, with whose receipt and from which host; which ran and why (reason code); which are in shadow; and the CI minutes skipped with their price (from the job's history). One table, the three states kept separate: ran locally, reusable for this commit, accepted by CI.
+The `cinema` job writes a job summary on every run: which jobs and legs skipped, with whose receipt and from which host; which ran and why (reason code); which are in shadow; and the CI minutes skipped with their price (from the job's history). Prices come from one table of GitHub's current per-minute rates (updatable without a release, since GitHub's pricing moves), and minutes are always shown next to dollars. One table, the three states kept separate: ran locally, reusable for this commit, accepted by CI.
 
 ---
 
@@ -998,6 +1021,12 @@ Report hashing and wrapper overhead separately, always.
 - [ ] Merge-result runs; receipts on the PR head; push-to-main lookup (§5.5)
 - [ ] `cinema push --background`; pre-push hook warning (§8.1)
 - [ ] ssh hosts via `DOCKER_HOST=ssh://` (§9.3)
+- [ ] Credentials kept out of containers by default; `credentials:` opt-in (§9.2)
+- [ ] `cinema debug <task>` (§9.2)
+- [ ] Flaky-task detection from local history (§0.3)
+- [ ] Machine-wide scheduler for concurrent invocations (§9.4)
+- [ ] `merge_group` receipts (§5.5); runner prices from one updatable table (§11.6)
+- [ ] Short-lived, labeled keys for agents in sandboxes (§7.3)
 - [ ] Apple `container` engine
 - [ ] Tests: ACC-101…122, CLEAN-009…011
 

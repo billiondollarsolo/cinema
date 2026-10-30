@@ -1,6 +1,6 @@
 # ADR 0003: Local-first container execution on any host
 
-- Status: proposed, 2026-10-30 (accept before §11.2 changes ship)
+- Status: accepted, 2026-10-30
 - Touches: plan.md §0, §5.2, §5.5, §6.1, §7, §8, §9, §11.2, §11.5 (false-green boundary)
 
 ## Context
