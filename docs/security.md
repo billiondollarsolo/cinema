@@ -30,6 +30,8 @@ Running your CI locally runs its code: your project's tests and install scripts,
 
 - **Today**, tasks run as normal processes in clean checkouts, as your user, with a private `HOME` and `TMPDIR` per run. They can reach whatever your user can.
 - **Planned (P4)**, tasks run in containers, which become the boundary: no host environment, SSH agent, `~/.ssh`, cloud credentials, `~/.npmrc` or Docker logins inside, unless a task declares one (`credentials: [npm]`), and no host Docker socket without `docker: host`. CInema's own engine calls use an empty Docker client config, so your registry logins never reach a job's image pulls.
+- **Caches are shared between runs of the same repo** (Go modules and build cache, npm and other package caches, as named volumes). That's what keeps local runs fast, and it's a trust boundary: a run of hostile code could plant files that a later run picks up. In CInema's personal trust model you run your own code, so the risk is the same as your own `~/go` and `~/.npm` today. **Planned:** runs of code you didn't write (the maintainer-runs-a-fork flow) always get fresh caches.
+- **Env input values never appear in a command line or the run record:** containers get allowlisted variables by name, and the run history records the task's own command.
 - `cinema analyze` inlines composite actions only when they're pinned to a commit, never by tag: tags can be repointed (the 2025 `tj-actions/changed-files` compromise did exactly that).
 
 ## Trusting a tasks.yaml locally
