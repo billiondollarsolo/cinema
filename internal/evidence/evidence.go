@@ -67,7 +67,7 @@ type SourceRef struct {
 }
 
 type Result struct {
-	Status   string `json:"status"` // only "passed" is ever signed
+	Status   string `json:"status"` // passed | failed: failures are published too, so they block passes elsewhere (plan §11.2)
 	ExitCode int    `json:"exit_code"`
 	Origin   string `json:"origin"` // fresh | tool_cache
 }
@@ -123,8 +123,8 @@ func KeyID(pub ed25519.PublicKey) string {
 
 // Sign serializes st and signs it.
 func Sign(st Statement, priv ed25519.PrivateKey) (Envelope, error) {
-	if st.Predicate.Result.Status != "passed" {
-		return Envelope{}, errors.New("evidence: only passed runs are signed")
+	if r := st.Predicate.Result; !(r.Status == "passed" && r.ExitCode == 0) && !(r.Status == "failed" && r.ExitCode != 0) {
+		return Envelope{}, errors.New("evidence: a result is a pass with exit 0 or a failure without")
 	}
 	payload, err := json.Marshal(st)
 	if err != nil {
@@ -240,8 +240,8 @@ func (st *Statement) validate() error {
 		return errors.New("digest format")
 	case !commitRE.MatchString(p.VCS) || !commitRE.MatchString(p.Source.ObservedCommit):
 		return errors.New("commit format")
-	case p.Result.Status != "passed" || p.Result.ExitCode != 0:
-		return errors.New("result is not a pass")
+	case !(p.Result.Status == "passed" && p.Result.ExitCode == 0) && !(p.Result.Status == "failed" && p.Result.ExitCode != 0):
+		return errors.New("result")
 	case p.Result.Origin != "fresh" && p.Result.Origin != "tool_cache":
 		return errors.New("result origin")
 	case p.Source.Capture != "workspace-observed" && p.Source.Capture != "clean-checkout":

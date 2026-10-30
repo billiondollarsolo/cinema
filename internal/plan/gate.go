@@ -42,11 +42,21 @@ func GateTask(t *task.Task, exp Expected, stmts []evidence.VerifiedStatement, re
 		return d
 	}
 	key := task.ActionKey(exp.Contract, exp.Source, exp.Env, exp.VCS)
+	// A failure of exactly this work, signed by any trusted key, outweighs every
+	// pass: reusing a pass would hide a flaky or broken check, or reward
+	// retrying until green (plan §11.2).
+	for _, vs := range stmts {
+		p := vs.Predicate
+		if p.Task.ID == t.ID && p.Result.Status == "failed" && p.RepositoryID == exp.RepositoryID &&
+			"sha256:"+vs.Subject[0].Digest["sha256"] == key && exp.Now.Sub(p.Timing.StartedAt) <= t.Reuse.MaxAge {
+			return GateDecision{Task: t.ID, Decision: GateRun, Reason: FailedElsewhere, RunID: p.RunID, Signer: vs.Signer}
+		}
+	}
 	best := ""
 	for _, vs := range stmts {
 		p := vs.Predicate
-		if p.Task.ID != t.ID {
-			continue
+		if p.Task.ID != t.ID || p.Result.Status != "passed" {
+			continue // only passes are reused; failures are handled above
 		}
 		reason := ""
 		started := p.Timing.StartedAt

@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/billiondollarsolo/cinema/internal/evidence"
+	"github.com/billiondollarsolo/cinema/internal/plan"
 	"github.com/billiondollarsolo/cinema/internal/snapshot"
 	"github.com/billiondollarsolo/cinema/internal/store"
 	"github.com/billiondollarsolo/cinema/internal/task"
@@ -264,8 +265,18 @@ func receiptsFor(r *repo, sha, repoID string, priv ed25519.PrivateKey, blobs *sn
 			return nil, nil, nil, err
 		}
 		run := qualifyingRun(t, runs, contract, snap.Digest, sha)
+		result := evidence.Result{Status: "passed", ExitCode: 0, Origin: "fresh"}
 		if run == nil {
-			continue
+			// No pass to sign: publish the failure instead, if the latest run on
+			// these inputs failed. A trusted failure blocks passes from every
+			// machine in CI (FAILED_ELSEWHERE), so retrying elsewhere can't hide it.
+			if run = latestFailure(runs, contract, snap.Digest); run == nil {
+				continue
+			}
+			result = evidence.Result{Status: "failed", ExitCode: run.ExitCode, Origin: "fresh"}
+			if result.ExitCode == 0 {
+				result.ExitCode = -1 // timed out or killed: a failure without an exit code
+			}
 		}
 		if !t.Reuse.AcceptsCapture(run.Capture) {
 			workspaceOnly = append(workspaceOnly, t.ID)
@@ -284,7 +295,7 @@ func receiptsFor(r *repo, sha, repoID string, priv ed25519.PrivateKey, blobs *sn
 				Task:      evidence.TaskRef{ID: t.ID, ContractDigest: contract},
 				Source:    evidence.SourceRef{Digest: snap.Digest, ObservedCommit: sha, Capture: captureName(run.Capture)},
 				EnvDigest: run.Env, VCS: vcs,
-				Result:   evidence.Result{Status: "passed", ExitCode: 0, Origin: "fresh"},
+				Result:   result,
 				Timing:   evidence.Timing{StartedAt: run.Started.UTC(), DurationMS: run.DurationMS, TimeAuthority: "local-clock"},
 				Executor: runExecutor(run),
 			},
@@ -358,22 +369,50 @@ func runMissingClean(r *repo, jobs int) int {
 // these bytes, unmodified while it ran, and not blocked by a failure on the same
 // inputs. Freshness (max_age) is the gate's call, not ours.
 func qualifyingRun(t *task.Task, runs []store.TaskRun, contract, source, sha string) *store.TaskRun {
+	// After a failure on these inputs, a pass counts only once it's been repeated:
+	// the newest flakyStreak runs on them all passed. One retry isn't enough to
+	// call a failure a flake (plan §11.2).
+	var best *store.TaskRun
+	streak, failedBefore := 0, false
 	for i := range runs {
 		r := &runs[i]
 		sameInputs := r.Contract == contract && r.SourceBefore == source
-		if r.State == store.StateInterrupted {
+		if r.State == store.StateInterrupted || !sameInputs && r.State != store.StatePassed {
 			continue
 		}
 		if r.State != store.StatePassed {
-			if sameInputs {
-				return nil // a failure on these inputs outweighs older passes
+			if best == nil {
+				return nil // the newest run on these inputs failed
 			}
-			continue
+			failedBefore = true
+			break
 		}
 		if sameInputs && r.SourceAfter == source && r.Origin == "fresh" && r.Env != "" &&
 			(t.VCSContext != "exact" || r.VCS == sha) {
-			return r
+			if best == nil {
+				best = r
+			}
+			streak++
 		}
+	}
+	if failedBefore && streak < plan.FlakyStreak {
+		return nil
+	}
+	return best
+}
+
+// latestFailure is the newest run on these inputs if it failed in a clean
+// checkout: the failure push publishes (plan §11.2).
+func latestFailure(runs []store.TaskRun, contract, source string) *store.TaskRun {
+	for i := range runs {
+		r := &runs[i]
+		if r.State == store.StateInterrupted || r.Contract != contract || r.SourceBefore != source {
+			continue
+		}
+		if r.State == store.StatePassed || r.Env == "" || r.Capture != "clean" {
+			return nil
+		}
+		return r
 	}
 	return nil
 }

@@ -95,6 +95,9 @@ func Local(t *task.Task, cur Current, runs []Run) Decision {
 		}
 		reason := disqualify(t, cur, r)
 		if reason == "" {
+			if flakyHere(cur, runs[i:]) {
+				return Decision{Task: t.ID, State: Failed, Reason: RunFailed, RunID: r.ID}
+			}
 			return Decision{Task: t.ID, State: Reusable, RunID: r.ID}
 		}
 		if best == nil { // describe the newest passed run
@@ -134,4 +137,26 @@ func disqualify(t *task.Task, cur Current, r *Run) string {
 		return ReceiptExpired // a start time in the future is as untrustworthy as an old one
 	}
 	return ""
+}
+
+// FlakyStreak: after a failure on some inputs, a pass counts only once the
+// newest FlakyStreak runs on them all passed (push signs nothing sooner).
+const FlakyStreak = 3
+
+// flakyHere: runs (newest first, starting at a qualifying pass) hold a failure
+// on cur's inputs before FlakyStreak passes on them.
+func flakyHere(cur Current, runs []Run) bool {
+	passes := 0
+	for _, r := range runs {
+		if r.State == "interrupted" || r.Contract != cur.Contract || r.SourceBefore != cur.Source {
+			continue
+		}
+		if r.State != "passed" {
+			return passes < FlakyStreak
+		}
+		if passes++; passes >= FlakyStreak {
+			return false
+		}
+	}
+	return false
 }

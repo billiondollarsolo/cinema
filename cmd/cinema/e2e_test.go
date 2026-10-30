@@ -1057,6 +1057,15 @@ tasks:
 	e.git("commit", "-qm", "tasks")
 	e.cinema("trust")
 	sbEnv := []string{"CINEMA_ENGINE=docker", "CINEMA_RUNNER_IMAGE=" + img, "CINEMA_TEST_SECRET=s3cret-value"}
+	sandboxes := func() map[string]bool { // diff around our run: other runs may share the engine
+		out, _ := exec.Command("docker", "ps", "-aq", "--filter", "label=cinema.sandbox=1").Output()
+		m := map[string]bool{}
+		for _, id := range strings.Fields(string(out)) {
+			m[id] = true
+		}
+		return m
+	}
+	before := sandboxes()
 	cmd := exec.Command(bin, "run", "--commit", "HEAD", "sb")
 	cmd.Dir, cmd.Env = e.repo, append(append(os.Environ(), "CINEMA_DATA_DIR="+e.data), sbEnv...)
 	out, err := cmd.CombinedOutput()
@@ -1077,7 +1086,9 @@ tasks:
 	if st, _ := e.cinemaEnv(sbEnv, "status", "--json"); !strings.Contains(st, `"state": "reusable"`) {
 		t.Fatalf("status must agree with the sandbox run:\n%s", st)
 	}
-	if left, _ := exec.Command("docker", "ps", "-aq", "--filter", "label=cinema.sandbox=1").Output(); len(strings.TrimSpace(string(left))) > 0 {
-		t.Fatalf("sandboxes left behind: %s", left)
+	for id := range sandboxes() {
+		if !before[id] {
+			t.Fatalf("sandbox left behind: %s", id)
+		}
 	}
 }

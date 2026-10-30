@@ -389,3 +389,36 @@ func TestGateEventMismatch(t *testing.T) {
 		t.Fatalf("push event, pull_request task: %v\n%s", got, out)
 	}
 }
+
+// A failure is published and blocks reuse in CI; one pass afterwards doesn't
+// lift it (retrying until green), three in a row do (ACC-115).
+func TestFailurePublishedAndFlakyStreak(t *testing.T) {
+	g := newGateEnv(t)
+	flag := filepath.Join(t.TempDir(), "pass")
+	g.write(".cinema/tasks.yaml", strings.Replace(gateTasks, `argv: [sh, -c, "test -f main.go"]`, `argv: [sh, -c, "test -f `+flag+`"]`, 1))
+	g.git("commit", "-qam", "flaky task")
+	g.git("push", "-q", g.bare, "HEAD:main")
+	g.cinema("trust")
+	g.cinema("run", "--commit", "HEAD", "check") // fails: no flag yet
+	if out, code := g.cinema("push"); code != 0 {
+		t.Fatalf("push: %s", out)
+	}
+	if got, out, _ := g.gate(t, g.keys, nil); got["check"] != "RUN/FAILED_ELSEWHERE" {
+		t.Fatalf("published failure must block: %v\n%s", got, out)
+	}
+	os.WriteFile(flag, nil, 0o644)
+	g.cinema("run", "--commit", "HEAD", "check") // passes once
+	g.cinema("push")
+	if got, _, _ := g.gate(t, g.keys, nil); got["check"] != "RUN/FAILED_ELSEWHERE" {
+		t.Fatalf("one pass after a failure must not lift it: %v", got)
+	}
+	if st := g.states()["check"]; st != "failed/RUN_FAILED" {
+		t.Fatalf("status must agree with push after one pass: %s", st)
+	}
+	g.cinema("run", "--commit", "HEAD", "check")
+	g.cinema("run", "--commit", "HEAD", "check")
+	g.cinema("push")
+	if got, out, _ := g.gate(t, g.keys, nil); got["check"] != "REUSE/" {
+		t.Fatalf("three passes in a row: %v\n%s", got, out)
+	}
+}
