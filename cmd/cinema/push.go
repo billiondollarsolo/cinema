@@ -369,34 +369,34 @@ func runMissingClean(r *repo, jobs int) int {
 // these bytes, unmodified while it ran, and not blocked by a failure on the same
 // inputs. Freshness (max_age) is the gate's call, not ours.
 func qualifyingRun(t *task.Task, runs []store.TaskRun, contract, source, sha string) *store.TaskRun {
-	// After a failure on these inputs, a pass counts only once it's been repeated:
-	// the newest flakyStreak runs on them all passed. One retry isn't enough to
-	// call a failure a flake (plan §11.2).
 	var best *store.TaskRun
-	streak, failedBefore := 0, false
 	for i := range runs {
 		r := &runs[i]
-		sameInputs := r.Contract == contract && r.SourceBefore == source
-		if r.State == store.StateInterrupted || !sameInputs && r.State != store.StatePassed {
+		if r.State == store.StatePassed && r.Contract == contract && r.SourceBefore == source && r.SourceAfter == source &&
+			r.Origin == "fresh" && r.Env != "" && (t.VCSContext != "exact" || r.VCS == sha) {
+			best = r
+			break
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	// A failure of the same work (contract, source and environment) outweighs
+	// a pass until the newest plan.FlakyStreak runs of it all passed: one retry
+	// doesn't make a failure a flake (plan §11.2).
+	streak := 0
+	for i := range runs {
+		r := &runs[i]
+		if r.State == store.StateInterrupted || r.Contract != contract || r.SourceBefore != source || r.Env != best.Env {
 			continue
 		}
 		if r.State != store.StatePassed {
-			if best == nil {
-				return nil // the newest run on these inputs failed
+			if streak < plan.FlakyStreak {
+				return nil
 			}
-			failedBefore = true
 			break
 		}
-		if sameInputs && r.SourceAfter == source && r.Origin == "fresh" && r.Env != "" &&
-			(t.VCSContext != "exact" || r.VCS == sha) {
-			if best == nil {
-				best = r
-			}
-			streak++
-		}
-	}
-	if failedBefore && streak < plan.FlakyStreak {
-		return nil
+		streak++
 	}
 	return best
 }

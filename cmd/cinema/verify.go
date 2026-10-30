@@ -10,6 +10,7 @@ import (
 	"github.com/billiondollarsolo/cinema/internal/analyze"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -515,14 +516,26 @@ func writeStepSummary(rep gateReport) {
 // exactly that leg (job_digest), and a job skips whole only if every leg it
 // expands to is reused. A changed step, if:, runner or a new leg means it runs.
 func writeSkipOutputs(cfg *task.Config, rep gateReport, root, wf string) {
-	reused := map[string]bool{} // job_digest of every reused task
+	reused := map[string]bool{} // job_digest of every reused, graduated task
+	shadow := map[string]bool{} // reused, but not graduated: would skip
 	jobsCovered := map[string]bool{}
+	// Spot check (plan §11.5): one run in 20, picked by the run's own ID,
+	// skips nothing, so graduated stand-ins keep being compared with CI.
+	spot := false
+	if n, err := strconv.ParseUint(os.Getenv("GITHUB_RUN_ID"), 10, 64); err == nil && n%20 == 0 {
+		spot = true
+		fmt.Println("  spot check: this run skips nothing, so CI's results can be compared with cinema's")
+	}
 	for _, tr := range rep.Tasks {
 		t := cfg.Tasks[tr.Task]
 		_, job, _ := strings.Cut(t.Covers, "#")
 		jobsCovered[job] = true
 		if tr.Decision == plan.GateReuse && t.JobDigest != "" {
-			reused[t.JobDigest] = true
+			if t.Graduates() && !spot {
+				reused[t.JobDigest] = true
+			} else if !t.Graduates() {
+				shadow[job] = true
+			}
 		}
 	}
 	legs := candidateLegs(root, wf)
@@ -545,6 +558,9 @@ func writeSkipOutputs(cfg *task.Config, rep gateReport, root, wf string) {
 			excl = nil // the job skips whole
 		case len(excl) > 0:
 			state = fmt.Sprintf("RUN (%d reused leg(s) excluded)", len(excl))
+		}
+		if shadow[job] && !all {
+			state += " (shadow: reused, but not graduated; run cinema graduate)"
 		}
 		fmt.Printf("  %-6s %s\n", state, job)
 		fmt.Fprintf(&lines, "skip_%s=%t\n", job, all)

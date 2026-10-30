@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -334,7 +335,8 @@ jobs:
 	g.git("commit", "-qm", "ci")
 	draft, _ := g.cinema("analyze", "--yaml")
 	// platform: any so the test runs on any machine (not part of the leg digest)
-	g.write(".cinema/tasks.yaml", strings.ReplaceAll(draft, "platform: linux/amd64", "platform: any"))
+	draft = strings.ReplaceAll(draft, "platform: linux/amd64", "platform: any")
+	g.write(".cinema/tasks.yaml", draft)
 	g.git("add", "-A")
 	g.git("commit", "-qm", "drafted tasks")
 	g.cinema("trust")
@@ -356,6 +358,18 @@ jobs:
 		b, _ := os.ReadFile(out)
 		return string(b)
 	}
+	// Shadow mode: reused, but nothing graduated, so nothing skips.
+	if got := verify(); got != "skip_build=false\nexclude_build=[]\nskip_lint=false\nskip_test=false\nexclude_test=[]\nskip_unit=false\n" {
+		t.Fatalf("ungraduated tasks must not skip:\n%s", got)
+	}
+	// Graduate every task for the job digest it covers (what cinema graduate writes).
+	graduated := regexp.MustCompile(`(?m)^    job_digest: (sha256:[0-9a-f]+)$`).ReplaceAllString(draft,
+		"    job_digest: $1\n    graduated: {job_digest: \"$1\", backtested: 5, at: 2026-10-30}")
+	g.write(".cinema/tasks.yaml", graduated)
+	g.git("commit", "-qam", "graduate")
+	g.cinema("trust")
+	g.cinema("run", "--commit", "HEAD", "lint", "build-ubuntu-latest", "test-20.x-ubuntu-latest")
+	g.cinema("push")
 	// build: its ubuntu leg was reused, macOS has no task: never skip whole.
 	want := "skip_build=false\nexclude_build=[{\"os\":\"ubuntu-latest\"}]\nskip_lint=true\nskip_test=false\nexclude_test=[{\"node\":\"20.x\",\"os\":\"ubuntu-latest\"}]\nskip_unit=false\n"
 	if got := verify(); got != want {

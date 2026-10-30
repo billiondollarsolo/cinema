@@ -77,6 +77,11 @@ type Task struct {
 	// ({go: stable, node: "lts/*"}). The gate resolves them again on every run
 	// and runs the job if today's release isn't the pin (plan §11.2). Metadata.
 	Floating map[string]string `yaml:"floating"`
+	// Graduated: the stand-in agreed with CI for exactly this job definition
+	// (plan §11.5). Without it, or for another job_digest, the covered job runs
+	// in CI whatever the receipts say (shadow mode). Written by cinema graduate,
+	// read from the base branch. Metadata, not part of the contract.
+	Graduated *Graduation `yaml:"graduated"`
 	// CPUs caps how many CPUs the task sees locally (Linux: CPU affinity), to
 	// match the runner it replaces: tools size worker pools by core count, and
 	// some suites deadlock or time out on a bigger box (lab: prettier's jest on
@@ -542,4 +547,18 @@ func (t *Task) MemoryGB() int {
 		}
 	}
 	return n
+}
+
+// Graduation records why a stand-in may skip its job (plan §11.5).
+type Graduation struct {
+	JobDigest  string `yaml:"job_digest"`  // the job definition it agreed for
+	Backtested int    `yaml:"backtested"`  // past commits whose CI result it reproduced
+	CIFailures int    `yaml:"ci_failures"` // of those, ones where CI failed and so did it
+	At         string `yaml:"at"`          // date
+}
+
+// Graduates reports whether t may skip its covered job: graduated for the
+// job_digest it covers now.
+func (t *Task) Graduates() bool {
+	return t.Graduated != nil && t.JobDigest != "" && t.Graduated.JobDigest == t.JobDigest
 }

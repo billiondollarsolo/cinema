@@ -148,8 +148,8 @@ const FlakyStreak = 3
 func flakyHere(cur Current, runs []Run) bool {
 	passes := 0
 	for _, r := range runs {
-		if r.State == "interrupted" || r.Contract != cur.Contract || r.SourceBefore != cur.Source {
-			continue
+		if r.State == "interrupted" || r.Contract != cur.Contract || r.SourceBefore != cur.Source || r.Env != cur.Env {
+			continue // other work: a failure elsewhere says nothing about this pass
 		}
 		if r.State != "passed" {
 			return passes < FlakyStreak
