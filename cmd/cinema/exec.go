@@ -69,7 +69,11 @@ func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr err
 		if cwd == "" {
 			cwd, _ = os.Getwd()
 		}
-		runID, recErr = r.st.BeginRun(opts.Argv, cwd)
+		argv := opts.Argv
+		if want != nil {
+			argv = want.Argv // the task's command, not a container wrapper around it
+		}
+		runID, recErr = r.st.BeginRun(argv, cwd)
 	}
 
 	var t *task.Task

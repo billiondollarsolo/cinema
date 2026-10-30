@@ -103,6 +103,11 @@ func cmdRun(args []string) int {
 				return exitBadArgs
 			}
 			if _, ok := place(t); !ok {
+				if strings.HasPrefix(t.Platform, "linux/") {
+					// Running it as something else only fails confusingly, or worse, passes.
+					fmt.Fprintf(os.Stderr, "cinema run: %s needs %s, and this machine can't run it: %s\n", id, t.Platform, placeHint(t))
+					return exitUnsatisfied
+				}
 				fmt.Fprintf(os.Stderr, "cinema run: %s needs %s; running anyway, but it won't count as evidence here\n", id, t.Platform)
 			}
 			todo = append(todo, t)
@@ -256,10 +261,13 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 			return true, false
 		}
 		defer sb.Stop()
-		var extra []string // allowlisted env inputs keep their host values, as fingerprinted
+		// Allowlisted env inputs keep their host values, as fingerprinted. Names
+		// only: docker exec takes the values from its own environment, so they
+		// never appear in an argv (or the run history that records it).
+		var extra []string
 		for _, n := range t.Env {
-			if v, ok := os.LookupEnv(n); ok {
-				extra = append(extra, n+"="+v)
+			if _, ok := os.LookupEnv(n); ok {
+				extra = append(extra, n)
 			}
 		}
 		opts.Argv, opts.Env, opts.CPUs = sb.Exec(t.Cwd, t.Argv, extra), os.Environ(), nil

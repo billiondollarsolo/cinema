@@ -167,3 +167,17 @@ func containerWhere(t *task.Task, pl placement) *task.Where {
 	return &task.Where{Platform: pl.platform, Root: true, Inputs: []string{
 		fmt.Sprintf("executor=container image=%s emulated=%t", t.Container, pl.emulated)}}
 }
+
+// placeHint says what would let this machine run t.
+func placeHint(t *task.Task) string {
+	cfg := loadUserConfig()
+	arch := strings.TrimPrefix(t.Platform, "linux/")
+	switch native := engineArch(); {
+	case t.Container == "" && cfg.Engine != "docker":
+		return "run it in a container: set engine: docker in your cinema config (or CINEMA_ENGINE=docker)"
+	case native == "":
+		return "no container engine answers (docker info failed)"
+	default:
+		return fmt.Sprintf("the engine runs %s natively; to run %s emulated (slower), add it to emulate: in your cinema config (or CINEMA_EMULATE=%s)", native, arch, arch)
+	}
+}

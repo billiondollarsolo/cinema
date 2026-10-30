@@ -889,8 +889,8 @@ tasks:
 	// Another arch is emulated only when the user opts in, and the run says so.
 	cmd = exec.Command(bin, "run", "--commit", "HEAD", "other-arch")
 	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data, "CINEMA_EMULATE=")
-	if out, _ := cmd.CombinedOutput(); !strings.Contains(string(out), "won't count as evidence") {
-		t.Fatalf("other arch without opt-in must not be evidence:\n%s", out)
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "can't run it") {
+		t.Fatalf("other arch without opt-in must be refused:\n%s", out)
 	}
 	cmd = exec.Command(bin, "run", "--commit", "HEAD", "other-arch")
 	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data, "CINEMA_EMULATE=amd64,arm64")
@@ -980,13 +980,13 @@ func TestRunWithServices(t *testing.T) {
 tasks:
   on-host:
     argv: [bash, -c, "exec 3<>/dev/tcp/127.0.0.1/16379 && printf 'PING\r\n' >&3 && head -c5 <&3 | grep -q PONG"]
-    platform: linux/amd64
+    platform: any
     services:
       cache: {image: "redis:7-alpine", ports: ["16379:6379"], options: "--health-cmd 'redis-cli ping' --health-interval 1s"}
     reuse: {allowed: true, max_age: 1h}
   in-container:
     argv: [redis-cli, -h, cache, ping]
-    platform: linux/amd64
+    platform: linux/`+runtime.GOARCH+`
     container: "redis:7-alpine"
     services:
       cache: {image: "redis:7-alpine", options: "--health-cmd 'redis-cli ping' --health-interval 1s"}
@@ -1047,15 +1047,16 @@ func TestRunInSandbox(t *testing.T) {
 	e.write(".cinema/tasks.yaml", `schema_version: 1
 tasks:
   sb:
-    argv: [bash, -c, 'echo "who=$(id -un) ws=$GITHUB_WORKSPACE pwd=$(pwd) home=$HOME"; touch made-here.txt']
+    argv: [bash, -c, 'echo "who=$(id -un) ws=$GITHUB_WORKSPACE pwd=$(pwd) home=$HOME secret=${CINEMA_TEST_SECRET:+passed}"; touch made-here.txt']
     platform: linux/`+runtime.GOARCH+`
     toolchain: [{cmd: [bash, --version]}]
+    env: [CINEMA_TEST_SECRET]
     reuse: {allowed: true, max_age: 1h}
 `)
 	e.git("add", "-A")
 	e.git("commit", "-qm", "tasks")
 	e.cinema("trust")
-	sbEnv := []string{"CINEMA_ENGINE=docker", "CINEMA_RUNNER_IMAGE=" + img}
+	sbEnv := []string{"CINEMA_ENGINE=docker", "CINEMA_RUNNER_IMAGE=" + img, "CINEMA_TEST_SECRET=s3cret-value"}
 	cmd := exec.Command(bin, "run", "--commit", "HEAD", "sb")
 	cmd.Dir, cmd.Env = e.repo, append(append(os.Environ(), "CINEMA_DATA_DIR="+e.data), sbEnv...)
 	out, err := cmd.CombinedOutput()
@@ -1064,7 +1065,7 @@ tasks:
 	}
 	name := filepath.Base(e.repo)
 	ws := "/home/runner/work/" + name + "/" + name
-	if log, _ := e.cinemaEnv(sbEnv, "log", "sb"); !strings.Contains(log, "who=runner ws="+ws+" pwd="+ws+" home=/home/runner") {
+	if log, _ := e.cinemaEnv(sbEnv, "log", "sb"); !strings.Contains(log, "who=runner ws="+ws+" pwd="+ws+" home=/home/runner secret=passed") || strings.Contains(log, "s3cret-value") {
 		t.Fatalf("not run like a runner:\n%s", log)
 	}
 	exp, _ := e.cinemaEnv(sbEnv, "explain", "--json", "sb")
