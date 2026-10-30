@@ -87,6 +87,7 @@ func cmdPush(args []string) int {
 	jobs := fs.Int("j", 1, "with --run: run up to `N` tasks at once, each in its own clean checkout")
 	var commits stringList
 	fs.Var(&commits, "commit", "sign evidence for `REV` (repeatable; default: the commits being pushed)")
+	mergeBase := fs.String("merge-base", "auto", "also test the merge of HEAD into `REF`, the tree CI builds for a PR (auto: the remote's default branch; none: don't)")
 	if err := fs.Parse(args); err != nil {
 		return exitBadArgs
 	}
@@ -120,9 +121,22 @@ func cmdPush(args []string) int {
 		}
 	}
 
+	head, err := gitOut(r.root, "rev-parse", "HEAD")
+	if err != nil {
+		return fail(exitBadArgs, "%v", err)
+	}
+	merge, mergeNote := mergeResult(r.root, *remote, branch, head, *mergeBase)
+	if mergeNote != "" {
+		fmt.Println(mergeNote)
+	}
 	if *runFirst && !*dryRun {
-		if code := runMissingClean(r, max(*jobs, 1)); code != 0 {
+		if code := runMissingClean(r, max(*jobs, 1), head); code != 0 {
 			return code
+		}
+		if merge != "" {
+			if code := runMissingClean(r, max(*jobs, 1), merge); code != 0 {
+				return code
+			}
 		}
 	}
 
@@ -164,7 +178,20 @@ func cmdPush(args []string) int {
 		if *dryRun {
 			continue
 		}
-		if err := transport.Write(r.root, ref, sha, mergeEnvelopes(r.root, ref, sha, envs, tasks)); err != nil {
+		if sha == head && merge != "" {
+			// The merge result has no commit CI knows: its receipts go on the
+			// head's note, beside the head's own (plan §5.5).
+			menvs, mtasks, _, err := receiptsFor(r, merge, repoID, priv, blobs)
+			if err != nil {
+				return fail(exitInternal, "merge result: %v", err)
+			}
+			if len(menvs) > 0 {
+				fmt.Printf("%s  merge result: %s\n", sha[:12], strings.Join(mtasks, ", "))
+				signed += len(menvs)
+				envs = append(envs, menvs...)
+			}
+		}
+		if err := transport.Write(r.root, ref, sha, mergeEnvelopes(r.root, ref, sha, envs)); err != nil {
 			return fail(exitInternal, "%v", err)
 		}
 	}
@@ -313,14 +340,9 @@ func receiptsFor(r *repo, sha, repoID string, priv ed25519.PrivateKey, blobs *sn
 
 // runMissingClean runs, in a clean checkout of HEAD, every reusable task this
 // machine can satisfy that has no clean-checkout evidence for HEAD yet.
-func runMissingClean(r *repo, jobs int) int {
+func runMissingClean(r *repo, jobs int, sha string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	sha, err := gitOut(r.root, "rev-parse", "HEAD")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "cinema push: %v\n", err)
-		return exitBadArgs
-	}
 	blobs := snapshot.NewBlobCache()
 	var todo []*task.Task
 	for _, id := range sortedIDs(r.cfg) {
@@ -424,26 +446,20 @@ func captureName(c string) string {
 	return "workspace-observed"
 }
 
-// mergeEnvelopes keeps receipts already in the note for tasks we didn't re-sign.
-func mergeEnvelopes(root, ref, sha string, fresh []json.RawMessage, tasks []string) []json.RawMessage {
+// mergeEnvelopes keeps receipts already in the note that the fresh ones don't
+// replace: one per task and tree (head and merge result are different trees).
+func mergeEnvelopes(root, ref, sha string, fresh []json.RawMessage) []json.RawMessage {
 	old, err := transport.Read(root, ref, sha)
 	if err != nil {
 		return fresh
 	}
 	signed := map[string]bool{}
-	for _, t := range tasks {
-		signed[t] = true
+	for _, raw := range fresh {
+		signed[receiptKey(raw)] = true
 	}
 	out := fresh
 	for _, raw := range old {
-		var env evidence.Envelope
-		if json.Unmarshal(raw, &env) != nil {
-			continue
-		}
-		var st struct {
-			Predicate struct{ Task struct{ ID string } } `json:"predicate"`
-		}
-		if p, err := decodePayload(env); err == nil && json.Unmarshal(p, &st) == nil && !signed[st.Predicate.Task.ID] {
+		if k := receiptKey(raw); k != "" && !signed[k] {
 			out = append(out, raw)
 		}
 	}
@@ -451,6 +467,60 @@ func mergeEnvelopes(root, ref, sha string, fresh []json.RawMessage, tasks []stri
 		out = out[:transport.MaxReceipts]
 	}
 	return out
+}
+
+// receiptKey is a receipt's task and source digest, "" if unreadable.
+func receiptKey(raw json.RawMessage) string {
+	var env evidence.Envelope
+	if json.Unmarshal(raw, &env) != nil {
+		return ""
+	}
+	var st struct {
+		Predicate struct {
+			Task   struct{ ID string }
+			Source struct{ Digest string }
+		} `json:"predicate"`
+	}
+	p, err := decodePayload(env)
+	if err != nil || json.Unmarshal(p, &st) != nil {
+		return ""
+	}
+	return st.Predicate.Task.ID + "\x00" + st.Predicate.Source.Digest
+}
+
+// mergeResult is a commit holding the tree GitHub builds for a PR of HEAD into
+// the base: git merge-tree's result, wrapped in a commit object no ref points
+// to (git's gc removes it; nothing in the repo changes). "" when there's no
+// base, HEAD already contains it, or the merge conflicts (then CI runs no PR
+// checks either).
+func mergeResult(root, remote, branch, head, base string) (sha, note string) {
+	if base == "none" {
+		return "", ""
+	}
+	if base == "auto" {
+		b, err := gitOut(root, "rev-parse", "--abbrev-ref", remote+"/HEAD")
+		if err != nil {
+			return "", ""
+		}
+		base = b
+	}
+	baseSHA, err := gitOut(root, "rev-parse", "--verify", "--quiet", base+"^{commit}")
+	if err != nil || strings.TrimPrefix(base, remote+"/") == branch {
+		return "", ""
+	}
+	if _, err := gitOut(root, "merge-base", "--is-ancestor", baseSHA, head); err == nil {
+		return "", "" // up to date with the base: the merge result is HEAD's own tree
+	}
+	tree, err := gitOut(root, "merge-tree", "--write-tree", baseSHA, head)
+	if err != nil {
+		return "", fmt.Sprintf("merge result: HEAD doesn't merge cleanly into %s; CI will run no PR checks until it does", base)
+	}
+	tree, _, _ = strings.Cut(tree, "\n")
+	c, err := gitOut(root, "-c", "user.name=cinema", "-c", "user.email=cinema@localhost", "commit-tree", tree, "-p", baseSHA, "-p", head, "-m", "cinema: merge result of "+short(head)+" into "+base)
+	if err != nil {
+		return "", ""
+	}
+	return c, fmt.Sprintf("merge result: also testing HEAD merged into %s (%s), the tree CI builds for a PR", base, short(baseSHA))
 }
 
 func decodePayload(env evidence.Envelope) ([]byte, error) {

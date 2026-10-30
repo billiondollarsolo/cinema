@@ -457,3 +457,58 @@ func TestFloatingMoved(t *testing.T) {
 		t.Fatal("unresolvable must run")
 	}
 }
+
+// The base moved after the branch: a head receipt no longer matches the merge
+// commit CI tests, the merge-result receipt does (plan §5.5, ACC-105).
+func TestPushMergeResult(t *testing.T) {
+	for _, mergeBase := range []string{"none", "base"} {
+		g := newGateEnv(t)
+		g.git("push", "-q", g.bare, "HEAD:main")
+		baseBranch := mustRun(t, g.repo, "git", "rev-parse", "--abbrev-ref", "HEAD")
+		g.git("checkout", "-q", "-b", "feature")
+		g.write("feature.txt", "f")
+		g.git("add", "-A")
+		g.git("commit", "-qm", "feature")
+		feature := g.headSHA(t)
+		g.git("checkout", "-q", baseBranch)
+		g.write("other.txt", "main moved")
+		g.git("add", "-A")
+		g.git("commit", "-qm", "main moves")
+		g.git("push", "-q", g.bare, "HEAD:main")
+		base := g.headSHA(t)
+		g.git("checkout", "-q", "feature")
+		arg := "--merge-base=none"
+		if mergeBase == "base" {
+			arg = "--merge-base=" + baseBranch
+		}
+		if out, code := g.cinema("push", "--run", arg); code != 0 {
+			t.Fatalf("push: %s", out)
+		}
+		// CI: GitHub's test merge of the PR into the base.
+		ci := filepath.Join(t.TempDir(), "ci")
+		mustRun(t, "", "git", "clone", "-q", g.bare, ci)
+		mustRun(t, ci, "git", "merge", "-q", "--no-ff", "-m", "Merge feature", "origin/feature")
+		ev := filepath.Join(t.TempDir(), "e.json")
+		b, _ := json.Marshal(map[string]any{"repository": map[string]any{"full_name": "Example/Repo"},
+			"pull_request": map[string]any{"base": map[string]any{"sha": base}, "head": map[string]any{"sha": feature, "repo": map[string]any{"full_name": "Example/Repo"}}}})
+		os.WriteFile(ev, b, 0o644)
+		report := filepath.Join(t.TempDir(), "r.json")
+		cmd := exec.Command(bin, "verify", "--event", ev, "--execute", "--report", report)
+		cmd.Dir = ci
+		cmd.Env = append(os.Environ(), "GITHUB_REPOSITORY=Example/Repo", "CINEMA_TRUSTED_KEYS="+g.keys, "CINEMA_DATA_DIR="+t.TempDir())
+		out, _ := cmd.CombinedOutput()
+		var rep gateReport
+		rb, _ := os.ReadFile(report)
+		json.Unmarshal(rb, &rep)
+		got := ""
+		for _, tr := range rep.Tasks {
+			if tr.Task == "check" {
+				got = tr.Decision + "/" + tr.Reason
+			}
+		}
+		want := map[string]string{"none": "RUN/INPUTS_CHANGED", "base": "REUSE/"}[mergeBase]
+		if got != want {
+			t.Fatalf("merge-base %s: check %s, want %s\n%s", mergeBase, got, want, out)
+		}
+	}
+}
