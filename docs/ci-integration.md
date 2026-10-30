@@ -53,6 +53,10 @@ Reused legs are dropped; the others (here Windows and macOS) run as before. When
 
 Everything else in the file stays byte-for-byte. `setup` parses its own output back and checks every edit; if anything is off, it leaves that workflow alone and says why.
 
+## Shadow mode: nothing skips until it's proven
+
+A covered job skips only if its task, **on the base branch**, has a `graduated:` entry for the job's current definition (`cinema graduate` writes it after a backtest). Until then the `cinema` job reports `RUN (shadow: reused, but not graduated)` and the job runs as before. Editing the job's steps changes its definition, so it's back in shadow until graduated again. One CI run in 20 (picked by the run's ID) skips nothing, as a spot check.
+
 ## What it leaves alone
 
 `setup` says "left as is" with the reason for:

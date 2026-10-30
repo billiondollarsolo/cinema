@@ -5,7 +5,7 @@ From a repo with GitHub Actions CI to a PR whose Linux jobs skip themselves.
 ## What you need
 
 - Go 1.27+ to install CInema (release binaries are planned).
-- Today: a **Linux x86-64 machine** to produce evidence (your desktop, a VPS). Running in containers on macOS and Windows is **planned** (P4); see [Machines and engines](hosts.md).
+- A machine to run your Linux CI jobs: **any Mac, Windows or Linux machine with a container engine** (Docker, Colima, OrbStack, Podman…), or a Linux x86-64 machine without one. See [Machines and engines](hosts.md).
 - `gh`, logged in, if you want minute and price estimates (`--minutes`).
 - Admin access to the repo, to add one repository variable.
 
@@ -15,7 +15,18 @@ From a repo with GitHub Actions CI to a PR whose Linux jobs skip themselves.
 go install github.com/billiondollarsolo/cinema/cmd/cinema@latest
 ```
 
-## 2. See what CInema can take over
+## 2. Tell CInema to use your container engine
+
+On a Mac or Windows machine (and recommended on Linux), Linux jobs run in runner-like containers. In `~/.config/cinema/config.yaml` (macOS: `~/Library/Application Support/cinema/config.yaml`):
+
+```yaml
+engine: docker            # any Docker-compatible engine
+emulate: [amd64]          # optional: on Apple silicon, run amd64 jobs under Rosetta (2–4× slower)
+```
+
+Or per command: `CINEMA_ENGINE=docker CINEMA_EMULATE=amd64 cinema …`. Without `emulate`, an Apple-silicon Mac leaves amd64 jobs to CI.
+
+## 3. See what CInema can take over
 
 ```sh
 cd your-repo
@@ -33,7 +44,7 @@ Every job and matrix leg gets a verdict:
 
 `--minutes` prices each group from your recent PR runs (median billed minutes).
 
-## 3. Set it up
+## 4. Set it up
 
 ```sh
 cinema setup --minutes
@@ -46,7 +57,7 @@ cinema setup --minutes
 
 It formats what it writes with your repo's own prettier if it's installed. `cinema setup --undo` takes the workflow edits back out.
 
-## 4. Check the tasks, then trust them
+## 5. Check the tasks, then trust them
 
 Read `.cinema/tasks.yaml`. Then:
 
@@ -56,7 +67,7 @@ cinema trust
 
 `trust` approves this exact file's toolchain commands (`go version`, `node --version`). Any edit needs `trust` again.
 
-## 5. Make evidence
+## 6. Make evidence
 
 ```sh
 cinema run --commit HEAD --all -j 4
@@ -65,7 +76,7 @@ cinema status
 
 `--commit HEAD` runs each task in a **clean checkout** of the commit: exactly the committed bytes, nothing ignored, nothing left over from earlier runs. Only these runs count as evidence. `status` shows each task as reusable, stale or missing, with a reason code. If a task fails, `cinema log --failed <task>` shows its output and `cinema doctor` lists tools it needed that this machine lacks.
 
-## 6. Register this machine's key
+## 7. Register this machine's key
 
 ```sh
 cinema keys init
@@ -74,19 +85,29 @@ cinema keys export
 
 Add the printed line to the repository variable `CINEMA_TRUSTED_KEYS` (Settings → Secrets and variables → Actions → Variables). One line per machine. A variable, not a file in the repo: a PR can edit files, not variables.
 
-## 7. Push with evidence
+## 8. Graduate the tasks
 
-Commit the changes from `setup`, then:
+A job only skips in CI once its task has been shown to agree with CI (shadow mode). `cinema graduate` proves it on your history:
 
 ```sh
-cinema push
+cinema graduate --commits 10 <task>...
 ```
 
-It signs receipts for the pushed commits and pushes the branch and the receipts (git notes) together.
+It runs each task on the default branch's recent commits and compares with what CI concluded for the job on each. If every one agrees (failures included), it writes a `graduated:` entry into the task. A task that passes where CI failed is not graduated: that would have been a false green.
 
-**The PR that adds CInema runs everything as before.** CI reads tasks from the base branch, so jobs start skipping once that PR is merged. From then on, every PR pushed with `cinema push` skips the jobs whose evidence matches.
+## 9. Push with evidence
 
-## 8. Going back
+Commit the changes, then:
+
+```sh
+cinema push --run
+```
+
+It runs whatever lacks evidence for HEAD, **and for the merge of HEAD into the default branch** (the tree CI tests for a PR), signs receipts, and pushes the branch and the receipts (git notes) together. `cinema hook install` adds a pre-push hook that warns when a plain `git push` goes out without evidence.
+
+**The PR that adds CInema runs everything as before.** CI reads tasks (and graduations) from the base branch, so jobs start skipping once that PR is merged.
+
+## 10. Going back
 
 - `cinema setup --undo` removes the workflow edits.
 - Delete `.cinema/`, the `CINEMA_TRUSTED_KEYS` variable, and optionally the notes refs (`git push origin --delete refs/notes/cinema/v1/<key-id>`).

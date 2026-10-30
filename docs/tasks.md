@@ -44,7 +44,8 @@ Changing any of these changes the task's contract digest: older receipts stop ma
 |---|---|
 | `cpus` | Linux: the task sees only this many CPUs (affinity, `--cpuset-cpus` in a container), like the runner it replaces. Drafts use 4. |
 | `exclusive` | Never run alongside other tasks under `-j`: fixed ports, a fixed docker network, `sudo`. Tasks with services are always exclusive. |
-| `timeout` | Stop a run that takes longer; a timeout is a failure. |
+| `timeout` | Stop a run that takes longer; a timeout is a failure. Drafts use the job's `timeout-minutes`. In CI, a receipt whose run used over half of it isn't reused (`TOO_CLOSE_TO_TIMEOUT`). |
+| `memory` | The runner's memory (`16g`), with `cpus:` the runner size a container run imitates and reports. Part of a Linux task's environment: a 4-CPU receipt doesn't count on a 2-CPU private runner. |
 
 ## How it maps to CI (metadata, not part of the contract)
 
@@ -53,6 +54,9 @@ Changing any of these changes the task's contract digest: older receipts stop ma
 | `covers` | The job this task stands in for: `workflow.yml#job-id`. Only tasks with `covers` make jobs skip. |
 | `leg` | For a matrix job: this leg's values for the matrix's own keys. A reused leg is excluded. |
 | `job_digest` | The job leg as drafted. The job only skips if the workflow under test still has exactly that leg. |
+| `graduated` | Written by `cinema graduate`: the task agreed with CI for this `job_digest`. Without it (or for another digest) the job runs in CI whatever the receipts say (shadow mode). |
+| `event` | The job reads the triggering event or ref, so the task counts only for this event (`pull_request`, `push`, `merge_group`). Drafted automatically. |
+| `floating` | The workflow's version specs the `runtime:` pins came from (`{go: stable, node: "lts/*"}`). CI resolves them again on every run and runs the job if today's release isn't the pin. |
 
 ## Reuse policy
 
@@ -79,6 +83,6 @@ Rules from real projects ([lab results](../spikes/lab/RESULTS.md)):
 8. **Run as non-root** when CI does. Root changes test results.
 9. **Make `.cinema/tasks.yaml` pass your formatter**, or list it in the formatter's ignore file.
 
-## Planned fields (P4)
+## Planned fields
 
-`image`, `arch: any`, `memory`, `event`, `emulation: forbid`, `docker: host`, `credentials:`. See [plan §6.1](../plan.md) and [Machines and engines](hosts.md).
+`image`, `arch: any`, `emulation: forbid`, `docker: host`, `credentials:`. See [plan §6.1](../plan.md) and [Machines and engines](hosts.md).

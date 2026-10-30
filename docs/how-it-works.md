@@ -52,11 +52,11 @@ It then outputs `skip_<job>=true` when every task of a job was reused, and for a
 - **It doesn't carry across changes.** A merge from main that touches any file changes the source fingerprint; the jobs run. That's whole-source fingerprinting, deliberately: narrower inputs would skip more and risk false greens.
 - **It doesn't cover other platforms.** A macOS result never stands in for a Linux job.
 
-## Planned: what changes with P4
-
-Designed in [plan.md §9, §11.5](../plan.md) and [ADR 0003](adr/0003-local-first-container-execution.md), not built yet:
+## Built since P4
 
 - **Runs in containers on your own machine** (macOS, Windows, Linux), shaped like the job's runner. See [Machines and engines](hosts.md).
-- **Shadow mode.** A covered job keeps running in CI until its local stand-in has agreed with CI, by re-running past merged commits (backtest) or on live PRs. Disagreement sends it back.
-- **Merge-result runs.** `cinema push` also tests the tree GitHub will build for the PR, so receipts match even after main has moved.
-- **Stricter matching:** floating versions re-resolved at check time, the event (`pull_request` vs `push`) in the contract, failed runs published so retrying until green doesn't work, runner size and duration checked.
+- **Shadow mode.** A covered job keeps running in CI until its task is graduated by backtesting on past merged commits (`cinema graduate`).
+- **Merge-result runs.** `cinema push --run` also tests the tree GitHub will build for the PR, so receipts match even after main has moved.
+- **Stricter matching:** floating versions re-resolved at check time; the event in the contract; failed runs published, so a failure from any trusted machine blocks a pass on the same work, and a pass after a failure counts only after three in a row; the runner's CPUs, memory and OS release in the environment; a run that used over half the job's timeout isn't reused.
+
+Still planned: live shadow pairs and spot-check comparison, remote hosts, Apple `container`, more language runtimes ([plan §16](../plan.md)).

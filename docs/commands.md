@@ -19,6 +19,9 @@
 | `cinema exec [--timeout D] [--record-json PATH] -- CMD [ARGS...]` | Runs and records any command in your working tree. Feeds local status; matches a task only on exact argv and cwd. Returns the command's own exit code. |
 | `cinema trust [--config FILE]` | Approves the toolchain commands of this exact tasks.yaml. |
 | `cinema doctor [--config FILE]` | Tools and libraries that failed runs needed and this machine lacks. |
+| `cinema debug [--commit REV] [--shell] <task>` | Runs a task in its runner container on a clean checkout, then opens a shell there with the tree as the task left it. Never recorded. |
+| `cinema graduate [--commits N] [--min N] [--yes] <task>...` | Backtests tasks on the default branch's recent commits against CI's result for their job; writes `graduated:` for the ones that agree every time. |
+| `cinema hook install \| uninstall` | A pre-push hook that warns (never blocks) when a plain `git push` goes out without evidence. |
 
 ## Seeing what's what
 
@@ -34,7 +37,7 @@
 | Command | What it does |
 |---|---|
 | `cinema keys init \| export` | Creates this machine's signing key; prints its public line for `CINEMA_TRUSTED_KEYS`. |
-| `cinema push [--remote R] [--run [-j N]] [--commit REV]... [--notes-only] [--dry-run]` | Signs receipts for the commits being pushed and pushes the branch and the notes together. `--run` first runs whatever lacks clean evidence for HEAD. `--notes-only` pushes evidence without the branch. `--dry-run` shows what would be signed. |
+| `cinema push [--remote R] [--run [-j N]] [--merge-base REF] [--commit REV]... [--notes-only] [--dry-run]` | Signs receipts for the commits being pushed (failed runs too, so a retry elsewhere can't hide them) and pushes the branch and the notes together. `--run` first runs whatever lacks clean evidence for HEAD and for HEAD merged into the default branch (`--merge-base`; `none` to skip). `--notes-only` pushes evidence without the branch. `--dry-run` shows what would be signed. |
 
 ## In CI
 
@@ -57,4 +60,4 @@
 
 ## Planned (P4)
 
-`cinema run --on HOST`, `cinema push --background / --now / --on`, `cinema debug <task>`, `cinema graduate`, `cinema shadow`, `cinema hosts [--cleanup]`, `cinema gc`. See [plan.md §10.1](../plan.md).
+`cinema run --on HOST`, `cinema push --background / --now / --on`, `cinema shadow` (live agreement pairs), `cinema hosts [--cleanup]`, `cinema gc`. See [plan.md §10.1](../plan.md).

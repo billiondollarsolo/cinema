@@ -2,17 +2,15 @@
 
 Where CInema runs your jobs, today and as planned.
 
-## Today
+## Local-first containers on any machine
 
-Evidence for Linux jobs comes from a **Linux x86-64 machine** you control (a desktop, a VPS), running tasks as normal processes in clean checkouts. Tasks with `container:` or `services:` need Docker on that machine. Tasks with `platform: any` (lint, format) can come from any machine, including a Mac.
+([plan.md §9](../plan.md), [ADR 0003](adr/0003-local-first-container-execution.md).) With `engine: docker` in your config, each Linux CI job runs in a **Linux container on your own machine**, shaped like the job's runner: a pinned Ubuntu image (`runner/Dockerfile`), a non-root `runner` user with passwordless sudo and your uid, the runner's paths (`/home/runner/work/<repo>/<repo>`), a fresh home, UTC, `GITHUB_ACTIONS`/`RUNNER_*` basics, the runner's CPU and memory (4 CPUs / 16 GB for public repos, 2 / 8 GB for private ones, as GitHub's), pinned Go/Node from their official releases mounted read-only, per-repo download and build caches, and nothing else from your machine. Tests run fresh (`go test` never replays cached results). Each container is removed after its task, and removes itself after a day even if CInema dies. Windows and macOS CI jobs stay in CI.
 
-`cinema doctor` lists tools a failed run needed that the machine lacks. `cinema analyze` shows per job whether this machine is ready for it.
+Without an engine configured, a Linux x86-64 machine runs tasks as normal processes in clean checkouts, as before. Tasks with `platform: any` (lint, format) run anywhere.
 
-## Planned: local-first containers on any machine (P4)
+`cinema debug <task>` runs a task in its container and leaves you a shell there. `cinema doctor` lists tools a failed run needed. `cinema analyze` shows per job whether this machine can take it over, and what to set if not.
 
-Designed in [plan.md §9](../plan.md) and [ADR 0003](adr/0003-local-first-container-execution.md). The P4-1 spike ran real tasks this way on a Mac; the code isn't in CInema yet.
-
-Each Linux CI job runs in a **Linux container on your own machine**, shaped like the job's runner: a pinned Ubuntu image, a non-root `runner` user with passwordless sudo, the runner's paths (`/home/runner/work/<repo>/<repo>`), a fresh home, UTC, the runner's CPU and memory, and a clean checkout made inside the container. Windows and macOS CI jobs stay in CI.
+**On a VM-based engine (Colima, Docker Desktop, OrbStack)** the engine sees only the folders it shares; Colima shares your home directory by default. CInema refuses to run a task whose checkout or git objects the engine can't see, rather than run it against an empty folder.
 
 ### Engines
 
@@ -36,7 +34,7 @@ You pick the engine; `cinema doctor` shows what's installed and what each can do
 | Linux / Windows, x86-64 | native | emulated (QEMU), opt-in |
 | Mac (Apple silicon), ARM Linux / Windows | **emulated (Rosetta), opt-in** | native |
 
-A receipt only counts for a job whose runner has the same architecture the run had. **Emulation is an option, off by default:** turn it on with `emulate: [amd64]` in your user config. Without it, an Apple-silicon Mac leaves amd64 jobs to CI or to an amd64 remote host.
+A receipt only counts for a job whose runner has the same architecture the run had. **Emulation is an option, off by default:** turn it on with `emulate: [amd64]` in your user config (or `CINEMA_EMULATE=amd64`). Without it, an Apple-silicon Mac leaves amd64 jobs to CI or to an amd64 remote host.
 
 What emulation costs, measured in the P4-1 spike (M-series Mac, Colima with Rosetta, 4 CPUs / 16 GB per container; [details](../spikes/local-container/RESULTS.md)):
 
@@ -54,7 +52,7 @@ Other emulation gotchas: x86 CPU features differ (code that picks a SIMD path at
 
 **`arch: any`** in a task is the honest way to run CPU-independent checks (lint, format, most pure-JS tests) natively on any machine. It's your claim, written in the task, and shown in the PR summary.
 
-### Remote machines (an option, never required)
+### Remote machines (planned: an option, never required)
 
 When one machine isn't enough, send work elsewhere. The task and its rules don't change:
 
