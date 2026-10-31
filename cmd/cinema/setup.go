@@ -204,6 +204,20 @@ func cmdSetup(args []string) int {
 		fmt.Println("Nothing written.")
 		return 0
 	}
+	// A rerun keeps each graduation whose job is still exactly the one that
+	// agreed with CI (same id, same job_digest); a changed job is back in shadow.
+	keep := map[string]task.Graduation{}
+	if b, err := os.ReadFile(filepath.Join(root, task.ConfigPath)); err == nil {
+		if old, err := task.Parse(b); err == nil {
+			if cfg, err := task.Parse(tasks); err == nil {
+				for id, t := range cfg.Tasks {
+					if o := old.Tasks[id]; o != nil && o.Graduated != nil && o.Graduated.JobDigest == t.JobDigest {
+						keep[id] = *o.Graduated
+					}
+				}
+			}
+		}
+	}
 	paths := make([]string, 0, len(files))
 	for _, f := range files {
 		p := filepath.Join(root, f.path)
@@ -216,6 +230,13 @@ func cmdSetup(args []string) int {
 			return exitInternal
 		}
 		paths = append(paths, f.path)
+	}
+	if len(keep) > 0 {
+		if err := writeGraduations(filepath.Join(root, task.ConfigPath), keep); err != nil {
+			fmt.Fprintf(os.Stderr, "cinema setup: keeping graduations: %v\n", err)
+			return exitInternal
+		}
+		fmt.Printf("\nKept the graduation of %d task(s) whose job is unchanged.\n", len(keep))
 	}
 	formatLikeRepo(root, paths...)
 	fmt.Print(`

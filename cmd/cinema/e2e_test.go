@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/billiondollarsolo/cinema/internal/evidence"
+	"github.com/billiondollarsolo/cinema/internal/task"
 )
 
 var bin string
@@ -905,8 +906,12 @@ tasks:
 
 // setup writes the ready tasks and a pinned gate, and nothing without a yes.
 func TestSetupWritesReadyTasks(t *testing.T) {
-	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		t.Skip("drafts are linux/amd64")
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" { // drafts are linux/amd64: in a container, emulated
+		if exec.Command("docker", "info").Run() != nil {
+			t.Skip("drafts are linux/amd64, and no docker to run them in")
+		}
+		t.Setenv("CINEMA_ENGINE", "docker")
+		t.Setenv("CINEMA_EMULATE", "amd64")
 	}
 	e := newEnv(t)
 	e.write(".github/workflows/ci.yml", `on: pull_request
@@ -959,6 +964,25 @@ jobs:
 	if again, _ := os.ReadFile(filepath.Join(e.repo, ".github/workflows/ci.yml")); string(again) != string(ci) {
 		t.Fatalf("rerun changed the workflow:\n%s", again)
 	}
+	// A rerun keeps a graduation while the job is unchanged, and drops it when
+	// the job changes.
+	tp := filepath.Join(e.repo, task.ConfigPath)
+	cfg, _ := task.Parse(tasks)
+	if err := writeGraduations(tp, map[string]task.Graduation{"unit": {JobDigest: cfg.Tasks["unit"].JobDigest, Backtested: 3, At: "2026-10-31"}}); err != nil {
+		t.Fatal(err)
+	}
+	if out := setup("--yes"); !strings.Contains(out, "Kept the graduation of 1 task") {
+		t.Fatalf("rerun:\n%s", out)
+	}
+	if b, _ := os.ReadFile(tp); !strings.Contains(string(b), "graduated:") {
+		t.Fatalf("rerun dropped an unchanged job's graduation:\n%s", b)
+	}
+	e.write(".github/workflows/ci.yml", strings.Replace(string(ci), "{run: echo ok}", "{run: echo ok}, {run: echo more}", 1))
+	setup("--yes")
+	if b, _ := os.ReadFile(tp); strings.Contains(string(b), "graduated:") {
+		t.Fatalf("a changed job kept its graduation:\n%s", b)
+	}
+	e.write(".github/workflows/ci.yml", string(ci))
 	setup("--undo", "--yes")
 	orig, _ := exec.Command("git", "-C", e.repo, "show", "HEAD:.github/workflows/ci.yml").Output()
 	if back, _ := os.ReadFile(filepath.Join(e.repo, ".github/workflows/ci.yml")); string(back) != string(orig) {
