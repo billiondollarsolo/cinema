@@ -616,6 +616,18 @@ Dagger (dagger.io) runs pipelines as sandboxed, cached container operations, the
 | Remote engines (SSH, Kubernetes, Cloud) | Hosts: local, ssh, provider plugins (§9.3) |
 | Test splitting (coming) | Fan-out across hosts (§9.4); shard-aware drafts for jobs that already split |
 | Cloud cache shares results across machines | **Signed receipts are that, verifiable:** CI skips work any trusted machine already proved, without a hosted service and without trusting a cache it can't check |
+| **Re-checked 2026-10-30 against Dagger 1.0 beta (2026-10-22) and its changelog:** | |
+| Test-native CI: each test reported on its own, rerun only the failed one | **Gap → P4 (run 2):** parse per-test results from task output (go test, pytest, jest/vitest, cargo test, JUnit XML) into the run record; `cinema run --failed-only` reruns the task (a task is the unit of evidence, so a rerun of one test is never a receipt); the same parse lets `graduate` compare *which* tests failed in a failure pair (closes §11.5.6) |
+| Smart checks (upcoming): run only checks a change affects, by tracking the files each artifact reads | **Deliberately not for skipping:** narrower inputs skip more and risk false greens (§5). P5: traced reads as an *advisory* ("this change can't affect task X") shown in `cinema status`, never as evidence |
+| `.dagger/lock` pins image tags, branches and HTTP fetches | Runtimes, actions' tools (golangci-lint, pnpm) and images are pinned with checksums in tasks.yaml; floating specs are re-checked in CI. Gap: `curl … \| sh` and `@latest` inside a job's own script stay unpinned (they're in the source, so a change is seen, but the remote content isn't): P5 `cinema lock` records digests of fetched URLs during a run and flags drift |
+| Test splitting across engines, balanced by per-test telemetry (upcoming) | P5 with fan-out (§9.4): per-test durations from the parsed results above drive the split |
+| Remote filesystems over SSH (live two-way volume) | For remote hosts (§9.3) the checkout is copied in (git bundle + digest check), never live-mounted: evidence needs a fixed tree |
+| Engines: Docker, Podman, nerdctl, Finch, Apple `container` | Docker (any context: Docker Desktop, Colima, OrbStack) built; Apple `container` P4 (macOS 26); P5: Podman and nerdctl through their Docker-compatible sockets, tested before claimed |
+| `dagger mcp`: functions as tools for agents | JSON envelopes on every reporting command (§10.3); P5: `cinema mcp` exposing status, explain, run and push as MCP tools |
+| `dagger check --failfast` | **P4 (run 2):** `cinema run --failfast` |
+| Cloud Checks: Dagger Cloud runs checks on every push, replacing Actions workflows; usage-based pricing | **Different by design:** CInema keeps your CI and makes it skip proven work; no hosted service, nothing to buy. Bring-your-own compute = remote hosts (§9.3) |
+| Typed artifacts, branch filtering, self-orchestrating tests | Tasks are what CI's jobs do; `event:` covers branch- and event-dependent jobs; `services:` start a task's dependencies |
+| SDKs (Go, TypeScript, Python, Java, PHP, Elixir, Rust, Dang) | Not needed: CInema reads the workflows you have. Language parity is about **runtimes jobs use**: Go, Node, Python, uv, Java, Gradle, Rust, Bun, Deno, .NET built (§6.5); Ruby blocked (setup-ruby builds aren't relocatable or checksummed); PHP and Erlang/Elixir P5 |
 | You rewrite CI as Dagger modules | **No rewrite:** CInema reads your workflows. A repo that already uses Dagger keeps it: a step running `dagger call …`/`dagger check` translates as a task (it needs an engine: `docker: host`), so its jobs skip in CI too |
 
 ---
@@ -1066,9 +1078,9 @@ Report hashing and wrapper overhead separately, always.
 
 - [~] **P4-1 Spike.** (Mac with Colima done: every result matched once three CInema bugs were fixed; Rosetta 1.6–3.8× cold; [results](spikes/local-container/RESULTS.md). Apple `container` needs macOS 26; Windows not yet.) On an Apple-silicon Mac: run tasks that pass on the Linux lab box (eslint's tests, traefik's cross-builds, prometheus's container job, a services job) in Docker, amd64 under Rosetta and arm64 native, then in Apple `container`. Compare results with the lab and with CI; time them; check CPU features under Rosetta. Same on Windows (Docker Desktop, WSL2). **Decides** whether emulated amd64 is fast enough to be the default.
 - [x] **False-green closers first** (needed before anything skips on container evidence): re-resolve floating versions and tags at verify time; `event` in contract and receipt; signed failures and `FAILED_ELSEWHERE`; container-only evidence; runner size in the environment; duration vs timeout (§11.2)
-- [~] Shadow mode with backtest graduation and spot checks; existing setups start in shadow (§11.5). Live pairs and the PR summary (§11.6) still open
+- [x] Shadow mode with backtest graduation, live pairs and spot checks (hashed run id); existing setups start in shadow (§11.5); per-job summary on the run page (§11.6; minutes saved still open)
 - [~] Docker-compatible engine (task.Sandbox; `doctor` engine report still open)
-- [~] Runner fidelity (§9.2) and `runner/Dockerfile`; checkout bind-mounted from the clean checkout (git bundle + cross-check only needed for remote hosts); image publishing still open
+- [x] Runner fidelity (§9.2): images for Ubuntu 22.04, 24.04, 26.04 (amd64, arm64) published and pinned, chosen by the job's `runs-on`; memory within 1 GB / 10%, CPUs and OS exact; checkout bind-mounted (git bundle + cross-check only for remote hosts)
 - [ ] Cache volumes per tool version, size caps (§9.2, CLEAN-011)
 - [~] Merge-result runs; receipts on the PR head (§5.5). Push-to-main lookup still open
 - [~] Pre-push hook warning (§8.1). `--background` still open
@@ -1080,13 +1092,15 @@ Report hashing and wrapper overhead separately, always.
 - [ ] `merge_group` receipts (§5.5); runner prices from one updatable table (§11.6)
 - [ ] Short-lived, labeled keys for agents in sandboxes (§7.3)
 - [ ] Apple `container` engine
-- [~] Runtime providers (§6.5): Go tarball done; Python, uv, Java, Rust, Bun, Deno, `.tool-versions` open
+- [~] Runtime providers (§6.5): registry; Go, Node, Python, uv, Java (Temurin), Gradle, Rust, Bun, Deno, .NET built with their setup actions. Run 2: pins without a setup action (version files), `.tool-versions` / mise, Maven SNAPSHOT and Gradle lock hazards. Ruby blocked (not relocatable, no checksums); PHP, Erlang/Elixir P5
 - [ ] `credentials:` from `env:` and `file:` providers, redacted from logs (§9.7)
 - [ ] Per-step timing in run records; `cinema check` alias; disk-pressure pruning (§9.7)
 - [ ] Repos that use Dagger: `dagger` steps translate as tasks (§9.7)
+- [ ] Per-test results parsed from task output (go test, pytest, jest/vitest, cargo, JUnit XML); failure pairs compare failed tests (§11.5.6); `cinema run --failfast` (§9.7, run 2)
+- [ ] Real projects per language, locally against upstream CI's results (run 2)
 - [ ] Tests: ACC-101…122, CLEAN-009…011
 
-**Exit:** a developer on a Mac, with no other hardware, pushes a PR whose Linux jobs skip in CI, every skipped job graduated from shadow mode (backtest or live), and the PR summary shows what was saved. Then the same on Windows.
+**Exit:** (Mac part met 2026-10-31: [cli#9](https://github.com/mjtechguy/cinema-lab-cli/pull/9); minutes saved in the summary still open) a developer on a Mac, with no other hardware, pushes a PR whose Linux jobs skip in CI, every skipped job graduated from shadow mode (backtest or live), and the PR summary shows what was saved. Then the same on Windows.
 
 ### P5 — Scaling out
 
