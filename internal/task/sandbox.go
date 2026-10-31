@@ -213,7 +213,7 @@ const (
 
 func sandboxPath(bins []string) string {
 	dirs := append([]string{sandboxNpmPrefix + "/bin", sandboxPnpmHome, sandboxPnpmHome + "/bin"}, bins...)
-	return strings.Join(append(dirs, "/home/runner/go/bin", "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"), ":")
+	return strings.Join(append(dirs, "/home/runner/.local/bin", "/home/runner/go/bin", "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"), ":")
 }
 
 // Exec is the argv that runs argv inside the sandbox in cwd (repo-relative),
