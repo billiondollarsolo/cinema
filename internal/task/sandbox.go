@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -20,15 +21,19 @@ import (
 // mounted read-only, and nothing else from the host. Probes and the task run
 // inside it with docker exec; Stop removes it.
 type Sandbox struct {
-	Name     string
-	Platform string // linux/amd64
-	Emulated bool
-	Image    string // pinned repo@sha256:…
-	Workdir  string // the checkout inside: /home/runner/work/<repo>/<repo>
-	CPUs     int
-	MemGB    int
-	OS       string // the image's os-release, "ubuntu-24.04"
-	env      []string
+	Name          string
+	Platform      string // linux/amd64
+	Emulated      bool
+	Image         string // pinned repo@sha256:…
+	Workdir       string // the checkout inside: /home/runner/work/<repo>/<repo>
+	CPUs          int
+	MemGB         int
+	OS            string // the image's os-release, "ubuntu-24.04"
+	Docker        string // docker: host: the platform of the engine the task uses, "linux/arm64"
+	env           []string
+	inVolume      bool
+	dockerVersion string
+	dockerGateway string
 }
 
 // SandboxSpec is what a Sandbox is started from.
@@ -52,6 +57,13 @@ type SandboxSpec struct {
 	Env       []string
 	ProbeOnly bool          // no checkout: toolchain probes are version commands (allowlisted), they don't read the source
 	Lifetime  time.Duration // the container removes itself after this even if cinema dies (default 24h)
+	// Volume: the checkout is this volume (CheckoutVolume), not a bind mount of
+	// Root; Objects is then mounted as the clone's alternates without reading
+	// Root's copy. Root stays the host slot (it names the runtime caches).
+	Volume string
+	// DockerHost: the task may use the engine (docker: host): its socket at
+	// /var/run/docker.sock, usable by the runner user.
+	DockerHost bool
 }
 
 const runtimesInside = "/opt/cinema/runtimes"
@@ -90,14 +102,25 @@ func StartSandbox(ctx context.Context, sp SandboxSpec) (*Sandbox, error) {
 			return nil, err
 		}
 		args, cacheDirs = append(args, mounts...), dirs
-		args = append(args, "-v", sp.Root+":"+s.Workdir)
+		if sp.Volume != "" {
+			// Populated by CheckoutVolume.Populate, as a shared clone of exactly
+			// sp.Objects' repo: mount those objects, never what the tree names.
+			if !filepath.IsAbs(sp.Objects) || strings.ContainsAny(sp.Objects, ":,\n") {
+				return nil, fmt.Errorf("checkout volume: bad objects path %q", sp.Objects)
+			}
+			args = append(args, "-v", sp.Volume+":"+s.Workdir, "-v", sp.Objects+":"+sp.Objects+":ro")
+			alternates = append(alternates, sp.Objects)
+			s.inVolume = true
+		} else {
+			args = append(args, "-v", sp.Root+":"+s.Workdir)
+		}
 		// A clean checkout borrows the real repo's objects (git alternates, by
 		// host path): mount them read-only at that path, or git inside the
 		// container sees a broken repo (P4: go build's VCS stamping failed).
 		// Only the expected directory, and only if the checkout still names
 		// exactly it: the file is inside the tree a task can write, and a
 		// rewritten one would otherwise mount any host path into the next task.
-		if b, err := os.ReadFile(filepath.Join(sp.Root, ".git", "objects", "info", "alternates")); err == nil {
+		if b, err := os.ReadFile(filepath.Join(sp.Root, ".git", "objects", "info", "alternates")); err == nil && sp.Volume == "" {
 			got := strings.TrimSpace(string(b))
 			if sp.Objects == "" || got != sp.Objects || strings.ContainsAny(got, ":,\n") || !filepath.IsAbs(got) {
 				return nil, fmt.Errorf("the checkout's git alternates (%q) aren't the repo's objects: refusing to mount them", got)
@@ -111,6 +134,17 @@ func StartSandbox(ctx context.Context, sp SandboxSpec) (*Sandbox, error) {
 	}
 	if sp.Network != "" {
 		args = append(args, "--network", sp.Network)
+	}
+	if sp.DockerHost {
+		e := EngineServer()
+		if e.Arch == "" {
+			return nil, errors.New("docker: host: the engine doesn't answer (docker version failed)")
+		}
+		s.Docker, s.dockerVersion = e.GOOS+"/"+e.Arch, e.Version // probe sandboxes too: it's in the fingerprint
+	}
+	useDocker := sp.DockerHost && !sp.ProbeOnly
+	if useDocker {
+		args = append(args, "-v", engineSocket()+":/var/run/docker.sock")
 	}
 	life := sp.Lifetime
 	if life <= 0 {
@@ -153,9 +187,32 @@ printf '[safe]\n\tdirectory = %[4]s\n' > /home/runner/.gitconfig && chown %[1]d:
 cat >> /etc/mavenrc <<'EOF'
 %[6]s
 EOF`, uid, gid, sp.RepoName, s.Workdir, strings.Join(cacheDirs, " "), mavenRC)
+	if useDocker {
+		// The socket belongs to root and the engine's docker group (Colima:
+		// 0660, gid 991): give runner that group, by number, as GitHub's runner
+		// user is in the docker group. Never chmod it: it's the engine's own.
+		setup += `
+g=$(stat -c %g /var/run/docker.sock)
+name=$(getent group "$g" | cut -d: -f1)
+[ -n "$name" ] || { name=docker-host; groupadd -o -g "$g" "$name"; }
+usermod -aG "$name" runner`
+	}
 	if out, err := docker("exec", "-u", "0", s.Name, "sh", "-c", setup).CombinedOutput(); err != nil {
 		s.Stop()
 		return nil, fmt.Errorf("sandbox setup (does the image have a runner user?): %v: %s", err, firstLine(string(out)))
+	}
+	if useDocker {
+		if out, err := docker("exec", "-u", "runner", s.Name, "curl", "-sfS", "--unix-socket", "/var/run/docker.sock", "http://docker/_ping").CombinedOutput(); err != nil {
+			s.Stop()
+			return nil, fmt.Errorf("docker: host: the engine's socket (%s) doesn't answer inside the sandbox: %v: %s", engineSocket(), err, firstLine(string(out)))
+		}
+		// Containers the task starts publish their ports on the engine's host,
+		// which the sandbox reaches as its default gateway.
+		out, _ := docker("exec", s.Name, "ip", "route", "show", "default").Output()
+		if s.dockerGateway = defaultGateway(string(out)); s.dockerGateway == "" {
+			s.Stop()
+			return nil, fmt.Errorf("docker: host: no default route in the sandbox (%q)", strings.TrimSpace(string(out)))
+		}
 	}
 	var bins []string
 	for _, b := range sp.Bins {
@@ -183,6 +240,9 @@ EOF`, uid, gid, sp.RepoName, s.Workdir, strings.Join(cacheDirs, " "), mavenRC)
 	}, sp.Env...)
 	if sp.Artifacts != "" {
 		s.env = append(s.env, "CINEMA_ARTIFACTS=/opt/cinema/artifacts")
+	}
+	if useDocker {
+		s.env = append(s.env, dockerHostEnv(s.dockerGateway)...)
 	}
 	host := filepath.Join(sp.DataDir, "runtimes")
 	for _, kv := range sp.Vars { // JAVA_HOME=<data>/runtimes/java/… → /opt/cinema/runtimes/java/…
@@ -253,8 +313,15 @@ func (s *Sandbox) Probe(cwd string, argv []string) (string, error) {
 
 // Where is the sandbox as a fingerprint location.
 func (s *Sandbox) Where() *Where {
-	return &Where{Platform: s.Platform, Probe: s.Probe, CPUs: s.CPUs, MemGB: s.MemGB, OS: s.OS, Inputs: []string{
-		fmt.Sprintf("executor=container image=%s emulated=%t", s.Image, s.Emulated)}}
+	in := fmt.Sprintf("executor=container image=%s emulated=%t", s.Image, s.Emulated)
+	if s.inVolume {
+		in += " checkout=volume"
+	}
+	w := &Where{Platform: s.Platform, Probe: s.Probe, CPUs: s.CPUs, MemGB: s.MemGB, OS: s.OS, Docker: s.Docker, Inputs: []string{in}}
+	if s.Docker != "" {
+		w.Inputs = append(w.Inputs, "docker server "+s.dockerVersion)
+	}
+	return w
 }
 
 // Stop removes the container (and whatever still runs in it).

@@ -1,6 +1,8 @@
 package testreport
 
 import (
+	"archive/tar"
+	"bytes"
 	"os"
 	"path/filepath"
 	"slices"
@@ -161,6 +163,26 @@ func TestJUnitFiles(t *testing.T) {
 	write("node_modules/x/junit.xml", start)
 	write("pom.xml", start)
 	if got := len(JUnitFiles(root, start)); got != 3 {
+		t.Fatalf("got %d files", got)
+	}
+}
+
+// The same reports from a checkout volume's tar stream (task.CheckoutVolume).
+func TestJUnitTar(t *testing.T) {
+	start := time.Now()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	add := func(name string, at time.Time) {
+		body := []byte("<testsuite/>")
+		tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(body)), ModTime: at})
+		tw.Write(body)
+	}
+	add("target/surefire-reports/TEST-a.xml", start)
+	add("./junit.xml", start)
+	add("testdata/junit-fixture.xml", start.Add(-time.Hour))
+	add("pom.xml", start)
+	tw.Close()
+	if got := len(JUnitTar(&buf, start)); got != 2 {
 		t.Fatalf("got %d files", got)
 	}
 }

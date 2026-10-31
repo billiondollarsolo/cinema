@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 
 	"github.com/billiondollarsolo/cinema/internal/task"
@@ -45,16 +44,23 @@ func cmdDebug(args []string) int {
 		fmt.Fprintf(os.Stderr, "cinema debug: %v\n", err)
 		return exitInternal
 	}
-	bins, vars, caches, err := t.RuntimeSandbox(r.dataDir, "linux", strings.TrimPrefix(pl.platform, "linux/"))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "cinema debug: runtime: %v\n", err)
-		return exitInternal
+	if t.Docker == task.DockerHost {
+		unlock, err := lockDockerHost(cr.dataDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cinema debug: docker: host: %v\n", err)
+			return exitInternal
+		}
+		defer unlock()
+		before := task.SnapshotEngine()
+		defer func() {
+			if gone := before.RemoveNew(); len(gone) > 0 {
+				fmt.Fprintf(os.Stderr, "removed what the session left on the engine: %s\n", strings.Join(gone, ", "))
+			}
+		}()
 	}
-	cpus, mem := t.RunnerSize()
-	art, _ := artifactsRoot()
-	sb, err := task.StartSandbox(context.Background(), task.SandboxSpec{Image: runnerImage(t.RunsOn), Platform: pl.platform, Emulated: pl.emulated,
-		Root: cr.root, RepoName: filepath.Base(cr.id), RepoID: cr.id, DataDir: r.dataDir, Bins: bins, Vars: vars, Caches: caches, Artifacts: art,
-		Objects: filepath.Join(cr.id, ".git", "objects"), CPUs: cpus, MemoryMB: mem * 1024})
+	// On a VM engine the shell is on the checkout volume: the tree as the task
+	// left it, until the slot's next run.
+	sb, _, err := startTaskSandbox(context.Background(), cr, t, pl, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cinema debug: %v\n", err)
 		return exitInternal

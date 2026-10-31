@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -1101,30 +1103,7 @@ tasks:
 // configured: as the runner user at the runner's workspace path, probes inside
 // the container, and status agrees it's reusable. Nothing is left running.
 func TestRunInSandbox(t *testing.T) {
-	if testing.Short() || exec.Command("docker", "info").Run() != nil {
-		t.Skip("no docker (or -short)")
-	}
-	img := "cinema-runner-test:latest"
-	if out, err := exec.Command("docker", "build", "-q", "-t", img, "../../runner").CombinedOutput(); err != nil {
-		t.Skipf("can't build the runner image: %v\n%s", err, out)
-	}
-	e := newEnv(t)
-	if runtime.GOOS == "darwin" {
-		// VM-based engines (Colima) share only the home directory; the default
-		// temp dir isn't in it. Real data dirs are (~/Library/Application Support).
-		home, _ := os.UserHomeDir()
-		d, err := os.MkdirTemp(filepath.Join(home, "Library", "Caches"), "cinema-test-")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { os.RemoveAll(d) })
-		e.data = d
-		repo := filepath.Join(d, "repo")
-		if err := os.Rename(e.repo, repo); err != nil {
-			t.Fatal(err)
-		}
-		e.repo = repo
-	}
+	e, img := sandboxEnv(t)
 	e.write(".cinema/tasks.yaml", `schema_version: 1
 tasks:
   sb:
@@ -1171,6 +1150,205 @@ tasks:
 		if !before[id] {
 			t.Fatalf("sandbox left behind: %s", id)
 		}
+	}
+}
+
+// sandboxEnv is a repo for sandbox tests, and the runner image built from
+// runner/. Skips without docker.
+func sandboxEnv(t *testing.T) (*env, string) {
+	t.Helper()
+	if testing.Short() || exec.Command("docker", "info").Run() != nil {
+		t.Skip("no docker (or -short)")
+	}
+	img := "cinema-runner-test:latest"
+	if out, err := exec.Command("docker", "build", "-q", "-t", img, "../../runner").CombinedOutput(); err != nil {
+		t.Skipf("can't build the runner image: %v\n%s", err, out)
+	}
+	e := newEnv(t)
+	if runtime.GOOS == "darwin" {
+		// VM-based engines (Colima) share only the home directory; the default
+		// temp dir isn't in it. Real data dirs are (~/Library/Application Support).
+		home, _ := os.UserHomeDir()
+		d, err := os.MkdirTemp(filepath.Join(home, "Library", "Caches"), "cinema-test-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.RemoveAll(d) })
+		e.data = d
+		repo := filepath.Join(d, "repo")
+		if err := os.Rename(e.repo, repo); err != nil {
+			t.Fatal(err)
+		}
+		e.repo = repo
+	}
+	t.Cleanup(func() { // this test's checkout volumes (its slots are in e.data) and cache volumes (named for its repo)
+		out, _ := exec.Command("docker", "volume", "ls", "-q", "--filter", "label=cinema.checkout").Output()
+		for _, v := range strings.Fields(string(out)) {
+			slot, _ := exec.Command("docker", "volume", "inspect", "--format", `{{index .Labels "cinema.checkout"}}`, v).Output()
+			if strings.HasPrefix(string(slot), e.data+string(filepath.Separator)) {
+				exec.Command("docker", "volume", "rm", "-f", v).Run()
+			}
+		}
+		root, _ := filepath.EvalSymlinks(e.repo)
+		h := sha256.Sum256([]byte(root))
+		out, _ = exec.Command("docker", "volume", "ls", "-q", "--filter", "name=cinema-cache-"+hex.EncodeToString(h[:6])+"-").Output()
+		for _, v := range strings.Fields(string(out)) {
+			exec.Command("docker", "volume", "rm", "-f", v).Run()
+		}
+	})
+	return e, img
+}
+
+// On a VM engine the checkout is a volume in the VM's Linux filesystem
+// (CINEMA_CHECKOUT=volume forces it on any engine). Linux's rules apply, not
+// the host's: a wrong-case include passes on a Mac's case-insensitive
+// filesystem and fails on the runner, so it must fail here (the false green
+// this closes), and files differing only in case are two files. The run is
+// fingerprinted from the volume: it matches the commit (status: reusable),
+// sees a changed tracked file, and its JUnit reports are read. CLEAN: the
+// slot's volume goes when the slot is swept.
+func TestRunInVolume(t *testing.T) {
+	e, img := sandboxEnv(t)
+	arch := runtime.GOARCH
+	e.write("lib/Helper.sh", "hello() { echo hi; }\n")
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  sb:
+    argv: [bash, -c, 'mkdir -p out && echo "<testsuite name=\"s\" tests=\"1\"><testcase classname=\"c\" name=\"t1\"/></testsuite>" > out/junit-x.xml && touch made-here.txt && git log -1 --format=%s']
+    platform: linux/`+arch+`
+    reuse: {allowed: true, max_age: 1h}
+  wrongcase:
+    argv: [bash, -c, '. lib/helper.sh && hello']
+    platform: linux/`+arch+`
+    reuse: {allowed: true, max_age: 1h}
+  mutate:
+    argv: [bash, -c, 'echo changed >> main.go']
+    platform: linux/`+arch+`
+    reuse: {allowed: true, max_age: 1h}
+  collide:
+    argv: [bash, -c, 'test "$(cat Aa.txt)" = upper && test "$(cat aa.txt)" = lower']
+    platform: linux/`+arch+`
+    reuse: {allowed: true, max_age: 1h}
+  host:
+    argv: ["true"]
+    platform: any
+    reuse: {allowed: true, max_age: 1h}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	vEnv := []string{"CINEMA_ENGINE=docker", "CINEMA_RUNNER_IMAGE=" + img, "CINEMA_CHECKOUT=volume"}
+	run := func(args ...string) string {
+		cmd := exec.Command(bin, append([]string{"run", "--commit", "HEAD"}, args...)...)
+		cmd.Dir, cmd.Env = e.repo, append(append(os.Environ(), "CINEMA_DATA_DIR="+e.data), vEnv...)
+		out, _ := cmd.CombinedOutput()
+		return string(out)
+	}
+	if out := run("sb", "wrongcase", "mutate"); !strings.Contains(out, "✓ sb") || !strings.Contains(out, "✗ wrongcase") ||
+		!strings.Contains(out, "! mutate") || !strings.Contains(out, "changed: main.go") {
+		t.Fatalf("volume run:\n%s", out)
+	}
+	logCmd := exec.Command(bin, "log", "sb")
+	logCmd.Dir, logCmd.Env = e.repo, append(append(os.Environ(), "CINEMA_DATA_DIR="+e.data), vEnv...)
+	if log, _ := logCmd.CombinedOutput(); !strings.Contains(string(log), "tests: 1 passed") || !strings.Contains(string(log), "tasks") {
+		t.Fatalf("JUnit report or git history missing in the volume:\n%s", log)
+	}
+	if exp, _ := e.cinemaEnv(vEnv, "explain", "--json", "sb"); !strings.Contains(exp, "checkout=volume") {
+		t.Fatalf("explain must say where the checkout was:\n%s", exp)
+	}
+	if st, _ := e.cinemaEnv(vEnv, "status", "--json"); !strings.Contains(st, `"state": "reusable"`) {
+		t.Fatalf("the volume's fingerprint must be the commit's:\n%s", st)
+	}
+	// Aa.txt and aa.txt, committed without a working tree (a Mac's can't hold both).
+	hash := func(s string) string {
+		cmd := exec.Command("git", "-C", e.repo, "hash-object", "-w", "--stdin")
+		cmd.Stdin = strings.NewReader(s)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	e.git("update-index", "--add", "--cacheinfo", "100644,"+hash("upper\n")+",Aa.txt")
+	e.git("update-index", "--add", "--cacheinfo", "100644,"+hash("lower\n")+",aa.txt")
+	e.git("commit", "-qm", "case")
+	if out := run("collide"); !strings.Contains(out, "✓ collide") {
+		t.Fatalf("files differing in case must both exist:\n%s", out)
+	}
+
+	slots, _ := filepath.Glob(filepath.Join(e.data, "checkouts", "*", "0"))
+	if len(slots) != 1 {
+		t.Fatalf("slots: %v", slots)
+	}
+	vol := task.CheckoutVolumeName(slots[0])
+	t.Cleanup(func() { exec.Command("docker", "volume", "rm", "-f", vol).Run() })
+	if exec.Command("docker", "volume", "inspect", vol).Run() != nil {
+		t.Fatal("no checkout volume for the slot")
+	}
+	old := time.Now().Add(-8 * 24 * time.Hour)
+	os.Chtimes(slots[0], old, old)
+	if out := run("host"); !strings.Contains(out, "✓ host") {
+		t.Fatalf("host task:\n%s", out)
+	}
+	if exec.Command("docker", "volume", "inspect", vol).Run() == nil {
+		t.Fatal("a swept slot's volume must go with it")
+	}
+}
+
+// docker: host: the task reaches the engine through its socket as the runner
+// user, a container it starts is reachable at its published port (as
+// Testcontainers does), and what it leaves on the engine is removed after it.
+func TestDockerHost(t *testing.T) {
+	e, img := sandboxEnv(t)
+	mark := "cinema-e2e-" + strconv.Itoa(os.Getpid())
+	e.write("dtest.sh", `set -euo pipefail
+api() { curl -sfS --unix-socket /var/run/docker.sock "$@"; }
+id=$(api -X POST -H 'Content-Type: application/json' http://d/containers/create -d '{
+  "Image": "`+img+`", "Labels": {"`+mark+`": "1"}, "User": "root", "Entrypoint": ["python3"],
+  "Cmd": ["-c", "import socket\ns=socket.socket(); s.bind((\"\",8080)); s.listen()\nwhile True: c,_=s.accept(); c.sendall(b\"hello-from-container\\n\"); c.close()"],
+  "ExposedPorts": {"8080/tcp": {}}, "HostConfig": {"PortBindings": {"8080/tcp": [{"HostPort": ""}]}}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["Id"])')
+api -X POST "http://d/containers/$id/start"
+port=$(api "http://d/containers/$id/json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["NetworkSettings"]["Ports"]["8080/tcp"][0]["HostPort"])')
+for i in $(seq 20); do
+  out=$(curl -s --max-time 2 "telnet://$TESTCONTAINERS_HOST_OVERRIDE:$port" </dev/null || true)
+  [ "$out" = hello-from-container ] && echo reached && exit 0
+  sleep 0.5
+done
+exit 1
+`)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  dock:
+    argv: [bash, dtest.sh]
+    platform: linux/`+runtime.GOARCH+`
+    docker: host
+    reuse: {allowed: true, max_age: 1h}
+  nodock:
+    argv: [bash, -c, 'test ! -e /var/run/docker.sock && test -z "${DOCKER_HOST:-}"']
+    platform: linux/`+runtime.GOARCH+`
+    reuse: {allowed: true, max_age: 1h}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	dEnv := []string{"CINEMA_ENGINE=docker", "CINEMA_RUNNER_IMAGE=" + img}
+	t.Cleanup(func() {
+		out, _ := exec.Command("docker", "ps", "-aq", "--filter", "label="+mark).Output()
+		for _, id := range strings.Fields(string(out)) {
+			exec.Command("docker", "rm", "-f", id).Run()
+		}
+	})
+	cmd := exec.Command(bin, "run", "--commit", "HEAD", "-j", "2", "dock", "nodock")
+	cmd.Dir, cmd.Env = e.repo, append(append(os.Environ(), "CINEMA_DATA_DIR="+e.data), dEnv...)
+	out, err := cmd.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "✓ dock") || !strings.Contains(string(out), "✓ nodock") || !strings.Contains(string(out), "removed: container") {
+		t.Fatalf("err=%v:\n%s", err, out)
+	}
+	if left, _ := exec.Command("docker", "ps", "-aq", "--filter", "label="+mark).Output(); len(strings.TrimSpace(string(left))) > 0 {
+		t.Fatalf("the task's container was left on the engine: %s", left)
+	}
+	if exp, _ := e.cinemaEnv(dEnv, "explain", "--json", "dock"); !strings.Contains(exp, "docker engine linux/") {
+		t.Fatalf("the engine's platform must be in the environment:\n%s", exp)
 	}
 }
 

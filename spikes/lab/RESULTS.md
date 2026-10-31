@@ -386,3 +386,25 @@ Measured with `cinema analyze` today against each project's last green CI run (j
 
 cobra's matrix ran on two image versions in one run (20261018 and 20261012): rollouts are real, so the gate's runner can differ from the one a job would get for a few days. NSubstitute's `format-verify` (`dotnet-version: 10.0.x`, no `DOTNET_INSTALL_DIR`) is now a task: 10.0.403 is the newest GA SDK, the 26.04 image's newest preinstalled SDK too, and its root `global.json` only configures the test runner.
 
+
+## Checkouts in a volume, and `docker: host` (2026-10-31)
+
+Two fixes for findings above, measured on the same arm64 Mac (Colima vz, Docker 29.5.2, 8 CPUs), arm64 natively, warm caches, wall time of `cinema run --commit HEAD <task>` (3 runs each).
+
+| Case | Bind mount (before) | Volume in the VM (after) |
+|---|---|---|
+| click `tests (3.14)` (178 files) | ✗ 1 failed, 2261 passed (`test_path_surrogates`: EPERM); 9.7–10.9 s | ✓ 2262 passed, as CI; 9.9–10.3 s (task 0.8 s faster, ~0.7 s of helper containers) |
+| a wrong-case `. lib/helper.sh` with `lib/Helper.sh` tracked | ✓ **passes (false green)** | ✗ fails, as on the runner |
+| `Aa.txt` and `aa.txt` in one commit | ✗ one file | ✓ two files |
+| 20,000 files, 16 MB, a trivial task | 3.0–3.7 s | 5.4–6.0 s (empty, check out and verify, two tar fingerprints) |
+
+| petclinic `./mvnw -B verify` (Temurin 17.0.20+101) | Tests | Result |
+|---|---|---|
+| no Docker (before) | 79 run, 2 skipped (MySQL Testcontainers) | pass: tested less than CI |
+| `docker: host`, published runner image | 81 run, 2 errors | fail: Spring Boot's Compose support execs `docker`, which the image lacks |
+| `docker: host`, image + docker CLI 28.5.1 and compose 2.40.0, before `SERVICES_HOST` | 81 run, 2 errors | fail: Compose's readiness check waited on localhost:5432 for 2 min |
+| `docker: host`, image + CLI, ports at the gateway | **81 run, 0 skipped**, as CI | pass, 32 s; Ryuk, `petclinic-postgres-1` and `petclinic_default` removed after |
+
+What it took: Colima's socket is `root:991 0660` in the VM (the runner user joins gid 991); the repo's `.git` shows as root's through virtiofs, so `git clone --shared` from it was refused as "dubious ownership" by the 24.04 image's git 2.43 whatever `-c safe.directory` said (its upload-pack doesn't see it): the volume is filled with `git init`, alternates and `update-ref` instead. Testcontainers found the containers it started through the sandbox's gateway by itself; Spring Boot needed `SERVICES_HOST`.
+
+Open: the runner image needs docker's CLI, compose and buildx (GitHub's has them); `docker: host` can't attribute containers to a task, so it holds the engine while it runs and removes anything new.

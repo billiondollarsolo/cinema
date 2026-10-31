@@ -65,6 +65,9 @@ type Proposal struct {
 	Container string `json:"container,omitempty"`
 	// Exclusive: run alone under -j (the draft changes the machine, e.g. sudo apt-get).
 	Exclusive bool `json:"exclusive,omitempty"`
+	// Docker: the job uses the runner's Docker (docker steps, Testcontainers):
+	// docker: host.
+	Docker bool `json:"docker,omitempty"`
 	// Services: the job's service containers, started beside the task.
 	Services map[string]Service `json:"services,omitempty"`
 	// Event: the job's steps depend on the triggering event (github.event_name,
@@ -531,6 +534,19 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 		}
 		h.f(&SetupCtx{Root: root, With: func(string) string { return "" }, Env: envVals, Review: review, Note: note, pin: pin, probe: probe})
 	}
+	// GitHub's runner has Docker, so a job using it is normal; without the
+	// engine its docker steps fail, and Testcontainers tests skip themselves
+	// and pass (lab: petclinic ran 79 of CI's 81 tests).
+	if p.Container == "" {
+		switch {
+		case usesDocker.MatchString(all):
+			p.Docker = true
+			note("runs docker: drafted with docker: host, which gives the task the container engine (root-equivalent on it)")
+		case usesJVMBuild.MatchString(all) && testcontainers(root):
+			p.Docker = true
+			note("the build uses Testcontainers or Docker Compose support, whose tests skip without Docker: drafted with docker: host, which gives the task the container engine (root-equivalent on it)")
+		}
+	}
 	if len(body) == 0 {
 		if r.Verdict == Review {
 			// A Linux check made only of actions: claimable once someone writes the commands.
@@ -807,12 +823,28 @@ var (
 	ghFiles  = regexp.MustCompile(`\$\{?GITHUB_(ENV|PATH|OUTPUT)\b`)
 	sudo     = regexp.MustCompile(`(^|[\s;&|(])sudo\s`)
 	// Lab: vite's preview job ran `pkg-pr-new publish` (it refused outside Actions).
-	publishes   = regexp.MustCompile(`\b(npm|pnpm|yarn|bun|pkg-pr-new|changeset|cargo|gem)(@[\w.^~-]+)? publish\b|\bgoreleaser release\b|\bdocker push\b|\btwine upload\b|\bgh release (create|upload)\b|\bmvn(w)?\b[^\n;&|]*\sdeploy(:deploy)?(\s|$)|\bgradle(w)?\b[^\n;&|]*\s:?([\w-]+:)*publish\w*|\bdotnet nuget push\b|\bdeno publish\b`)
-	usesGo      = regexp.MustCompile(`(^|[\s;&|(])(go (build|test|vet|run|install|generate|mod|tool|list)|make)\b`)
-	usesNode    = regexp.MustCompile(`(^|[\s;&|(])(node|npm|npx|pnpm|yarn|corepack)\b`)
-	pipeToShell = regexp.MustCompile(`(curl|wget)\b[^|\n]*\|\s*(sudo\s+)?(ba)?sh\b`)
-	floating    = regexp.MustCompile(`@latest\b|/HEAD/|/(master|main)/[^\s]*\.(sh|py)\b`)
+	publishes    = regexp.MustCompile(`\b(npm|pnpm|yarn|bun|pkg-pr-new|changeset|cargo|gem)(@[\w.^~-]+)? publish\b|\bgoreleaser release\b|\bdocker push\b|\btwine upload\b|\bgh release (create|upload)\b|\bmvn(w)?\b[^\n;&|]*\sdeploy(:deploy)?(\s|$)|\bgradle(w)?\b[^\n;&|]*\s:?([\w-]+:)*publish\w*|\bdotnet nuget push\b|\bdeno publish\b`)
+	usesGo       = regexp.MustCompile(`(^|[\s;&|(])(go (build|test|vet|run|install|generate|mod|tool|list)|make)\b`)
+	usesNode     = regexp.MustCompile(`(^|[\s;&|(])(node|npm|npx|pnpm|yarn|corepack)\b`)
+	pipeToShell  = regexp.MustCompile(`(curl|wget)\b[^|\n]*\|\s*(sudo\s+)?(ba)?sh\b`)
+	floating     = regexp.MustCompile(`@latest\b|/HEAD/|/(master|main)/[^\s]*\.(sh|py)\b`)
+	usesDocker   = regexp.MustCompile(`(^|[\s;&|(])(docker\s+(run|build|buildx|compose|create|exec|pull|start|network|volume)\b|docker-compose\b)`)
+	usesJVMBuild = regexp.MustCompile(`(^|[\s;&|(/])(mvnw?|gradlew?)\b`)
 )
+
+// testcontainers reports whether the repo's root build declares Testcontainers
+// or Spring Boot's Docker Compose support. ponytail: root build files only;
+// a module's own pom isn't read.
+func testcontainers(root string) bool {
+	for _, f := range []string{"pom.xml", "build.gradle", "build.gradle.kts", "gradle/libs.versions.toml"} {
+		if b, err := readRepo(root, f); err == nil {
+			if s := strings.ToLower(string(b)); strings.Contains(s, "testcontainers") || strings.Contains(s, "spring-boot-docker-compose") {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // Go and Node without a setup action: pinned from the repo's version file, as
 // setup-go/setup-node would (go.mod's toolchain is also what GOTOOLCHAIN=auto

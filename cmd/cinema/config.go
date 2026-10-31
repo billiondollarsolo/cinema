@@ -135,6 +135,10 @@ func place(t *task.Task) (p placement, ok bool) {
 		switch native := engineArch(); {
 		case native == arch:
 			return placement{sandbox: true, platform: t.Platform}, true
+		case t.Docker == task.DockerHost:
+			// The containers it starts would run as the engine's arch, not the
+			// job's: an arm64 MySQL under an amd64 task tests something else.
+			return placement{}, false
 		case native != "" && slices.Contains(cfg.Emulate, arch):
 			return placement{sandbox: true, platform: t.Platform, emulated: true}, true
 		}
@@ -160,7 +164,7 @@ func probeWhere(r *repo, t *task.Task, pl placement) (*task.Where, error) {
 	}
 	cpus, mem := t.RunnerSize()
 	img := runnerImage(t.RunsOn)
-	key := fmt.Sprintf("%s|%s|%d|%d|%s|%s", pl.platform, r.id, cpus, mem, strings.Join(bins, ":"), img)
+	key := fmt.Sprintf("%s|%s|%d|%d|%s|%s|%s", pl.platform, r.id, cpus, mem, strings.Join(bins, ":"), img, t.Docker)
 	probeMu.Lock()
 	defer probeMu.Unlock()
 	if sb := probeBoxes[key]; sb != nil {
@@ -169,7 +173,7 @@ func probeWhere(r *repo, t *task.Task, pl placement) (*task.Where, error) {
 	sb, err := task.StartSandbox(context.Background(), task.SandboxSpec{Image: img, Platform: pl.platform,
 		Emulated: pl.emulated, Root: r.root, RepoName: filepath.Base(r.id), RepoID: r.id, DataDir: r.dataDir, Bins: bins, Vars: vars, Caches: caches,
 		CPUs: cpus, MemoryMB: mem * 1024,
-		ProbeOnly: true, Lifetime: 30 * time.Minute})
+		ProbeOnly: true, Lifetime: 30 * time.Minute, DockerHost: t.Docker == task.DockerHost})
 	if err != nil {
 		return nil, err
 	}
@@ -204,6 +208,8 @@ func placeHint(t *task.Task) string {
 		return "run it in a container: set engine: docker in your cinema config (or CINEMA_ENGINE=docker)"
 	case native == "":
 		return "no container engine answers (docker info failed)"
+	case t.Docker == task.DockerHost && native != arch:
+		return fmt.Sprintf("docker: host runs only natively (the engine is %s): the containers it starts would be %s, not %s", native, native, arch)
 	default:
 		return fmt.Sprintf("the engine runs %s natively; to run %s emulated (slower), add it to emulate: in your cinema config (or CINEMA_EMULATE=%s)", native, arch, arch)
 	}

@@ -124,6 +124,9 @@ func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr err
 	// a command that rewrites the file defining what's required (a repo-wide
 	// formatter, say) must not count as evidence (lab finding: vite's oxfmt).
 	cfgBefore := configHash(r.root)
+	if r.vol != nil {
+		cfgBefore = r.vol.cfgBefore
+	}
 	detector := &task.CacheDetector{}
 	opts.Watch = detector
 	res, err := record.Run(ctx, opts)
@@ -158,17 +161,28 @@ func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr err
 		if t != nil {
 			extra, outputs = t.ExtraInputs, t.Outputs
 		}
-		if r.capture == "clean" {
-			// The checkout started as the commit, with no untracked files, so any
-			// now present were written by the command: build junk (coverage/tmp, a
-			// downloaded ./actionlint) like on a CI runner. They don't change what
-			// was tested; modified or deleted tracked files still do.
-			outputs = append(slices.Clip(outputs), untracked(r.root)...)
+		cfgAfter := ""
+		if r.vol != nil {
+			// The tree that ran is in the volume; tracked files only there,
+			// for the same reason as below.
+			if src.After, err = r.vol.takeAfter(); err != nil {
+				warn("fingerprint: %v", err)
+			}
+			cfgAfter = r.vol.cfgAfter
+		} else {
+			if r.capture == "clean" {
+				// The checkout started as the commit, with no untracked files, so any
+				// now present were written by the command: build junk (coverage/tmp, a
+				// downloaded ./actionlint) like on a CI runner. They don't change what
+				// was tested; modified or deleted tracked files still do.
+				outputs = append(slices.Clip(outputs), untracked(r.root)...)
+			}
+			if src.After, err = r.source(extra, outputs); err != nil {
+				warn("fingerprint: %v", err)
+			}
+			cfgAfter = configHash(r.root)
 		}
-		if src.After, err = r.source(extra, outputs); err != nil {
-			warn("fingerprint: %v", err)
-		}
-		if configHash(r.root) != cfgBefore {
+		if cfgAfter != cfgBefore {
 			warn("the command changed %s; this run can't count as evidence", task.ConfigPath)
 			src.After = "" // never equal to Before: not evidence (plan: incomplete record)
 		}
@@ -177,7 +191,10 @@ func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr err
 		}
 	}
 	var junit [][]byte
-	if r.root != "" {
+	switch {
+	case r.vol != nil:
+		junit = r.vol.v.JUnit(context.Background(), res.Start)
+	case r.root != "":
 		junit = testreport.JUnitFiles(r.root, res.Start) // before a clean checkout is reset
 	}
 	tr = testreport.Read(append(res.Stdout.Bytes(), res.Stderr.Bytes()...), res.Stdout.Truncated || res.Stderr.Truncated, junit)

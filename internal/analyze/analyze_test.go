@@ -631,3 +631,33 @@ jobs:
 		}
 	}
 }
+
+// A job using the runner's Docker drafts docker: host: docker steps, or a
+// JVM build declaring Testcontainers (whose tests skip, and pass, without it).
+func TestDraftsDockerHost(t *testing.T) {
+	root := t.TempDir()
+	os.WriteFile(filepath.Join(root, "pom.xml"), []byte("<artifactId>testcontainers-mysql</artifactId>"), 0o644)
+	src := "on: push\njobs:\n" +
+		"  compose: {runs-on: ubuntu-latest, steps: [{run: 'docker compose up -d && make test'}]}\n" +
+		"  tc: {runs-on: ubuntu-latest, steps: [{run: './mvnw -B verify'}]}\n" +
+		"  plain: {runs-on: ubuntu-latest, steps: [{run: 'make test'}]}\n" +
+		"  word: {runs-on: ubuntu-latest, steps: [{run: 'echo build the docker image later'}]}\n" +
+		"  boxed: {runs-on: ubuntu-latest, container: 'maven:3', steps: [{run: './mvnw verify'}]}\n"
+	jobs, err := workflowAt(root, "ci.yml", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range jobs {
+		want := j.ID == "compose" || j.ID == "tc"
+		if j.Proposal == nil || j.Proposal.Docker != want {
+			t.Errorf("%s: docker=%v, want %v (%v)", j.ID, j.Proposal != nil && j.Proposal.Docker, want, j.Notes)
+		}
+	}
+	os.WriteFile(filepath.Join(root, "pom.xml"), []byte("<artifactId>junit</artifactId>"), 0o644)
+	jobs, _ = workflowAt(root, "ci.yml", []byte(src))
+	for _, j := range jobs {
+		if j.ID == "tc" && j.Proposal.Docker {
+			t.Error("no Testcontainers in the build: no docker: host")
+		}
+	}
+}

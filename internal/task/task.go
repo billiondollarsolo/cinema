@@ -27,6 +27,7 @@ const (
 	ConfigPath    = ".cinema/tasks.yaml"
 	maxConfigSize = 1 << 20
 	PlatformAny   = "any"
+	DockerHost    = "host" // docker: host
 )
 
 var ErrNoConfig = errors.New("task: no " + ConfigPath)
@@ -111,6 +112,12 @@ type Task struct {
 	// GitHub job's services:. Their image digests are fingerprinted. Tasks with
 	// services run alone under -j (fixed host ports).
 	Services map[string]Service `yaml:"services"`
+	// Docker: "host" lets the task use the container engine (its socket), as
+	// a job uses the runner's Docker: Testcontainers, docker run/build/compose.
+	// Part of the contract: without it those tests skip or fail, so the same
+	// argv tests less. Root-equivalent on the engine; off by default. Runs
+	// alone under -j, and what it leaves on the engine is removed after it.
+	Docker string `yaml:"docker"`
 	// Covers names the CI job this task stands in for ("ci.yml#test"): the job
 	// skips itself when the task is reused (verify --skip-outputs). Metadata,
 	// not part of the contract.
@@ -305,6 +312,18 @@ func (t *Task) validate() error {
 			}
 		}
 	}
+	switch t.Docker {
+	case "":
+	case DockerHost:
+		if t.Container != "" {
+			return errors.New("docker: host needs the runner sandbox; container: tasks can't have it")
+		}
+		if !strings.HasPrefix(t.Platform, "linux/") {
+			return errors.New("docker: host needs a linux/<arch> platform (the engine runs Linux containers)")
+		}
+	default:
+		return fmt.Errorf(`docker must be "host" (or absent), got %q`, t.Docker)
+	}
 	if t.Covers != "" && !coversRE.MatchString(t.Covers) && !coversGitLabRE.MatchString(t.Covers) {
 		return fmt.Errorf("covers must look like ci.yml#job, got %q", t.Covers)
 	}
@@ -465,6 +484,10 @@ func (t *Task) ContractDigest(root string) (string, error) {
 		e.str("runtime")
 		e.str(n)
 		e.str(t.Runtime.Other[n])
+	}
+	if t.Docker != "" { // likewise only when set
+		e.str("docker")
+		e.str(t.Docker)
 	}
 	for _, n := range sortedServices(t.Services) { // likewise only when set
 		svc := t.Services[n]

@@ -1,6 +1,8 @@
 package testreport
 
 import (
+	"archive/tar"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -60,4 +62,25 @@ func isReport(p string) bool {
 		}
 	}
 	return false
+}
+
+// JUnitTar is JUnitFiles for a tree cinema reads as a tar stream (a checkout
+// in a volume inside the engine's VM): the same reports, by the same rules.
+func JUnitTar(r io.Reader, since time.Time) [][]byte {
+	since = since.Add(-2 * time.Second)
+	var out [][]byte
+	tr := tar.NewReader(r)
+	for len(out) < maxXMLFiles {
+		h, err := tr.Next()
+		if err != nil {
+			break
+		}
+		if h.Typeflag != tar.TypeReg || h.Size > maxXMLBytes || h.ModTime.Before(since) || !isReport(filepath.FromSlash(h.Name)) {
+			continue
+		}
+		if b, err := io.ReadAll(io.LimitReader(tr, maxXMLBytes)); err == nil {
+			out = append(out, b)
+		}
+	}
+	return out
 }

@@ -54,6 +54,7 @@ type repo struct {
 	snaps        map[string]string // memoized source digests by extra-inputs key
 	dataDir      string            // for provisioned runtimes
 	where        *task.Where       // the task runs in a sandbox (place): its platform, user and probes
+	vol          *volTree          // the task runs on a checkout in a volume: fingerprints read it, not root
 }
 
 func openRepo() (*repo, error) {
@@ -110,6 +111,9 @@ func (r *repo) close() {
 // source is the whole-source fingerprint including extra inputs. Memoized:
 // call fresh() to drop memos after something may have changed the tree.
 func (r *repo) source(extra, exclude []string) (string, error) {
+	if r.vol != nil {
+		return r.vol.source(extra, exclude)
+	}
 	key := strings.Join(extra, "\x00") + "\x01" + strings.Join(exclude, "\x00")
 	if d, ok := r.snaps[key]; ok {
 		return d, nil

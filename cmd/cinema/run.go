@@ -177,7 +177,9 @@ func runParallel(ctx context.Context, r *repo, rev string, todo []*task.Task, j 
 	// parallel-safe ones, one at a time.
 	var shared, alone []*task.Task
 	for _, t := range todo {
-		if t.Exclusive || len(t.Services) > 0 { // services publish fixed host ports
+		// Services publish fixed host ports; a docker: host task owns the engine
+		// while it runs (what appears there is its own, removed after it).
+		if t.Exclusive || len(t.Services) > 0 || t.Docker == task.DockerHost {
 			alone = append(alone, t)
 		} else {
 			shared = append(shared, t)
@@ -274,6 +276,20 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 	}
 	defer stopServices()
 	pl, _ := place(t)
+	if t.Docker == task.DockerHost {
+		unlock, err := lockDockerHost(w.dataDir)
+		if err != nil {
+			say("✗ %s  docker: host: %v\n", t.ID, err)
+			return true, false, nil
+		}
+		defer unlock()
+		before := task.SnapshotEngine()
+		defer func() { // after the sandbox is removed (deferred later, runs first)
+			if gone := before.RemoveNew(); len(gone) > 0 {
+				say("  %s left on the engine, removed: %s\n", t.ID, strings.Join(gone, ", "))
+			}
+		}()
+	}
 	if pl.sandbox {
 		// A runner-like container (plan §9.2). Only from a clean checkout: the
 		// bind-mounted tree must be exactly the commit.
@@ -284,17 +300,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 		// ponytail: services are reachable by name from the sandbox, not on
 		// localhost as on a runner host; tasks that use localhost ports fail
 		// (never pass) until the sandbox shares the services' network namespace.
-		bins, vars, caches, err := t.RuntimeSandbox(w.dataDir, "linux", strings.TrimPrefix(pl.platform, "linux/"))
-		if err != nil {
-			say("✗ %s  runtime: %v\n", t.ID, err)
-			return true, false, nil
-		}
-		art, _ := artifactsRoot()
-		cpus, mem := t.RunnerSize()
-		sb, err := task.StartSandbox(ctx, task.SandboxSpec{Image: runnerImage(t.RunsOn), Platform: pl.platform, Emulated: pl.emulated,
-			Root: w.root, RepoName: filepath.Base(w.id), RepoID: w.id, DataDir: w.dataDir, Bins: bins, Vars: vars, Caches: caches, Artifacts: art,
-			Objects: filepath.Join(w.id, ".git", "objects"),
-			CPUs:    cpus, MemoryMB: mem * 1024, Network: network})
+		sb, vt, err := startTaskSandbox(ctx, w, t, pl, network)
 		if err != nil {
 			say("✗ %s  %v\n", t.ID, err)
 			return true, false, nil
@@ -311,7 +317,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 		}
 		opts.Argv, opts.Env, opts.CPUs = sb.Exec(t.Cwd, t.Argv, extra), os.Environ(), nil
 		c := *w
-		c.where = sb.Where()
+		c.where, c.vol = sb.Where(), vt
 		w = &c
 	}
 	if t.Container != "" {
@@ -377,7 +383,11 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 	case src.Before != src.After:
 		mark, note = "!", "passed, but changed source files: not evidence"
 		if w.capture == "clean" { // the slot was clean before the task, so this is exactly what it wrote
-			if changed := changedPaths(w.root); len(changed) > 0 {
+			changed := changedPaths
+			if w.vol != nil {
+				changed = func(string) []string { return w.vol.changed() }
+			}
+			if changed := changed(w.root); len(changed) > 0 {
 				note += fmt.Sprintf("\n    changed: %s\n    if the task is meant to write them, declare them in outputs:", strings.Join(changed, ", "))
 			}
 		}
@@ -652,7 +662,10 @@ func sweepRunDirs() {
 			f.Close()
 		}
 	}
+	volSweepOnce.Do(sweepCheckoutVolumes) // then the volumes of slots now gone
 }
+
+var volSweepOnce sync.Once
 
 func gitOut(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -55,6 +56,7 @@ type Where struct {
 	CPUs     int                                             // the runner size it was given
 	MemGB    int
 	OS       string // the image's OS release, "ubuntu-24.04"
+	Docker   string // docker: host: the platform of the engine the task uses ("linux/arm64"); "" = probe this host's
 }
 
 // EnvFingerprintIn is EnvFingerprint for a task running at w.
@@ -106,6 +108,25 @@ func (t *Task) EnvFingerprintIn(root string, env []string, w *Where) (Env, error
 		e.str(img)
 		fp.Image = img
 		fp.Inputs = append(fp.Inputs, "container "+img)
+	}
+	if t.Docker == DockerHost {
+		// The engine the task's containers run on: its platform decides which
+		// image variant they get (an arm64 engine runs arm64 MySQL under an
+		// emulated amd64 task). Not its version: GitHub's runner and a
+		// developer's engine never share one, and the API a test uses is
+		// stable; the version is shown, not compared.
+		plat := ""
+		if w != nil {
+			plat = w.Docker
+		} else if e := EngineServer(); e.Arch != "" {
+			plat = e.GOOS + "/" + e.Arch
+		}
+		if plat == "" {
+			return Env{}, errors.New("docker: host: no container engine answers (docker version failed)")
+		}
+		e.str("docker")
+		e.str(plat)
+		fp.Inputs = append(fp.Inputs, "docker engine "+plat)
 	}
 	for _, n := range sortedServices(t.Services) {
 		img, err := PinnedImage(t.Services[n].Image)

@@ -56,9 +56,13 @@ func readiness(j analyze.Job, m machine) (category, detail string) {
 		return "review", firstReason(j)
 	}
 	plat := "linux/amd64" // drafts are (ARM runners stay in CI)
-	pl, ok := place(&task.Task{Platform: plat, Container: j.Proposal.Container})
+	pt := &task.Task{Platform: plat, Container: j.Proposal.Container}
+	if j.Proposal.Docker {
+		pt.Docker = task.DockerHost
+	}
+	pl, ok := place(pt)
 	if !ok && m.Platform != plat {
-		return "stays in CI", "the job is " + plat + "; this machine is " + m.Platform + ": " + placeHint(&task.Task{Platform: plat, Container: j.Proposal.Container})
+		return "stays in CI", "the job is " + plat + "; this machine is " + m.Platform + ": " + placeHint(pt)
 	}
 	var need []string
 	if j.Proposal.Container != "" && !m.Docker {
