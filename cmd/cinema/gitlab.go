@@ -129,13 +129,27 @@ func gitlabTrust(root, remote, branch string) (keys, tip string, err error) {
 	return keys, tip, nil
 }
 
+// jobEnv reads the job's variables as GitLab set them (scrubGitEnv keeps a
+// copy from before it changed the process's environment).
+var jobEnv = os.LookupEnv
+
 // scrubGitEnv removes, for this whole process, what lets the job's variables
 // steer git (pipeline variables reach the environment): every GIT_* variable
 // (GIT_DIR, GIT_OBJECT_DIRECTORY, GIT_CONFIG_*, GIT_SSH_COMMAND, ...) and
 // global or system config (HOME's or XDG_CONFIG_HOME's .gitconfig). Every git
 // call the gate makes (the source fingerprint, receipts, tasks.yaml) then sees
 // the checkout's own config only, which the runner wrote before the job ran.
+//
+// The job's variables as they were (GIT_* included) stay readable through
+// jobEnv: GitLab evaluates rules: and the event against all of them, and so
+// must the gate, or a rule reading $GIT_… could drop a job GitLab would run.
 func scrubGitEnv() {
+	snap := map[string]string{}
+	for _, kv := range os.Environ() {
+		k, v, _ := strings.Cut(kv, "=")
+		snap[k] = v
+	}
+	jobEnv = func(k string) (string, bool) { v, ok := snap[k]; return v, ok }
 	for _, kv := range os.Environ() {
 		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "GIT_") || k == "XDG_CONFIG_HOME" {
 			os.Unsetenv(k)
@@ -198,7 +212,7 @@ func writeGitLabChild(cfg *task.Config, rep gateReport, root, path string) error
 	reused, shadow := map[string]bool{}, map[string]bool{}
 	why := map[string][]string{}
 	spot := false
-	if id := os.Getenv("CI_PIPELINE_ID"); id != "" && sha256.Sum256([]byte(id))[0]%20 == 0 {
+	if id, _ := jobEnv("CI_PIPELINE_ID"); id != "" && sha256.Sum256([]byte(id))[0]%20 == 0 {
 		spot = true
 		fmt.Println("  spot check: this pipeline skips nothing, so CI's results can be compared with cinema's")
 	}
@@ -252,7 +266,7 @@ func writeGitLabChild(cfg *task.Config, rep gateReport, root, path string) error
 		}
 		fmt.Printf("  %-6s %s  (%s)\n", state, name, cmp.Or(strings.Join(why[name], "; "), "no task covers it"))
 	}
-	child, err := gl.Child(os.LookupEnv, want)
+	child, err := gl.Child(jobEnv, want)
 	if err != nil {
 		return err
 	}
@@ -275,7 +289,7 @@ func gitlabRunAll(path string) int {
 			want = append(want, analyze.GitLabChildJob{Name: n})
 		}
 		var child analyze.GitLabChildPipeline
-		if child, err = gl.Child(os.LookupEnv, want); err == nil {
+		if child, err = gl.Child(jobEnv, want); err == nil {
 			if err = os.WriteFile(path, child.YAML, 0o644); err == nil {
 				fmt.Printf("cinema couldn't judge this pipeline: every covered job runs (%s)\n", strings.Join(child.Runs, ", "))
 				return 0

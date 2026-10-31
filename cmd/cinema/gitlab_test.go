@@ -391,6 +391,17 @@ other:
 		"GIT_CONFIG_KEY_0=remote.origin.url", "GIT_CONFIG_VALUE_0=/nonexistent"); !regexp.MustCompile(`REUSE +unit`).MatchString(log) {
 		t.Errorf("the gate followed the job's git variables:\n%s", log)
 	}
+	// The scrub hides GIT_* from git only: rules still see them as GitLab does.
+	t.Setenv("GIT_FLAVOR", "x")
+	snapBefore := jobEnv
+	scrubGitEnv()
+	if v, ok := jobEnv("GIT_FLAVOR"); !ok || v != "x" || os.Getenv("GIT_FLAVOR") != "" {
+		t.Errorf("rules must see the job's GIT_* variables (%q %v), git mustn't (%q)", v, ok, os.Getenv("GIT_FLAVOR"))
+	}
+	jobEnv = snapBefore
+	os.Unsetenv("GIT_CONFIG_NOSYSTEM")
+	os.Unsetenv("GIT_CONFIG_GLOBAL")
+	os.Unsetenv("GIT_TERMINAL_PROMPT")
 	// Variables that would redirect git (another global config through HOME or
 	// XDG_CONFIG_HOME, config from the environment) don't reach the trust
 	// root's git: the keys are still main's, from the real remote.

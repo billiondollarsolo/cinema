@@ -103,7 +103,7 @@ func cmdVerify(args []string) int {
 	var e ciEvent
 	if *glChild != "" {
 		*skipFor = analyze.GitLabFile
-		e, err = gitlabEvent(os.LookupEnv, root, candidate)
+		e, err = gitlabEvent(jobEnv, root, candidate)
 	} else {
 		e, err = githubEvent(*eventPath, candidate)
 	}
