@@ -24,6 +24,11 @@ const dotnetIndex = "https://builds.dotnet.microsoft.com/dotnet/release-metadata
 func init() {
 	RegisterSetupAction("actions/setup-dotnet", setupDotnet)
 	RegisterReleases("dotnet", dotnetReleases)
+	// The runner's 11 preinstalled SDKs: dotnet picks the newest, or global.json's
+	// roll-forward among them, so which one depends on the image's set.
+	RegisterWithoutSetup("dotnet", regexp.MustCompile(`(^|[\s;&|(])dotnet\b`), func(c *SetupCtx) {
+		c.Review(".NET isn't set up by the job: it uses one of the runner image's preinstalled SDKs (the newest, or global.json's roll-forward among them), which change with each image release; add actions/setup-dotnet with an exact SDK")
+	}, "actions/setup-dotnet")
 }
 
 // dotnetReleases: each channel's newest SDK, newest channel first. A channel

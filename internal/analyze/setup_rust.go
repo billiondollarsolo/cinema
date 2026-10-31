@@ -24,6 +24,28 @@ func init() {
 	RegisterSetupAction("actions-rust-lang/setup-rust-toolchain", func(c *SetupCtx) { setupRustToolchain(c, c.Ref) })
 	RegisterSetupAction("actions-rs/toolchain", actionsRSToolchain)
 	RegisterSetupAction("Swatinem/rust-cache", rustCache)
+	RegisterWithoutSetup("rust", usesRust, rustPreinstalled, "dtolnay/rust-toolchain", "actions-rust-lang/setup-rust-toolchain", "actions-rs/toolchain")
+}
+
+var usesRust = regexp.MustCompile(`(^|[\s;&|(])(cargo|rustc|rustup)\b`)
+
+// rustPreinstalled: the runner has rustup (profile minimal) with stable,
+// clippy and rustfmt as of the image's build. A rust-toolchain file at the
+// root makes rustup install that channel on first use; without one, or with
+// stable (installed, so not updated), it's the image's stable, which lags.
+func rustPreinstalled(c *SetupCtx) {
+	file, name, why := readRustToolchain(c.Root)
+	switch {
+	case why != "":
+		c.Review(why)
+	case file == nil:
+		c.Review("Rust isn't set up by the job: it uses the runner image's preinstalled stable, which lags today's and changes with each image release; add a setup action or a rust-toolchain.toml with an exact release")
+	case file.channel == "stable":
+		c.Review("Rust isn't set up by the job and " + name + " names stable: CI uses the runner image's stable as installed (not updated); pin an exact release in the file")
+	default:
+		c.Note("Rust isn't set up by the job: rustup installs " + file.channel + " from " + name + " on first use, as on the runner")
+		rustPin(c, file.channel, file.extras)
+	}
 }
 
 // rustReleases lists stable releases, newest first, from static.rust-lang.org's

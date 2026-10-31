@@ -11,13 +11,14 @@ import (
 // runtime cinema provisions and adds any steps the action's side effects stand
 // for (setup-go puts GOPATH/bin on PATH).
 type SetupCtx struct {
-	Root string                    // the repo, for version files ("" when unknown)
-	Ref  string                    // the action's ref (dtolnay/rust-toolchain@stable: "stable")
-	With func(key string) string   // the step's with: value, matrix-substituted
-	has  func(key string) bool     // the input is given (even empty)
-	Env  map[string]string         // the job's resolved env (workflow, job), for ${{ env.X }}
-	pin  func(runtime, ver string) // sets the proposal's runtime pin (one version per task)
-	step func(run, dir string)     // adds a step right after this one
+	Root  string                    // the repo, for version files ("" when unknown)
+	Ref   string                    // the action's ref (dtolnay/rust-toolchain@stable: "stable")
+	With  func(key string) string   // the step's with: value, matrix-substituted
+	has   func(key string) bool     // the input is given (even empty)
+	Env   map[string]string         // the job's resolved env (workflow, job), for ${{ env.X }}
+	pin   func(runtime, ver string) // sets the proposal's runtime pin (one version per task)
+	step  func(run, dir string)     // adds a step right after this one
+	probe func(argv []string)       // adds a version command to the environment fingerprint
 	// Review: the draft has an issue a person must resolve (an unpinnable
 	// version, an option cinema doesn't reproduce). Note: informational.
 	Review, Note func(string)
@@ -38,11 +39,46 @@ func (c *SetupCtx) Step(run, dir string) { c.step(run, dir) }
 // floating: so CI resolves it again on every run. "" (with a review) if it
 // can't be pinned.
 func (c *SetupCtx) Exact(runtime, spec, file string, exact *regexp.Regexp) string {
-	return exactVersion(c.Root, spec, exact.String(), runtime, file, c.Review, c.Note)
+	tool := runtime
+	if t, ok := map[string]string{"go": "Go", "node": "Node"}[runtime]; ok {
+		tool = t // their release lists' names
+	}
+	return exactVersion(c.Root, spec, exact.String(), tool, file, c.Review, c.Note)
 }
+
+// Probe fingerprints a tool the task doesn't pin by its version command
+// ([python3, --version]). It runs where the task runs: in the runner image
+// here, on the runner in CI.
+func (c *SetupCtx) Probe(argv ...string) { c.probe(argv) }
 
 // SetupAction translates one setup action's step.
 type SetupAction func(c *SetupCtx)
+
+// withoutSetup is, by runtime, what a job that uses it gets when no setup
+// action sets it up: the runner's preinstalled toolchain, or a version file a
+// tool reads itself (rustup, Go's GOTOOLCHAIN). bun, deno and uv have none:
+// GitHub's Ubuntu images don't carry them, so such a step fails in CI too.
+var withoutSetup = map[string]noSetup{}
+
+type noSetup struct {
+	uses    *regexp.Regexp
+	actions []string
+	f       SetupAction
+}
+
+// RegisterWithoutSetup: when steps matching uses run runtime and nothing set
+// it up (no pin, none of actions ran), f pins what CI's job really gets,
+// probes it, or reviews; else the task's receipts would match whatever is
+// installed. f can't add steps (c.Step): they're translated by then.
+func RegisterWithoutSetup(runtime string, uses *regexp.Regexp, f SetupAction, actions ...string) {
+	if withoutSetup[runtime].f != nil {
+		panic("runtime " + runtime + " without setup registered twice")
+	}
+	for i, a := range actions {
+		actions[i] = strings.ToLower(a)
+	}
+	withoutSetup[runtime] = noSetup{uses, actions, f}
+}
 
 var setupActions = map[string]SetupAction{}
 

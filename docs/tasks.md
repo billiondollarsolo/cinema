@@ -76,6 +76,10 @@ Changing any of these changes the task's contract digest: older receipts stop ma
 | `deno` | `2.5.6` (2.0.1 and later) | denoland/deno releases, `.sha256sum` | `denoland/setup-deno` |
 | `dotnet` | `8.0.404` (SDK) | builds.dotnet.microsoft.com, SHA-512 from `releases.json` | `actions/setup-dotnet` |
 
+A job that uses a runtime with no setup action gets what GitHub's runner really has, not its version file: Go and Node are pinned from `go.mod`/`.go-version` and `.nvmrc`/`.node-version`; Rust from `rust-toolchain(.toml)`, which rustup on the runner installs on first use (no file, or `stable`: review, the image's stable lags); Python is the release's apt `python3` (3.10 on 22.04, 3.12 on 24.04, 3.14 on 26.04, `.python-version` ignored), which the runner image has too, so nothing is pinned and `python3 --version` is probed; Java and .NET use the image's preinstalled JDK and SDKs, whose builds move with each image release, so they go to review. Bun, Deno and uv aren't on the runner (such a step fails in CI too).
+
+`jdx/mise-action` and `asdf-vm/actions/install` are translated into pins from `mise.toml` (and `.mise.toml`, `mise.local.toml`, `mise/config.toml`, `.config/mise.toml`, … in mise's precedence, then `working_directory`'s), `mise.lock` and `.tool-versions` (asdf reads only that), and the `mise_toml`/`tool_versions` inputs. mise's `java` needs the vendor (`temurin-21`; a bare `21` is OpenJDK's build). `[env]` is mirrored through `$GITHUB_ENV`. Review: tools cinema doesn't provision (named), several versions of one tool, `system`, tool options other than Rust's components/targets/profile, env directives (`_.path`, `_.file`) and templates, hooks, aliases, plugins, `conf.d` fragments, idiomatic version files, `MISE_ENV`, and a floating version with `cache: true` (the action's cache keeps the first install for up to 30 days). `asdf-vm/actions/setup` installs only asdf: review.
+
 Ruby isn't provisioned: `ruby/setup-ruby`'s prebuilt rubies only work at their build path and publish no checksums, so Ruby jobs stay in CI ([Gotchas](gotchas.md)).
 
 ## Reuse policy

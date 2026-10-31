@@ -13,6 +13,19 @@ import (
 func init() {
 	RegisterReleases("python", pythonReleases)
 	RegisterSetupAction("actions/setup-python", setupPython)
+	RegisterWithoutSetup("python", usesPython, pythonPreinstalled)
+}
+
+var usesPython = regexp.MustCompile(`(^|[\s;&|(])(python3?|pip3?|pytest|tox|nox)\b`)
+
+// pythonPreinstalled: with no setup-python, `python`/`pip` on GitHub's Ubuntu
+// images are the release's apt python3 (python-is-python3, python3-pip; the
+// toolcache's Pythons aren't on PATH, and nothing reads .python-version).
+// cinema's runner image has the same apt python3, so the faithful draft
+// pins nothing and fingerprints python3 --version on both sides.
+func pythonPreinstalled(c *SetupCtx) {
+	c.Probe("python3", "--version")
+	c.Note("Python isn't set up by the job: it uses the runner's python3, Ubuntu's (3.10 on 22.04, 3.12 on 24.04, 3.14 on 26.04; .python-version isn't read), as the runner image does; python3 --version is fingerprinted")
 }
 
 // pythonManifest is the release list setup-python resolves version specs

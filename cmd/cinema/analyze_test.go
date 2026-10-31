@@ -28,6 +28,28 @@ func TestDraftHasNoFlowMaps(t *testing.T) {
 	}
 }
 
+// A tool the job uses unpinned (the runner's python3) is probed, after the
+// pinned runtimes' version commands, and the draft loads.
+func TestDraftProbesUnpinnedTools(t *testing.T) {
+	for _, p := range []*analyze.Proposal{
+		{ID: "test", Body: "(\npytest\n)", Probes: [][]string{{"python3", "--version"}}},
+		{ID: "test", Node: "22.23.4", Body: "(\npytest\n)", Probes: [][]string{{"python3", "--version"}}},
+	} {
+		out, err := draft([]analyze.Job{{Workflow: "ci.yml", ID: "test", Verdict: analyze.Task, Proposal: p}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := task.Parse(out)
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		tc := cfg.Tasks["test"].Toolchain
+		if len(tc) == 0 || strings.Join(tc[len(tc)-1].Cmd, " ") != "python3 --version" || (p.Node != "" && strings.Join(tc[0].Cmd, " ") != "node --version") {
+			t.Errorf("toolchain %+v\n%s", tc, out)
+		}
+	}
+}
+
 // A drafted services: block loads as task services.
 func TestDraftServicesLoad(t *testing.T) {
 	jobs := []analyze.Job{{Workflow: "ci.yml", ID: "db", Verdict: analyze.Task, Proposal: &analyze.Proposal{ID: "db", Body: "(\nmake test\n)",

@@ -56,7 +56,10 @@ type Proposal struct {
 	Node string `json:"node,omitempty"` // exact versions only (runtime:)
 	// Runtimes: other pinned runtimes (python, java, …), by task.RuntimeKind name.
 	Runtimes map[string]string `json:"runtimes,omitempty"`
-	Body     string            `json:"script"` // bash script; each step in its own subshell
+	// Probes: version commands of tools the job uses unpinned (the runner's
+	// python3), fingerprinted where the task runs (toolchain:).
+	Probes [][]string `json:"probes,omitempty"`
+	Body   string     `json:"script"` // bash script; each step in its own subshell
 	// Outputs: paths the job uploads as artifacts, so it writes them (outputs:).
 	Outputs []string `json:"outputs,omitempty"`
 	// Container: the job's container image; cinema runs the steps inside it.
@@ -314,6 +317,28 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 			envVals[k] = sub(str(v))
 		}
 	}
+	// pin sets a runtime pin from a setup action (one version per task).
+	pin := func(rt, ver string) {
+		switch rt {
+		case "go":
+			p.Go = onePin(p.Go, ver, "Go", review)
+		case "node":
+			p.Node = onePin(p.Node, ver, "Node", review)
+		default:
+			if p.Runtimes == nil {
+				p.Runtimes = map[string]string{}
+			}
+			if v := onePin(p.Runtimes[rt], ver, rt, review); v != "" {
+				p.Runtimes[rt] = v
+			}
+		}
+	}
+	probe := func(argv []string) {
+		if !slices.ContainsFunc(p.Probes, func(a []string) bool { return slices.Equal(a, argv) }) {
+			p.Probes = append(p.Probes, argv)
+		}
+	}
+	ran := map[string]bool{} // actions the job uses, lowercased
 	steps, inlined := j.Steps, 0
 	for i := 0; i < len(steps); i++ {
 		s := steps[i]
@@ -327,6 +352,7 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 		}
 		uses := sub(s.Uses)
 		action, _, _ := strings.Cut(uses, "@")
+		ran[strings.ToLower(action)] = true
 		switch {
 		case action == "":
 		case action == "actions/checkout" && !selfRepo(sub(str(s.With["repository"]))):
@@ -395,15 +421,7 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 		case setupActions[strings.ToLower(action)] != nil:
 			_, ref, _ := strings.Cut(uses, "@")
 			c := &SetupCtx{Root: root, Ref: ref, With: func(k string) string { return sub(str(s.With[k])) }, Env: envVals, Review: review, Note: note,
-				has: func(k string) bool { _, ok := s.With[k]; return ok },
-				pin: func(rt, ver string) {
-					if p.Runtimes == nil {
-						p.Runtimes = map[string]string{}
-					}
-					if v := onePin(p.Runtimes[rt], ver, rt, review); v != "" {
-						p.Runtimes[rt] = v
-					}
-				},
+				has: func(k string) bool { _, ok := s.With[k]; return ok }, pin: pin, probe: probe,
 				step: func(run, dir string) {
 					steps = slices.Insert(slices.Clone(steps), i+1, step{Run: run, Dir: cmp.Or(dir, ".")})
 				},
@@ -472,28 +490,22 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 		b.WriteString(")")
 		body = append(body, b.String())
 	}
-	// Steps that use Go or Node with no setup action (a container job, the
-	// runner's preinstalled toolchain) would leave the task with no environment
-	// fingerprint: its receipts would match whatever is installed. Pin from the
-	// repo's version file, as setup-go/setup-node would (lab: prometheus).
+	// Steps that use a runtime with no setup action (the runner's preinstalled
+	// toolchain) would leave the task with no environment fingerprint: its
+	// receipts would match whatever is installed (lab: prometheus). Each
+	// runtime's hook says what CI's job really gets.
 	all := strings.Join(body, "\n")
 	if p.Container != "" {
 		// The image provides the toolchain (runtime: can't be combined with container:).
-		p.Go, p.Node, p.Runtimes, all = "", "", nil, ""
+		p.Go, p.Node, p.Runtimes, p.Probes, all = "", "", nil, nil, ""
 	}
-	if p.Go == "" && usesGo.MatchString(all) {
-		if f := firstFile(root, ".go-version", "go.mod"); f != "" {
-			if p.Go = exactVersion(root, "", `^1\.[0-9]+\.[0-9]+$`, "Go", f, review, note); p.Go != "" {
-				note("Go isn't set up by the job (container or preinstalled); pinned from " + f)
-			}
+	for _, rt := range sortedKeys(withoutSetup) {
+		h := withoutSetup[rt]
+		pinned := map[string]string{"go": p.Go, "node": p.Node}[rt] != "" || p.Runtimes[rt] != ""
+		if pinned || !h.uses.MatchString(all) || slices.ContainsFunc(h.actions, func(a string) bool { return ran[a] }) {
+			continue
 		}
-	}
-	if p.Node == "" && usesNode.MatchString(all) {
-		if f := firstFile(root, ".nvmrc", ".node-version"); f != "" {
-			if p.Node = exactVersion(root, "", `^[0-9]+\.[0-9]+\.[0-9]+$`, "Node", f, review, note); p.Node != "" {
-				note("Node isn't set up by the job (container or preinstalled); pinned from " + f)
-			}
-		}
+		h.f(&SetupCtx{Root: root, With: func(string) string { return "" }, Env: envVals, Review: review, Note: note, pin: pin, probe: probe})
 	}
 	if len(body) == 0 {
 		if r.Verdict == Review {
@@ -751,6 +763,25 @@ var (
 	pipeToShell = regexp.MustCompile(`(curl|wget)\b[^|\n]*\|\s*(sudo\s+)?(ba)?sh\b`)
 	floating    = regexp.MustCompile(`@latest\b|/HEAD/|/(master|main)/[^\s]*\.(sh|py)\b`)
 )
+
+// Go and Node without a setup action: pinned from the repo's version file, as
+// setup-go/setup-node would (go.mod's toolchain is also what GOTOOLCHAIN=auto
+// switches to).
+func init() {
+	RegisterWithoutSetup("go", usesGo, func(c *SetupCtx) { versionFilePin(c, "go", "Go", `^1\.[0-9]+\.[0-9]+$`, ".go-version", "go.mod") })
+	RegisterWithoutSetup("node", usesNode, func(c *SetupCtx) {
+		versionFilePin(c, "node", "Node", `^[0-9]+\.[0-9]+\.[0-9]+$`, ".nvmrc", ".node-version")
+	})
+}
+
+func versionFilePin(c *SetupCtx, rt, name, exact string, files ...string) {
+	if f := firstFile(c.Root, files...); f != "" {
+		if v := c.Exact(rt, "", f, regexp.MustCompile(exact)); v != "" {
+			c.Pin(rt, v)
+			c.Note(name + " isn't set up by the job (container or preinstalled); pinned from " + f)
+		}
+	}
+}
 
 var cinemaGate = regexp.MustCompile(`(^|[\s/])cinema verify\b`)
 

@@ -77,7 +77,13 @@ func TestRustSetupActions(t *testing.T) {
 			files: map[string]string{"rust-toolchain": "1.80.0"}, pin: "1.81.0+clippy+rustfmt+x86_64-unknown-linux-musl"},
 		{name: "actions-rs toml only", steps: "      - uses: actions-rs/toolchain@v1\n",
 			files: map[string]string{"rust-toolchain.toml": "[toolchain]\nchannel = \"1.81.0\"\n"}, review: "no one-line rust-toolchain file"},
-		{name: "rust-cache", steps: "      - uses: Swatinem/rust-cache@v2\n", body: []string{`echo CARGO_INCREMENTAL=0 >> "$GITHUB_ENV"`}},
+		{name: "rust-cache", steps: "      - uses: Swatinem/rust-cache@v2\n", review: "runner image's preinstalled stable", body: []string{`echo CARGO_INCREMENTAL=0 >> "$GITHUB_ENV"`}},
+		// No setup action: rustup on the runner installs the file's channel on first use.
+		{name: "no setup, toolchain file", files: map[string]string{"rust-toolchain.toml": "[toolchain]\nchannel = \"1.82\"\ncomponents = [\"clippy\"]\n"}, pin: "1.82.1+clippy"},
+		{name: "no setup, legacy file", files: map[string]string{"rust-toolchain": "nightly-2024-11-01\n"}, pin: "nightly-2024-11-01"},
+		{name: "no setup, stable file", files: map[string]string{"rust-toolchain.toml": "[toolchain]\nchannel = \"stable\"\n"}, review: "names stable"},
+		{name: "no setup, no file", review: "runner image's preinstalled stable"},
+		{name: "no setup, bad file", files: map[string]string{"rust-toolchain.toml": "[toolchain]\npath = \"/x\"\n"}, review: "rust-toolchain.toml: path"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

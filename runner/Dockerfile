@@ -7,17 +7,22 @@
 # release: --build-arg UBUNTU=22.04 | 24.04 | 26.04.
 ARG UBUNTU=24.04
 FROM ubuntu:${UBUNTU}
+ARG UBUNTU
+# Python as GitHub's install-python.sh: the release's apt python3 is what a job
+# without setup-python runs (python, pip), and pip may install outside a venv
+# (break-system-packages, except on 22.04).
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       bash ca-certificates curl wget git git-lfs openssh-client gnupg sudo tzdata locales \
       xz-utils zstd unzip zip bzip2 tar gzip file jq rsync \
       make gcc g++ libc6-dev pkg-config \
-      python3 python3-venv \
+      python3 python3-dev python3-pip python3-venv python-is-python3 \
       procps psmisc lsof iproute2 netcat-openbsd \
       fontconfig fonts-dejavu-core \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       $(apt-cache pkgnames libicu | grep -E '^libicu[0-9]+$' | sort -V | tail -1) \
       $(apt-cache pkgnames liblttng-ust | grep -E '^liblttng-ust1(t64)?$' | tail -1) \
     && rm -rf /var/lib/apt/lists/* \
+    && if [ "$UBUNTU" != 22.04 ]; then printf '[global]\nbreak-system-packages = true\n' > /etc/pip.conf; fi \
     && (userdel -r ubuntu 2>/dev/null || true) \
     && useradd -m -u 1001 -s /bin/bash runner \
     && echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner && chmod 0440 /etc/sudoers.d/runner \

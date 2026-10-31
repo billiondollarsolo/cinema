@@ -27,7 +27,15 @@ func init() {
 	for _, a := range []string{"gradle/actions/wrapper-validation", "gradle/wrapper-validation-action"} {
 		RegisterSetupAction(a, func(c *SetupCtx) { c.Step(gradleWrapperCheck, "") })
 	}
+	// GitHub's images default JAVA_HOME to their Temurin 11 (22.04), 17 (24.04)
+	// or 25 (26.04), from Adoptium's apt repo, whose build moves with each
+	// weekly image: no pin is that build reliably, and the gate couldn't tell.
+	RegisterWithoutSetup("java", usesJava, func(c *SetupCtx) {
+		c.Review("Java isn't set up by the job: it uses the runner image's default JDK (Temurin 11 on ubuntu-22.04, 17 on 24.04, 25 on 26.04), whose build changes with each image release; add actions/setup-java with an exact Temurin build")
+	}, "actions/setup-java")
 }
+
+var usesJava = regexp.MustCompile(`(^|[\s;&|(])(\./)?(java|javac|mvnw?|gradlew?|sbt)\b`)
 
 var (
 	javaBuild = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$`) // 21.0.5+11: exactly that build

@@ -144,8 +144,9 @@ func draftFor(jobs []analyze.Job, cpus, memGB int) ([]byte, error) {
 		argv := seq("bash", "-eo", "pipefail", "-c") // Actions' default shell on Linux
 		argv.Content = append(argv.Content, script)
 		t := m(s("argv"), argv, s("platform"), s("linux/amd64"))
+		probes := &yaml.Node{Kind: yaml.SequenceNode}
 		if p.Go != "" || p.Node != "" || len(p.Runtimes) > 0 {
-			rt, probes := m(), &yaml.Node{Kind: yaml.SequenceNode}
+			rt := m()
 			if p.Go != "" {
 				rt.Content = append(rt.Content, s("go"), s(p.Go))
 				probes.Content = append(probes.Content, m(s("cmd"), flow(seq("go", "version"))))
@@ -165,7 +166,13 @@ func draftFor(jobs []analyze.Job, cpus, memGB int) ([]byte, error) {
 					probes.Content = append(probes.Content, m(s("cmd"), flow(seq(k.Probe...))))
 				}
 			}
-			t.Content = append(t.Content, s("runtime"), rt, s("toolchain"), probes)
+			t.Content = append(t.Content, s("runtime"), rt)
+		}
+		for _, pr := range p.Probes { // tools the job uses unpinned (the runner's python3)
+			probes.Content = append(probes.Content, m(s("cmd"), flow(seq(pr...))))
+		}
+		if len(probes.Content) > 0 || p.Go != "" || p.Node != "" || len(p.Runtimes) > 0 {
+			t.Content = append(t.Content, s("toolchain"), probes)
 		}
 		if p.Container != "" {
 			t.Content = append(t.Content, s("container"), s(p.Container))
