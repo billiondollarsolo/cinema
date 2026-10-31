@@ -52,6 +52,15 @@ func TestRunnerShapeInEnv(t *testing.T) {
 	if fp(&Where{Platform: "linux/amd64", CPUs: 4, MemGB: 16, OS: "ubuntu-24.04"}) != a {
 		t.Fatal("same shape, same environment")
 	}
+	// A runner VM's memory varies a little; CPUs never round.
+	for _, c := range []struct {
+		measured, declared int
+		near               bool
+	}{{15, 16, true}, {16, 16, true}, {17, 16, true}, {14, 16, false}, {8, 16, false}, {7, 8, true}, {9, 8, false}} {
+		if NearMemory(c.measured, c.declared) != c.near {
+			t.Errorf("NearMemory(%d, %d) != %v", c.measured, c.declared, c.near)
+		}
+	}
 	if (&Task{Memory: "16gb"}).MemoryGB() != 0 || (&Task{Memory: "8g"}).MemoryGB() != 8 {
 		t.Fatal("memory parsing")
 	}

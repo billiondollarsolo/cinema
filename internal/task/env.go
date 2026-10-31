@@ -85,6 +85,8 @@ func (t *Task) EnvFingerprintIn(root string, env []string, w *Where) (Env, error
 		cpus, mem, rel := HostShape()
 		if w != nil {
 			cpus, mem, rel = w.CPUs, w.MemGB, w.OS
+		} else if dc, dm := t.RunnerSize(); cpus == dc && NearMemory(mem, dm) {
+			mem = dm // a runner VM's memory varies a little (15.6 GiB for "16 GB"): the declared size stands
 		}
 		shape := fmt.Sprintf("runner=%dcpu-%dg", cpus, mem)
 		if t.Container == "" { // a job container's OS is its image, pinned above
@@ -280,6 +282,15 @@ func HostShape() (cpus, memGB int, osRelease string) {
 		osRelease = OSRelease(string(b))
 	}
 	return
+}
+
+// NearMemory: a measured memory (whole GB) is the declared one, within 1 GB or
+// 10%, whichever is more. CPUs
+// must match exactly (tools size worker pools by them); memory only matters
+// near its limit, and VMs of one runner size differ slightly.
+func NearMemory(measured, declared int) bool {
+	d := measured - declared
+	return d*d <= 1 || d*d*100 <= declared*declared
 }
 
 // OSRelease is "ID-VERSION_ID" from an os-release file's content.

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -11,7 +12,6 @@ import (
 	"github.com/billiondollarsolo/cinema/internal/analyze"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -525,7 +525,9 @@ func writeSkipOutputs(cfg *task.Config, rep gateReport, root, wf string) {
 	// Spot check (plan §11.5): one run in 20, picked by the run's own ID,
 	// skips nothing, so graduated stand-ins keep being compared with CI.
 	spot := false
-	if n, err := strconv.ParseUint(os.Getenv("GITHUB_RUN_ID"), 10, 64); err == nil && n%20 == 0 {
+	// Hashed, not id%20: runs created together (one push, several workflows)
+	// get ids a multiple of 20 apart, and would all be spot checks or none.
+	if id := os.Getenv("GITHUB_RUN_ID"); id != "" && sha256.Sum256([]byte(id))[0]%20 == 0 {
 		spot = true
 		fmt.Println("  spot check: this run skips nothing, so CI's results can be compared with cinema's")
 	}
