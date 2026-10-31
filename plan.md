@@ -844,6 +844,8 @@ A drafted or hand-written task is a claim that it tests what its CI job tests. B
 4. **Disagreement.** A pass locally and a failure in CI on the same tree is a false green: `cinema` removes the graduation in a commit it proposes, flags it in `cinema status` and the PR summary, and the job runs in CI until it re-graduates. The opposite (local fails, CI passes) is flagged too. A disagreement that a CI rerun reverses is recorded as flaky; a flaky job graduates only with `allow_flaky: true` in its entry, an explicit claim.
 5. **Spot checks.** A graduated job still runs in CI on a sample of runs (default 1 in 20), picked from `GITHUB_RUN_ID` by the `cinema` job, and its result is compared like a shadow pair. That makes drift visible; it doesn't make it impossible.
 
+6. **Known gap: failures agree by exit status only.** A stand-in that fails for another reason than CI (a missing file in a lab snapshot fails the build in 57 s where CI's failed in its tests) counts as agreement. Failures are the rarest and most valuable comparisons, so a later pass should compare which step or test failed (CI job logs through the API, local output), and not count a failure pair without that.
+
 Shadow pairs also measure the local-to-CI speed ratio (§11.2, Duration). Shadow results are evidence about a stand-in, never about a commit: they don't make a receipt valid or invalid.
 
 ### 11.6 The PR summary
