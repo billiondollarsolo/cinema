@@ -509,19 +509,30 @@ func mergeResult(root, remote, branch, head, base string) (sha, note string) {
 	if err != nil || strings.TrimPrefix(base, remote+"/") == branch {
 		return "", ""
 	}
-	if _, err := gitOut(root, "merge-base", "--is-ancestor", baseSHA, head); err == nil {
+	c, err := mergeCommit(root, baseSHA, head)
+	switch {
+	case errors.Is(err, errConflict):
+		return "", fmt.Sprintf("merge result: HEAD doesn't merge cleanly into %s; CI will run no PR checks until it does", base)
+	case err != nil || c == head:
 		return "", "" // up to date with the base: the merge result is HEAD's own tree
+	}
+	return c, fmt.Sprintf("merge result: also testing HEAD merged into %s (%s), the tree CI builds for a PR", base, short(baseSHA))
+}
+
+var errConflict = errors.New("doesn't merge cleanly")
+
+// mergeCommit is the commit GitHub builds for a PR at head on baseSHA: head
+// itself when it already contains the base, else a dangling merge commit.
+func mergeCommit(root, baseSHA, head string) (string, error) {
+	if _, err := gitOut(root, "merge-base", "--is-ancestor", baseSHA, head); err == nil {
+		return head, nil
 	}
 	tree, err := gitOut(root, "merge-tree", "--write-tree", baseSHA, head)
 	if err != nil {
-		return "", fmt.Sprintf("merge result: HEAD doesn't merge cleanly into %s; CI will run no PR checks until it does", base)
+		return "", errConflict
 	}
 	tree, _, _ = strings.Cut(tree, "\n")
-	c, err := gitOut(root, "-c", "user.name=cinema", "-c", "user.email=cinema@localhost", "commit-tree", tree, "-p", baseSHA, "-p", head, "-m", "cinema: merge result of "+short(head)+" into "+base)
-	if err != nil {
-		return "", ""
-	}
-	return c, fmt.Sprintf("merge result: also testing HEAD merged into %s (%s), the tree CI builds for a PR", base, short(baseSHA))
+	return gitOut(root, "-c", "user.name=cinema", "-c", "user.email=cinema@localhost", "commit-tree", tree, "-p", baseSHA, "-p", head, "-m", "cinema: merge result of "+short(head)+" into "+short(baseSHA))
 }
 
 func decodePayload(env evidence.Envelope) ([]byte, error) {

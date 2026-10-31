@@ -55,8 +55,9 @@ It then outputs `skip_<job>=true` when every task of a job was reused, and for a
 ## Built since P4
 
 - **Runs in containers on your own machine** (macOS, Windows, Linux), shaped like the job's runner. See [Machines and engines](hosts.md).
-- **Shadow mode.** A covered job keeps running in CI until its task is graduated by backtesting on past merged commits (`cinema graduate`).
+- **Shadow mode.** A covered job keeps running in CI until its task is graduated (`cinema graduate`): by backtesting on past merged commits, and by live pairs, your clean runs on PR trees compared with what CI's job said on the same PRs. New jobs with no history graduate after a few PRs.
+- **Job summary.** The `cinema` job lists each covered job on the run page: skipped (and whose run proved it) or run (and why).
 - **Merge-result runs.** `cinema push --run` also tests the tree GitHub will build for the PR, so receipts match even after main has moved.
 - **Stricter matching:** floating versions re-resolved at check time; the event in the contract; failed runs published, so a failure from any trusted machine blocks a pass on the same work, and a pass after a failure counts only after three in a row; the runner's CPUs, memory and OS release in the environment; a run that used over half the job's timeout isn't reused.
 
-Still planned: live shadow pairs and spot-check comparison, remote hosts, Apple `container`, more language runtimes ([plan §16](../plan.md)).
+Still planned: spot-check comparison, remote hosts, Apple `container`, more language runtimes ([plan §16](../plan.md)).

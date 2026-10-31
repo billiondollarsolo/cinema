@@ -15,6 +15,8 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/billiondollarsolo/cinema/internal/analyze"
+	"github.com/billiondollarsolo/cinema/internal/snapshot"
+	"github.com/billiondollarsolo/cinema/internal/store"
 	"github.com/billiondollarsolo/cinema/internal/task"
 )
 
@@ -32,6 +34,10 @@ func cmdGraduate(args []string) int {
 	yes := fs.Bool("yes", false, "write the graduation without asking")
 	if err := fs.Parse(args); err != nil || fs.NArg() == 0 {
 		fmt.Fprintln(os.Stderr, "usage: cinema graduate [--commits N] [--min N] [--yes] <task>...")
+		return exitBadArgs
+	}
+	if !*yes && !interactive() { // ask now, not after a long backtest
+		fmt.Fprintln(os.Stderr, "cinema graduate: not a terminal: rerun with --yes to write the result")
 		return exitBadArgs
 	}
 	r, err := openRepo()
@@ -71,15 +77,18 @@ func cmdGraduate(args []string) int {
 			continue
 		}
 		g, why := backtest(ctx, r, t, shas)
-		if why != "" || g.Backtested < *min {
+		if why == "" {
+			g.Agreed, why = livePairs(r, t, *commits*3)
+		}
+		if why != "" || g.Backtested+g.Agreed < *min {
 			if why == "" {
-				why = fmt.Sprintf("only %d commit(s) had a CI result to compare (need %d): try --commits", g.Backtested, *min)
+				why = fmt.Sprintf("only %d result(s) to compare with CI (need %d): try --commits, or let a few PRs run in shadow with `cinema push --run`", g.Backtested+g.Agreed, *min)
 			}
 			fmt.Printf("✗ %s  not graduated: %s\n", id, why)
 			failed++
 			continue
 		}
-		fmt.Printf("✓ %s  agreed with CI on %d commit(s) (%d where CI failed)\n", id, g.Backtested, g.CIFailures)
+		fmt.Printf("✓ %s  agreed with CI on %d past commit(s) (%d where CI failed) and %d PR tree(s)\n", id, g.Backtested, g.CIFailures, g.Agreed)
 		graduated[id] = g
 	}
 	if len(graduated) == 0 {
@@ -153,6 +162,104 @@ func backtest(ctx context.Context, r *repo, t *task.Task, shas []string) (task.G
 	return g, ""
 }
 
+// livePairs compares this machine's clean runs of t with CI's result for its
+// job on the same trees: the merge commits recent PR runs built (plan §11.5,
+// live agreement). Read through the API; nothing runs, here or in CI. Only
+// runs of the current contract, on trees where the job is t's job_digest,
+// count. why != "": they disagreed.
+func livePairs(r *repo, t *task.Task, limit int) (agreed int, why string) {
+	contract, err := t.ContractDigest(r.root)
+	if err != nil {
+		return 0, ""
+	}
+	runs, err := r.st.TaskRuns(r.id, t.ID, 500)
+	if err != nil {
+		return 0, ""
+	}
+	local := map[string]bool{} // source digest: passed (newest clean run)
+	for _, run := range runs {
+		if _, seen := local[run.SourceBefore]; seen || run.Capture != "clean" || run.Contract != contract ||
+			(run.State != store.StatePassed && run.State != store.StateFailed) {
+			continue
+		}
+		local[run.SourceBefore] = run.State == store.StatePassed
+	}
+	if len(local) == 0 {
+		return 0, ""
+	}
+	wf, _, _ := strings.Cut(t.Covers, "#")
+	out, err := ghAPI(fmt.Sprintf("repos/{owner}/{repo}/actions/workflows/%s/runs?event=pull_request&status=completed&per_page=%d", wf, min(limit, 100)))
+	if err != nil {
+		return 0, ""
+	}
+	var v struct {
+		WorkflowRuns []struct {
+			ID      int64  `json:"id"`
+			HeadSHA string `json:"head_sha"`
+			PRs     []struct {
+				Base struct {
+					SHA string `json:"sha"`
+				} `json:"base"`
+			} `json:"pull_requests"`
+		} `json:"workflow_runs"`
+	}
+	if json.Unmarshal(out, &v) != nil {
+		return 0, ""
+	}
+	counted := map[string]bool{}
+	for _, wr := range v.WorkflowRuns {
+		if len(wr.PRs) == 0 { // a fork's PR: the API doesn't say which base it built on
+			continue
+		}
+		c, err := mergeCommit(r.root, wr.PRs[0].Base.SHA, wr.HeadSHA)
+		if err != nil {
+			continue // not fetched here, or conflicts (CI ran no PR checks)
+		}
+		snap, err := snapshot.TakeCommit(r.root, c, t.ExtraInputs, t.Outputs, nil)
+		if err != nil || counted[snap.Digest] {
+			continue
+		}
+		passed, ok := local[snap.Digest]
+		if !ok {
+			continue
+		}
+		cr, cleanup, err := cleanCheckout(r, c)
+		if err != nil {
+			cleanup()
+			continue
+		}
+		var key string
+		for _, l := range candidateLegs(cr.root, wf)[jobOf(t)] {
+			if l.LegDigest() == t.JobDigest {
+				key = analyzedKey(l)
+			}
+		}
+		cleanup()
+		if key == "" {
+			continue // the job was defined differently on that PR
+		}
+		ci, err := jobConclusion(wr.ID, key)
+		if err != nil || (ci != "success" && ci != "failure") {
+			continue // skipped (it was reused), cancelled, or unknown
+		}
+		if passed != (ci == "success") {
+			if passed {
+				return agreed, fmt.Sprintf("on PR head %s CI failed and the stand-in passed on the same tree: it would have skipped a failing job", short(wr.HeadSHA))
+			}
+			return agreed, fmt.Sprintf("on PR head %s CI passed and the stand-in failed on the same tree", short(wr.HeadSHA))
+		}
+		counted[snap.Digest] = true
+		agreed++
+		fmt.Printf("  %s  PR head %s: agrees (%s)\n", t.ID, short(wr.HeadSHA), ci)
+	}
+	return agreed, ""
+}
+
+func jobOf(t *task.Task) string {
+	_, job, _ := strings.Cut(t.Covers, "#")
+	return job
+}
+
 func errOrEmpty(err error) string {
 	if err == nil {
 		return ""
@@ -187,7 +294,13 @@ func ciConclusion(sha, wf, key string) (string, error) {
 	if run == 0 {
 		return "none", nil
 	}
-	if out, err = ghAPI(fmt.Sprintf("repos/{owner}/{repo}/actions/runs/%d/jobs?per_page=100", run)); err != nil {
+	return jobConclusion(run, key)
+}
+
+// jobConclusion is the conclusion of the job named like key in workflow run id.
+func jobConclusion(run int64, key string) (string, error) {
+	out, err := ghAPI(fmt.Sprintf("repos/{owner}/{repo}/actions/runs/%d/jobs?per_page=100", run))
+	if err != nil {
 		return "", fmt.Errorf("gh api: %v", err)
 	}
 	var v struct {
@@ -237,7 +350,7 @@ func writeGraduations(path string, gs map[string]task.Graduation) error {
 			continue
 		}
 		indent := strings.Repeat(" ", v.Content[0].Column-1)
-		line := fmt.Sprintf("%sgraduated: {job_digest: %q, backtested: %d, ci_failures: %d, at: %q}\n", indent, g.JobDigest, g.Backtested, g.CIFailures, g.At)
+		line := fmt.Sprintf("%sgraduated: {job_digest: %q, backtested: %d, ci_failures: %d, agreed: %d, at: %q}\n", indent, g.JobDigest, g.Backtested, g.CIFailures, g.Agreed, g.At)
 		if k := mapKey(v, "graduated"); k != nil {
 			if gv := mapValue(v, "graduated"); gv.Style&yaml.FlowStyle == 0 && gv.Kind == yaml.MappingNode {
 				return fmt.Errorf("task %s: graduated: isn't on one line; edit it by hand", tasks.Content[i].Value)

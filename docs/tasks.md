@@ -54,7 +54,7 @@ Changing any of these changes the task's contract digest: older receipts stop ma
 | `covers` | The job this task stands in for: `workflow.yml#job-id`. Only tasks with `covers` make jobs skip. |
 | `leg` | For a matrix job: this leg's values for the matrix's own keys. A reused leg is excluded. |
 | `job_digest` | The job leg as drafted. The job only skips if the workflow under test still has exactly that leg. |
-| `graduated` | Written by `cinema graduate`: the task agreed with CI for this `job_digest`. Without it (or for another digest) the job runs in CI whatever the receipts say (shadow mode). |
+| `graduated` | Written by `cinema graduate`: the task agreed with CI for this `job_digest`, on `backtested` past commits (`ci_failures` of them failing) and `agreed` PR trees. Without it (or for another digest) the job runs in CI whatever the receipts say (shadow mode). |
 | `event` | The job reads the triggering event or ref, so the task counts only for this event (`pull_request`, `push`, `merge_group`). Drafted automatically. |
 | `floating` | The workflow's version specs the `runtime:` pins came from (`{go: stable, node: "lts/*"}`). CI resolves them again on every run and runs the job if today's release isn't the pin. |
 

@@ -379,7 +379,7 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 				break
 			}
 			steps = slices.Insert(slices.Clone(steps), i+1, step{Run: run, Dir: "."})
-				case action == "golangci/golangci-lint-action", action == "pnpm/action-setup":
+		case action == "golangci/golangci-lint-action", action == "pnpm/action-setup":
 			tr := golangciStep
 			if action == "pnpm/action-setup" {
 				tr = pnpmStep

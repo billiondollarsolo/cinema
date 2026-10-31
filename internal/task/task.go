@@ -551,10 +551,11 @@ func (t *Task) MemoryGB() int {
 
 // Graduation records why a stand-in may skip its job (plan §11.5).
 type Graduation struct {
-	JobDigest  string `yaml:"job_digest"`  // the job definition it agreed for
-	Backtested int    `yaml:"backtested"`  // past commits whose CI result it reproduced
-	CIFailures int    `yaml:"ci_failures"` // of those, ones where CI failed and so did it
-	At         string `yaml:"at"`          // date
+	JobDigest  string `yaml:"job_digest"`       // the job definition it agreed for
+	Backtested int    `yaml:"backtested"`       // past commits whose CI result it reproduced
+	CIFailures int    `yaml:"ci_failures"`      // of those, ones where CI failed and so did it
+	Agreed     int    `yaml:"agreed,omitempty"` // PR trees where its local run and CI's job agreed (live pairs)
+	At         string `yaml:"at"`               // date
 }
 
 // Graduates reports whether t may skip its covered job: graduated for the

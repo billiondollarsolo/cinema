@@ -20,7 +20,7 @@
 | `cinema trust [--config FILE]` | Approves the toolchain commands of this exact tasks.yaml. |
 | `cinema doctor [--config FILE]` | Tools and libraries that failed runs needed and this machine lacks. |
 | `cinema debug [--commit REV] [--shell] <task>` | Runs a task in its runner container on a clean checkout, then opens a shell there with the tree as the task left it. Never recorded. |
-| `cinema graduate [--commits N] [--min N] [--yes] <task>...` | Backtests tasks on the default branch's recent commits against CI's result for their job; writes `graduated:` for the ones that agree every time. |
+| `cinema graduate [--commits N] [--min N] [--yes] <task>...` | Compares tasks with CI before their jobs may skip: backtests them on the default branch's recent commits, and adds live pairs (this machine's clean runs on recent PR trees against CI's result for the same job, read through the API). Writes `graduated:` for the ones that agree every time, once there are `--min` results (default 3). Not a terminal: needs `--yes`. |
 | `cinema hook install \| uninstall` | A pre-push hook that warns (never blocks) when a plain `git push` goes out without evidence. |
 
 ## Seeing what's what
@@ -43,7 +43,7 @@
 
 | Command | What it does |
 |---|---|
-| `cinema verify --event FILE --skip-outputs WORKFLOW` | What setup's `cinema` job runs: verifies receipts for the tasks covering that workflow's jobs and writes `skip_<job>` / `exclude_<job>` step outputs. |
+| `cinema verify --event FILE --skip-outputs WORKFLOW` | What setup's `cinema` job runs: verifies receipts for the tasks covering that workflow's jobs, writes `skip_<job>` / `exclude_<job>` step outputs, and a job summary on the run page: each covered job, skipped or run, and why. |
 | `cinema verify --event FILE [--execute [--task ID]] [--report FILE]` | The older gate form: reuse what's proven, run the rest in this job (`--execute`), write `gate-report.json`. |
 
 ## Exit codes
@@ -60,4 +60,4 @@
 
 ## Planned (P4)
 
-`cinema run --on HOST`, `cinema push --background / --now / --on`, `cinema shadow` (live agreement pairs), `cinema hosts [--cleanup]`, `cinema gc`. See [plan.md §10.1](../plan.md).
+`cinema run --on HOST`, `cinema push --background / --now / --on`, `cinema hosts [--cleanup]`, `cinema gc`. See [plan.md §10.1](../plan.md).

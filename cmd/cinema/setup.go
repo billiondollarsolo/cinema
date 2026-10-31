@@ -255,8 +255,19 @@ func firstLineOf(b []byte) string {
 	return s
 }
 
+// interactive: stdin is a terminal someone can answer from. /dev/null is a
+// character device too, but nobody answers there.
+func interactive() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	null, err := os.Stat(os.DevNull)
+	return err != nil || !os.SameFile(fi, null)
+}
+
 func confirm(prompt string) bool {
-	if fi, err := os.Stdin.Stat(); err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+	if !interactive() {
 		fmt.Println("\nNot a terminal: rerun with --yes to write.")
 		return false
 	}

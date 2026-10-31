@@ -96,6 +96,59 @@ jobs:
 	}
 }
 
+// Live pairs: this machine's clean run on a PR's tree against CI's job on
+// that PR, read through the API (plan §11.5).
+func TestLivePairs(t *testing.T) {
+	e := newEnv(t)
+	t.Setenv("CINEMA_DATA_DIR", e.data)
+	e.write(".github/workflows/ci.yml", "on: [pull_request]\njobs:\n  check:\n    name: Check\n    runs-on: ubuntu-latest\n    steps: [{run: test ! -f broken}]\n")
+	e.git("add", "-A")
+	e.git("commit", "-qm", "ci")
+	draft, _ := e.cinema("analyze", "--yaml")
+	e.write(".cinema/tasks.yaml", strings.ReplaceAll(draft, "platform: linux/amd64", "platform: any"))
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	base := strings.TrimSpace(mustRun(t, e.repo, "git", "rev-parse", "HEAD"))
+	e.write("pr.txt", "x")
+	e.git("add", "-A")
+	e.git("commit", "-qm", "a PR") // contains base: its merge result is its own tree
+	head := strings.TrimSpace(mustRun(t, e.repo, "git", "rev-parse", "HEAD"))
+	e.cinema("trust")
+	e.cinema("run", "--commit", head, "check") // passes
+
+	ci := "success"
+	old := ghAPI
+	defer func() { ghAPI = old }()
+	ghAPI = func(p string) ([]byte, error) {
+		switch {
+		case strings.Contains(p, "workflows/ci.yml/runs"):
+			return json.Marshal(map[string]any{"workflow_runs": []map[string]any{
+				{"id": 7, "head_sha": head, "pull_requests": []map[string]any{{"base": map[string]string{"sha": base}}}},
+				{"id": 8, "head_sha": base, "pull_requests": []map[string]any{}}}}) // a fork's: no base, ignored
+		case strings.Contains(p, "runs/7/jobs"):
+			return json.Marshal(map[string]any{"jobs": []map[string]string{{"name": "Check", "conclusion": ci}}})
+		}
+		return []byte(`{}`), nil
+	}
+	r, err := openRepoAt(e.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.close()
+	tk := r.cfg.Tasks["check"]
+	if n, why := livePairs(r, tk, 10); n != 1 || why != "" {
+		t.Fatalf("agreeing pair: %d %q", n, why)
+	}
+	ci = "failure" // CI failed on the tree the stand-in passed: a false green
+	if _, why := livePairs(r, tk, 10); !strings.Contains(why, "would have skipped a failing job") {
+		t.Fatalf("got %q", why)
+	}
+	ci = "skipped" // reused in CI: nothing to compare
+	if n, why := livePairs(r, tk, 10); n != 0 || why != "" {
+		t.Fatalf("skipped job counted: %d %q", n, why)
+	}
+}
+
 // A job pinned through go-version-file keeps its job_digest when re-analyzed
 // from a checkout (verify, graduate): the version file is read there too.
 func TestCandidateLegsReadVersionFiles(t *testing.T) {
