@@ -109,12 +109,18 @@ func cmdSetup(args []string) int {
 	covered := map[string]bool{} // workflow#job
 	var summary []string
 	for _, wf := range sortedSet(byWF) {
-		src, err := os.ReadFile(filepath.Join(root, ".github", "workflows", wf))
+		path, plan := filepath.Join(root, ".github", "workflows", wf), planSkips
+		if wf == analyze.GitLabFile { // GitLab CI: covered jobs move into a child pipeline (gitlab.go)
+			path, plan = filepath.Join(root, wf), func(wf string, src []byte, all, ready []analyze.Job, version string) (skipPlan, error) {
+				return planGitLab(root, unsetupGitLab(src), all, ready, version)
+			}
+		}
+		src, err := os.ReadFile(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "cinema setup: %v\n", err)
 			return exitInternal
 		}
-		p, err := planSkips(wf, unsetup(src), jobs, picked, version) // a rerun starts from the original
+		p, err := plan(wf, unsetup(src), jobs, picked, version) // a rerun starts from the original
 		if err != nil {
 			summary = append(summary, fmt.Sprintf("  %s: left as is (%v)", wf, err))
 			continue
@@ -135,6 +141,10 @@ func cmdSetup(args []string) int {
 				parts = append(parts, strings.Join(dropping, ", ")+" drop"+map[bool]string{true: "s its", false: " their"}[len(dropping) == 1]+" reused matrix legs")
 			}
 			line := fmt.Sprintf("  %s: %s when cinema reused their tasks", wf, strings.Join(parts, "; "))
+			if wf == analyze.GitLabFile {
+				line = fmt.Sprintf("  %s: %s move%s into a child pipeline the cinema job writes, which runs only what cinema didn't reuse",
+					wf, strings.Join(p.covered, ", "), map[bool]string{true: "s", false: ""}[len(p.covered) == 1])
+			}
 			if m, ok := price(wf, p.skippable); ok {
 				line += fmt.Sprintf(" (~%.0f billed min/PR for the whole jobs)", m)
 				saved += m
@@ -177,7 +187,10 @@ func cmdSetup(args []string) int {
 		return exitUnsatisfied
 	}
 	cpus, mem := 4, 16
+	onGitHub := slices.ContainsFunc(kept, func(j analyze.Job) bool { return j.Workflow != analyze.GitLabFile })
+	onGitLab := slices.ContainsFunc(kept, func(j analyze.Job) bool { return j.Workflow == analyze.GitLabFile })
 	switch private, err := repoPrivate(); {
+	case !onGitHub: // GitLab tasks carry their runner's size (its tags)
 	case err != nil:
 		fmt.Printf("  note: couldn't tell whether the repo is private (%v); tasks assume a public repo's runner (4 CPUs, 16 GB)\n", err)
 	case private:
@@ -239,6 +252,13 @@ func cmdSetup(args []string) int {
 		fmt.Printf("\nKept the graduation of %d task(s) whose job is unchanged.\n", len(keep))
 	}
 	formatLikeRepo(root, paths...)
+	if onGitLab {
+		fmt.Print(`
+GitLab: add the keys as a CI/CD variable CINEMA_TRUSTED_KEYS (Settings → CI/CD → Variables):
+  visibility Visible (a key line can't be masked; it isn't secret), not protected
+  (merge request pipelines don't get protected variables). Only Maintainers can edit it.
+`)
+	}
 	fmt.Print(`
 Written (see git diff). Next:
   1. read .cinema/tasks.yaml, then:   cinema trust
@@ -350,6 +370,11 @@ func setupUndo(root string, yes bool) int {
 		}
 		if out := unsetup(src); string(out) != string(src) {
 			changes = append(changes, change{f, out})
+		}
+	}
+	if src, err := os.ReadFile(filepath.Join(root, analyze.GitLabFile)); err == nil {
+		if out := unsetupGitLab(src); string(out) != string(src) {
+			changes = append(changes, change{filepath.Join(root, analyze.GitLabFile), out})
 		}
 	}
 	if len(changes) == 0 {

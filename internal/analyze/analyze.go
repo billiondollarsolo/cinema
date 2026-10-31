@@ -77,6 +77,16 @@ type Proposal struct {
 	Floating map[string]string `json:"floating,omitempty"`
 	// TimeoutMinutes: the job's timeout-minutes (GitHub's default is 360).
 	TimeoutMinutes int `json:"timeout_minutes,omitempty"`
+	// Shell: the argv the script is run with, before the script itself (empty:
+	// bash -eo pipefail -c, Actions' default). GitLab jobs (gitlab.go).
+	Shell []string `json:"shell,omitempty"`
+	// CPUs, MemoryGB: the job's runner, when its tags name one (GitLab); 0:
+	// the repo's default runner size.
+	CPUs     int `json:"cpus,omitempty"`
+	MemoryGB int `json:"memory_gb,omitempty"`
+	// DefDigest: the job's whole resolved definition (GitLab: after includes,
+	// extends, !reference and default:), so any change to it is a new job.
+	DefDigest string `json:"definition,omitempty"`
 }
 
 type workflow struct {
@@ -137,6 +147,13 @@ func Repo(root string) ([]Job, error) {
 		jobs, err := workflowAt(root, filepath.Base(f), b)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", filepath.Base(f), err)
+		}
+		out = append(out, jobs...)
+	}
+	if _, err := os.Lstat(filepath.Join(root, GitLabFile)); err == nil { // GitLab CI (gitlab.go)
+		jobs, err := GitLab(root, nil)
+		if err != nil { // never the GitHub jobs' problem: one entry that says why
+			jobs = []Job{{Workflow: GitLabFile, ID: "(pipeline)", Name: GitLabFile, Verdict: Review, Reasons: []string{"can't be read: " + err.Error()}}}
 		}
 		out = append(out, jobs...)
 	}

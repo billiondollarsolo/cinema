@@ -876,12 +876,104 @@ The core (tasks, container runs, fingerprints, signed receipts in git notes, sha
 | Reading CI | `.gitlab-ci.yml`: `stages`, `script`/`before_script`/`after_script`, `variables`, `rules`/`only`/`except`, `needs`, `extends`, `!reference`, local `include`, `parallel:matrix`, `services`, `default:`. Each job names its `image:`: the environment is that image's digest (a container task), so there's no runner image to imitate and no actions to translate. `include: remote/project/template` and `trigger:` jobs → review. |
 | Skipping | `rules:` are fixed at pipeline creation, so they can't read receipts. A `cinema` job writes a **dynamic child pipeline** with only the jobs that still need to run (`trigger: include: artifact`); proven jobs never get a runner. Fallback where child pipelines don't fit: a first script line that exits early on a receipt (saves the run, not the runner start). |
 | Merge requests | Merge request pipelines test the head (Free) or the merged result (Premium "merged results"); merge trains are merge queues (§5.5). `CI_PIPELINE_SOURCE` is the event. |
-| Receipts | Git notes as on GitHub if GitLab accepts `refs/notes/*` pushes and the job token can fetch them (to verify); else CI artifacts or the generic package registry. |
-| Keys | A protected, masked CI/CD variable (`CINEMA_TRUSTED_KEYS`), so a merge request can't change it. |
+| Receipts | Git notes as on GitHub: GitLab accepts `refs/notes/*` pushes (Developer role) and the job token fetches them (§11.7.1). |
+| Keys | A project CI/CD variable (`CINEMA_TRUSTED_KEYS`), Visible and not protected (§11.7.1): only Maintainers edit it; restrict pipeline variables. |
 | CI API | `/projects/:id/pipelines`, `/jobs`, job traces (token or `glab`). |
 | Runner sizes | SaaS Linux runners by tag (small 2 vCPU/8 GB, medium, large…; cost factors), self-hosted by tag; size and arch from the tag, declared in the task. |
 
 P4 (run 2): the analyzer and the child-pipeline generator with tests, the forge interfaces, and answers to the open questions (notes refs, job token, Free vs Premium) from GitLab's docs and source or a local GitLab in a container. A live spike on gitlab.com needs an account here (none yet).
+
+#### 11.7.1 Open questions, answered (2026-10-30)
+
+Sources: GitLab's docs and source (gitlab-org/gitlab, gitaly, gitlab-runner on master). [local] marks what was also checked against GitLab CE in a container. What still needs gitlab.com is in §11.7.4.
+
+- **Notes refs.** GitLab accepts pushes to `refs/notes/*` and keeps them.
+  - Gitaly reserves six ref prefixes ([`internal/git/reference.go`](https://gitlab.com/gitlab-org/gitaly/-/blob/master/internal/git/reference.go)). `refs/keep-around/`, `refs/remotes/` and `refs/tmp/` are hidden. `refs/environments/`, `refs/merge-requests/` and `refs/pipelines/` are read-only. All six are in `receive.hideRefs` ([`command_description.go`](https://gitlab.com/gitlab-org/gitaly/-/blob/master/internal/git/gitcmd/command_description.go)). `refs/notes/` is in none of them, so it is pushed, advertised and fetched like any ref.
+  - Pushing one needs `push_code`, i.e. the Developer role ([`push_check.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/master/lib/gitlab/checks/push_check.rb)).
+  - Protected-branch and protected-tag rules don't apply: they only look at `refs/heads` and `refs/tags` ([`branch_check.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/master/lib/gitlab/checks/branch_check.rb)). Push rules (EE) don't apply either ([`push_rule_check.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/master/ee/lib/ee/gitlab/checks/push_rule_check.rb)).
+  - [local, GitLab CE latest] A Developer pushed `refs/notes/cinema/v1/<fp>` to a private project. `ls-remote` lists it, a fresh clone fetches it with `+refs/notes/cinema/v1/*`, and the Developer can delete it again. A push to `refs/merge-requests/1/head` is refused (`deny updating a hidden ref`).
+  - Consequence: any Developer can overwrite or delete anyone's notes ref. Receipts are signed, so the worst case is lost evidence (the jobs run), never forged evidence.
+  - Housekeeping prunes unreachable objects, not refs. Pull mirrors may prune refs that upstream lacks (untested).
+- **Fetching them in a job.** The runner writes the job's credentials into an external git config (`url.<with token>.insteadOf`, or a credential helper under `FF_GIT_URLS_WITHOUT_TOKENS`), and it is only removed in the cleanup stage ([`shells/abstract.go`](https://gitlab.com/gitlab-org/gitlab-runner/-/blob/main/shells/abstract.go)). So `git fetch origin '+refs/notes/cinema/v1/*:…'` in the script works with the job token, which can read its own project even when the project is private ([docs](https://docs.gitlab.com/ci/jobs/ci_job_token/)). The gate passes no token of its own (`CINEMA_FETCH_TOKEN` is GitHub's).
+- **The default checkout.**
+  - `GIT_DEPTH` is 20 ([docs](https://docs.gitlab.com/ci/runners/configure_runners/)), so the cinema job sets `GIT_DEPTH: "0"`.
+  - Refspecs ([`build_runner_presenter.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/master/app/presenters/ci/build_runner_presenter.rb)): every pipeline gets `+<sha>:refs/pipelines/<id>`, branch pipelines also get their branch, and **merge request pipelines don't get the target branch**. The gate fetches it (`gitlabEvent`), falling back to `CI_MERGE_REQUEST_DIFF_BASE_SHA`.
+- **Child pipelines.**
+  - Dynamic child pipelines (`trigger: include: artifact: job:`) are **Free** ([docs](https://docs.gitlab.com/ci/pipelines/downstream_pipelines/)).
+  - Limits: two levels of children, three files in a child's `trigger:include`, 150 includes per pipeline, 1000 downstream pipelines per hierarchy, and a 5 MiB generated file (`max_artifacts_content_include_size`).
+  - The trigger job passes as soon as the child is created unless `strategy: depend` (or `mirror` since 18.2) mirrors the child's status ([`trigger:strategy`](https://docs.gitlab.com/ci/yaml/#triggerstrategy)).
+  - An empty child is an error that fails the trigger job ([troubleshooting](https://docs.gitlab.com/ci/pipelines/downstream_pipelines_troubleshooting/)), so the generator always emits at least one job.
+  - `include: local:` inside an artifact child resolves against the repo at the pipeline's SHA ([`file/artifact.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/master/lib/gitlab/ci/config/external/file/artifact.rb)).
+  - [local] GitLab's CI lint, with a dry-run pipeline creation, accepted setup's parent and the generated children:
+    - the parent creates only the uncovered job, `cinema` and `cinema:child`;
+    - a child creates exactly the covered jobs it re-enables, through `include: local` and `extends: .cinema:<job>`, including one with `only: null` / `except: null`;
+    - a matrix child creates only the leg that wasn't reused (`matrix: [2]`);
+    - the off-switches hold;
+    - a child with nothing left creates just `cinema:proven`.
+
+    The lint also warned that rules-only jobs without `workflow: rules` can create merge request pipelines. So setup gives cinema's jobs `rules:` only when the project already runs jobs in merge request pipelines (`MergeRequestPipelines`).
+  - In the child, `CI_PIPELINE_SOURCE` is `parent_pipeline`, and the parent's `CI_MERGE_REQUEST_*` are passed down ([docs](https://docs.gitlab.com/ci/pipelines/downstream_pipelines/#run-child-pipelines-with-merge-request-pipelines)). That is why the generator decides the covered jobs' rules in the parent and writes the outcome.
+  - `trigger:forward` defaults to `yaml_variables: true`, which turns the trigger job's and the global variables into *pipeline* variables in the child. Those outrank job variables ([precedence](https://docs.gitlab.com/ci/variables/#cicd-variable-precedence)), so cinema sets `false`. `pipeline_variables: true` keeps what a manual or API run passed.
+- **Merge requests.**
+  - MR pipelines are Free ([docs](https://docs.gitlab.com/ci/pipelines/merge_request_pipelines/)). Merged results pipelines ([docs](https://docs.gitlab.com/ci/pipelines/merged_results_pipelines/)) and merge trains ([docs](https://docs.gitlab.com/ci/pipelines/merge_trains/)) are Premium.
+  - `CI_MERGE_REQUEST_EVENT_TYPE` is `detached`, `merged_result` or `merge_train`. `CI_MERGE_REQUEST_SOURCE_BRANCH_SHA` and `CI_MERGE_REQUEST_TARGET_BRANCH_SHA` are set only in merged-results pipelines. `CI_COMMIT_BRANCH` is unset in MR pipelines ([predefined variables](https://docs.gitlab.com/ci/variables/predefined_variables/)).
+  - Mapping onto the gate's events: `merge_request_event` → `pull_request`, `merge_train` → `merge_group`, `push` → `push`. Any other source (web, api, trigger, schedule, pipeline) runs every task, because it can carry pipeline variables the gate can't see.
+  - Detached pipelines test the head, so head receipts match them. Merged results test GitLab's merge commit, whose tree `cinema push` already tests (§5.5).
+  - Fork MRs run in the fork by default, with the fork's variables, so there are no trusted keys. When a parent member runs one in the parent project, `CI_MERGE_REQUEST_SOURCE_PROJECT_ID != CI_MERGE_REQUEST_PROJECT_ID`, and the gate's verdict is `FORK_PR`.
+- **Required checks.** GitLab has no per-job required checks.
+  - "Pipelines must succeed" (Free) looks at the latest pipeline's status ([docs](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)). A child counts only through its trigger job, and only with `strategy: depend`/`mirror`, so setup writes `depend`. A job that is never created doesn't matter.
+  - Approval rules (Premium) and external status checks (Ultimate, an HTTP service: [docs](https://docs.gitlab.com/user/project/merge_requests/status_checks/)) don't look at jobs. Nothing like GitHub's "a required leg never reports" exists.
+- **`CINEMA_TRUSTED_KEYS`.**
+  - A project CI/CD variable, which only Maintainers can edit ([docs](https://docs.gitlab.com/ci/variables/)), so an MR author can't change it.
+  - **Not protected**: protected variables reach MR pipelines only under a project setting (since 18.1), with both branches protected and not from forks.
+  - **Not masked**: masking needs one line with no spaces, which a key line isn't, and the value isn't secret. Visibility defaults to Masked since 18.3, so set it to Visible.
+  - The real risk is **pipeline variables**. Run pipeline, the API, triggers and `git push -o ci.variable=` outrank project variables, so a Developer could pass their own keys. The project setting "Minimum role to use pipeline variables" closes it. gitlab.com's default for new projects is `no_one_allowed` (since 17.7); self-managed defaults to Maintainer. Non-push/MR sources already run everything. A push with `-o ci.variable` can't be detected, which the docs call out.
+  - As on GitHub (§11.2, Personal-mode honesty), a Developer's branch can edit `.gitlab-ci.yml` itself. Review of CI changes, or a pipeline execution policy (Ultimate), is the boundary.
+- **CI API.**
+  - `GET /projects/:id/pipelines?sha=&source=push`. Child pipelines are excluded unless `source=parent_pipeline`.
+  - `/pipelines/:id/jobs`.
+  - `/pipelines/:id/bridges` (renamed `trigger_jobs` in 19.2), whose `downstream_pipeline` leads to the child.
+  - `/jobs/:id/trace` for logs ([pipelines](https://docs.gitlab.com/api/pipelines/), [jobs](https://docs.gitlab.com/api/jobs/)).
+  - The job token can't call these, so graduation reads them locally with `glab api` (`:id` filled from the repo), like `gh api`.
+
+#### 11.7.2 What's built (P4 run 2)
+
+- **Analyzer** (`internal/analyze/gitlab*.go`): `.gitlab-ci.yml` becomes the same `Job`/`Proposal` shapes, so tasks, run, push and verify need no change. `analyze.Repo` appends GitLab's jobs. How each part of the config is handled:
+  - **Resolution:** local includes (lists, globs), `extends` (multi-level, deep merge), `!reference`, `default:` and `inherit:`, global and job `variables` with GitLab's `$VAR` expansion, YAML anchors and `<<`.
+  - **Environment:** `image:` → `container:`; `services:` → services, with the job's variables.
+  - **Script:** `before_script` + `script` in one shell (bash, else `sh -e`); `after_script` dropped.
+  - **Legs:** `parallel:` N and `matrix:`.
+  - **When it runs:** `rules:`, `only/except` and `workflow:rules`, evaluated for an MR pipeline and a feature-branch push. Event-dependent jobs get `event:`.
+  - **Runner and limits:** gitlab.com tags → `cpus:`/`memory:`; `timeout:`; artifacts → `outputs:`.
+  - **Review and skip rules** are in [docs/gitlab.md](docs/gitlab.md).
+  - **Job digest:** `job_digest` adds a digest of the job's whole resolved definition (with `workflow:`). A hidden copy that setup made (`.cinema:<job>`) reads as the job itself.
+- **Skipping:** a dynamic child pipeline, not the fallback. GitLab's own include resolution keeps fidelity: the child includes `.gitlab-ci.yml`, switches its jobs off, and re-enables the hidden covered jobs that still need to run, through `extends`, with their rules decided in the parent and only the matrix legs that weren't reused.
+  - The generator is `cinema verify --gitlab-child FILE`. It is the same judgment as `--skip-outputs`, with a different output, so the trust logic stays in one place.
+  - `cinema setup` and `setup --undo` hide covered jobs by renaming their keys and append the `cinema` and `cinema:child` jobs. Undo is byte-for-byte.
+  - The fallback (an early-exit first script line) stays unbuilt. It saves the run but not the runner start, and child pipelines are Free.
+- **Forge edges** (`cmd/cinema/forge.go`):
+  - `ciEvent` (from `githubEvent` / `gitlabEvent`): repo ID, event, base, head, fork, the pipeline-source veto.
+  - `forge.conclusion` (`gh api` / `glab api`, including the child pipeline through the trigger job) for graduation backtests.
+  - Keys: `CINEMA_TRUSTED_KEYS` from the job's environment on both forges.
+  - Without a Docker daemon (a GitLab job), the gate resolves image tags with the registry API (`internal/task/registry.go`, anonymous pulls). The result matches docker's `RepoDigests`.
+
+#### 11.7.3 TODO
+
+- [ ] GitLab live pairs for `cinema graduate`: completed MR pipelines (`source=merge_request_event`), their merge commits, the child's jobs.
+- [ ] Job logs through `/jobs/:id/trace`, for the failure-reason comparison (§11.5 gap 6).
+- [ ] `--minutes` and prices from GitLab's job durations and cost factors.
+- [ ] A custom CI config path (project setting); `include: template/component` and `spec: inputs`.
+- [ ] `rules: changes:`: evaluate it in the gate against `CI_MERGE_REQUEST_DIFF_BASE_SHA` / `CI_COMMIT_BEFORE_SHA`.
+- [ ] Private registries: registry credentials for the gate's tag resolution (today a private image means RUN).
+- [ ] A PR-summary equivalent: an MR note or the job log only. The job log has it today.
+
+#### 11.7.4 Needs a live spike on gitlab.com (an account)
+
+1. The notes fetch with the job token, in a private project, with and without `FF_GIT_URLS_WITHOUT_TOKENS=true`. The push, `ls-remote` and fetch with a user's token are checked locally. The local GitLab had no runner.
+2. A real run of setup's parent and its artifact child. The lint dry run is checked locally. Still to see on a real run: the child as `parent_pipeline`, and `strategy: depend` with "Pipelines must succeed".
+3. The child's `CI_COMMIT_BRANCH`, `CI_COMMIT_REF_NAME` and `CI_MERGE_REQUEST_*` under a branch parent and an MR parent.
+4. Merged-results and merge-train SHAs (Premium).
+5. A runner's measured shape (`HostShape` in a `saas-linux-small-amd64` job) against the drafted 2 CPU / 8 GB.
 
 ## 12. Reason codes (MVP set)
 
@@ -1116,7 +1208,8 @@ Report hashing and wrapper overhead separately, always.
 - [ ] Repos that use Dagger: `dagger` steps translate as tasks (§9.7)
 - [x] Per-test results parsed from task output (go test, pytest, jest/vitest, cargo, JUnit XML); failure pairs compare failed tests (§11.5.6); `cinema run --failfast` (§9.7, run 2). Not yet: `cinema run --failed-only`
 - [ ] Real projects per language, locally against upstream CI's results (run 2)
-- [ ] GitLab CI (§11.7): analyzer, child-pipeline skipping, forge interfaces (run 2); live spike once there's a GitLab account
+- [x] GitLab CI (§11.7): analyzer, child-pipeline skipping, forge interfaces, open questions answered (run 2)
+- [ ] GitLab live spike on gitlab.com (§11.7.4) once there's an account; live pairs, logs, minutes (§11.7.3)
 - [ ] Tests: ACC-101…122, CLEAN-009…011
 
 **Exit:** (Mac part met 2026-10-31: [cli#9](https://github.com/mjtechguy/cinema-lab-cli/pull/9); minutes saved in the summary still open) a developer on a Mac, with no other hardware, pushes a PR whose Linux jobs skip in CI, every skipped job graduated from shadow mode (backtest or live), and the PR summary shows what was saved. Then the same on Windows.

@@ -75,21 +75,17 @@ func cmdVerify(args []string) int {
 	remote := fs.String("remote", "origin", "fetch evidence from `REMOTE`")
 	only := fs.String("task", "", "with --execute: run just `ID` (one job of a parallel matrix)")
 	skipFor := fs.String("skip-outputs", "", "judge only tasks that cover jobs of workflow `FILE` (covers: FILE#job) and output skip_<job>=true for each job whose tasks are all reused")
-	if err := fs.Parse(args); err != nil || *eventPath == "" || (*only != "" && !*execute) || (*skipFor != "" && *execute) {
-		fmt.Fprintln(os.Stderr, "usage: cinema verify --event FILE [--execute [--task ID]] [--report FILE]")
+	glChild := fs.String("gitlab-child", "", "GitLab: judge the tasks covering .gitlab-ci.yml jobs and write the child pipeline of the covered jobs that still need to run to `FILE`")
+	if err := fs.Parse(args); err != nil || (*eventPath == "" && *glChild == "") || (*only != "" && !*execute) || ((*skipFor != "" || *glChild != "") && *execute) || (*skipFor != "" && *glChild != "") {
+		fmt.Fprintln(os.Stderr, "usage: cinema verify --event FILE [--execute [--task ID]] [--report FILE] | --gitlab-child FILE")
 		return exitBadArgs
 	}
 	fail := func(f string, a ...any) int {
 		fmt.Fprintf(os.Stderr, "cinema verify: "+f+"\n", a...)
+		if *glChild != "" { // GitLab: a child that runs every covered job, or they'd never run
+			return gitlabRunAll(*glChild)
+		}
 		return exitUnsatisfied
-	}
-	raw, err := os.ReadFile(*eventPath)
-	if err != nil {
-		return fail("%v", err)
-	}
-	var ev ghEvent
-	if err := json.Unmarshal(raw, &ev); err != nil {
-		return fail("event: %v", err)
 	}
 	cwd, _ := os.Getwd()
 	root, err := snapshot.RepoRoot(cwd)
@@ -100,26 +96,18 @@ func cmdVerify(args []string) int {
 	if err != nil {
 		return fail("%v", err)
 	}
-
-	rep := gateReport{SchemaVersion: 1, Candidate: candidate, Result: "plan"}
-	base, head, fork := candidate, candidate, false
-	switch {
-	case ev.PullRequest != nil:
-		base, head = ev.PullRequest.Base.SHA, ev.PullRequest.Head.SHA
-		fork = ev.PullRequest.Head.Repo == nil || !strings.EqualFold(ev.PullRequest.Head.Repo.FullName, ev.Repository.FullName)
-	case ev.MergeGroup != nil:
-		base, head = ev.MergeGroup.BaseSHA, ev.MergeGroup.HeadSHA
+	var e ciEvent
+	if *glChild != "" {
+		*skipFor = analyze.GitLabFile
+		e, err = gitlabEvent(os.LookupEnv, root, candidate)
+	} else {
+		e, err = githubEvent(*eventPath, candidate)
 	}
-	rep.Base = base
-	host := "github.com"
-	if u := os.Getenv("GITHUB_SERVER_URL"); u != "" {
-		host = strings.TrimPrefix(strings.TrimPrefix(u, "https://"), "http://")
+	if err != nil {
+		return fail("%v", err)
 	}
-	repoName := os.Getenv("GITHUB_REPOSITORY")
-	if repoName == "" {
-		repoName = ev.Repository.FullName
-	}
-	rep.Repository = strings.ToLower(host + "/" + repoName)
+	rep := gateReport{SchemaVersion: 1, Candidate: candidate, Result: "plan", Base: e.base, Repository: e.repo}
+	base, head, fork := e.base, e.head, e.fork
 
 	// Required tasks come from the BASE branch: a PR can't loosen its own requirements.
 	cfg, policyNote, err := baseConfig(root, base, candidate)
@@ -156,7 +144,7 @@ func cmdVerify(args []string) int {
 		allRun = plan.PolicyUnavailable
 	case fork:
 		allRun = plan.ForkPR
-	case ev.PullRequest != nil && candidate == base && head != base:
+	case e.change && candidate == base && head != base:
 		// The checkout is the base, not the PR (pull_request_target): receipts
 		// for it say nothing about the code the PR's jobs test.
 		allRun = plan.PolicyUnavailable
@@ -164,12 +152,15 @@ func cmdVerify(args []string) int {
 	case kerr != nil || len(keys) == 0:
 		allRun = plan.PolicyUnavailable
 		rep.Note = "CINEMA_TRUSTED_KEYS missing or invalid: every task runs"
+	case e.allRun != "":
+		allRun = plan.PolicyUnavailable
+		rep.Note = e.allRun
 	}
 
 	var stmts []evidence.VerifiedStatement
 	var rejected []string
 	if allRun == "" {
-		if err := transport.Fetch(root, *remote, os.Getenv("CINEMA_FETCH_TOKEN")); err != nil {
+		if err := transport.Fetch(root, *remote, e.fetchToken); err != nil {
 			allRun = plan.TransportUnavailable
 			rep.Note = "evidence fetch failed: " + err.Error()
 		} else {
@@ -191,7 +182,7 @@ func cmdVerify(args []string) int {
 			continue
 		}
 		var d plan.GateDecision
-		if t.Event != "" && t.Event != eventName(ev) && allRun == "" {
+		if t.Event != "" && t.Event != e.name && allRun == "" {
 			d = plan.GateDecision{Task: id, Decision: plan.GateRun, Reason: plan.EventMismatch}
 		} else if why := floatingMoved(t); why != "" && allRun == "" {
 			d = plan.GateDecision{Task: id, Decision: plan.GateRun, Reason: plan.EnvironmentMismatch}
@@ -223,7 +214,17 @@ func cmdVerify(args []string) int {
 		for p, ids := range elsewhere {
 			fmt.Printf("gate: FAIL (tasks %s are for %s; cinema supports linux tasks only for now)\n", strings.Join(ids, ", "), p)
 		}
+		if *glChild != "" {
+			return gitlabRunAll(*glChild)
+		}
 		return exitUnsatisfied
+	}
+	if *glChild != "" {
+		if err := writeGitLabChild(cfg, rep, root, *glChild); err != nil {
+			return fail("%v", err)
+		}
+		writeGateReport(*reportPath, rep, start)
+		return 0
 	}
 	if *skipFor != "" {
 		writeSkipOutputs(cfg, rep, root, *skipFor) // writes its own per-job summary
@@ -620,6 +621,48 @@ func candidateLegs(root, wf string) map[string][]analyze.Job {
 		}
 	}
 	return out
+}
+
+// ciEvent is what the gate needs to know about the CI run it judges, from
+// either forge (GitHub's event payload, GitLab's predefined variables).
+type ciEvent struct {
+	repo       string // host/path, lowercased: receipts must name it
+	name       string // pull_request | push | merge_group (GitLab's sources map onto these)
+	base, head string // the base branch commit (tasks.yaml comes from it) and the change's head
+	change     bool   // a pull request / merge request pipeline
+	fork       bool   // from a fork: every task runs
+	allRun     string // a forge-specific reason every task runs ("" if none)
+	fetchToken string // a token for the notes fetch ("": the checkout's own credentials)
+}
+
+// githubEvent reads the GitHub Actions event payload at path.
+func githubEvent(path, candidate string) (ciEvent, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ciEvent{}, err
+	}
+	var ev ghEvent
+	if err := json.Unmarshal(raw, &ev); err != nil {
+		return ciEvent{}, fmt.Errorf("event: %v", err)
+	}
+	e := ciEvent{base: candidate, head: candidate, name: eventName(ev), fetchToken: os.Getenv("CINEMA_FETCH_TOKEN")}
+	switch {
+	case ev.PullRequest != nil:
+		e.base, e.head, e.change = ev.PullRequest.Base.SHA, ev.PullRequest.Head.SHA, true
+		e.fork = ev.PullRequest.Head.Repo == nil || !strings.EqualFold(ev.PullRequest.Head.Repo.FullName, ev.Repository.FullName)
+	case ev.MergeGroup != nil:
+		e.base, e.head = ev.MergeGroup.BaseSHA, ev.MergeGroup.HeadSHA
+	}
+	host := "github.com"
+	if u := os.Getenv("GITHUB_SERVER_URL"); u != "" {
+		host = strings.TrimPrefix(strings.TrimPrefix(u, "https://"), "http://")
+	}
+	repoName := os.Getenv("GITHUB_REPOSITORY")
+	if repoName == "" {
+		repoName = ev.Repository.FullName
+	}
+	e.repo = strings.ToLower(host + "/" + repoName)
+	return e, nil
 }
 
 // eventName is the triggering event: GitHub's own name when set, else what

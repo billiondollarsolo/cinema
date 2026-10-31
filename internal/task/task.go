@@ -156,7 +156,9 @@ var (
 	platformRE = regexp.MustCompile(`^[a-z0-9]+/[a-z0-9]+$`)
 	envNameRE  = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	coversRE   = regexp.MustCompile(`^[A-Za-z0-9._-]+\.ya?ml#[A-Za-z_][A-Za-z0-9_-]*$`)
-	imageRE    = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(@sha256:[0-9a-f]{64})?$`)
+	// GitLab job names may hold spaces, colons and slashes (test:unit, "build linux").
+	coversGitLabRE = regexp.MustCompile(`^\.gitlab-ci\.yml#[^\x00-\x1f\x7f#.][^\x00-\x1f\x7f]{0,254}$`)
+	imageRE        = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*(:[0-9]+)?(/[a-z0-9][a-z0-9._-]*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(@sha256:[0-9a-f]{64})?$`)
 )
 
 // Load reads and validates root/.cinema/tasks.yaml.
@@ -296,7 +298,7 @@ func (t *Task) validate() error {
 			}
 		}
 	}
-	if t.Covers != "" && !coversRE.MatchString(t.Covers) {
+	if t.Covers != "" && !coversRE.MatchString(t.Covers) && !coversGitLabRE.MatchString(t.Covers) {
 		return fmt.Errorf("covers must look like ci.yml#job, got %q", t.Covers)
 	}
 	if err := validateServices(t.Services); err != nil {

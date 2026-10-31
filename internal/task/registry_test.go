@@ -1,0 +1,67 @@
+package task
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestSplitRef(t *testing.T) {
+	for in, want := range map[string]string{
+		"alpine":                             "registry-1.docker.io library/alpine latest",
+		"golang:1.26":                        "registry-1.docker.io library/golang 1.26",
+		"bitnami/redis:7":                    "registry-1.docker.io bitnami/redis 7",
+		"docker.io/library/node:22":          "registry-1.docker.io library/node 22",
+		"registry.gitlab.com/g/p/img:v1":     "registry.gitlab.com g/p/img v1",
+		"localhost:5000/x":                   "localhost:5000 x latest",
+		"ghcr.io/owner/image:1.2.3-bookworm": "ghcr.io owner/image 1.2.3-bookworm",
+	} {
+		h, r, tag := splitRef(in)
+		if got := h + " " + r + " " + tag; got != want {
+			t.Errorf("%s: %s, want %s", in, got, want)
+		}
+	}
+}
+
+// A registry that wants an anonymous Bearer token, as Docker Hub does.
+func TestRegistryDigest(t *testing.T) {
+	const digest = "sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/token":
+			if r.URL.Query().Get("scope") != "repository:library/alpine:pull" {
+				http.Error(w, "scope", http.StatusBadRequest)
+				return
+			}
+			fmt.Fprint(w, `{"token":"t0k"}`)
+		case r.URL.Path == "/v2/library/alpine/manifests/3.20":
+			if r.Header.Get("Authorization") != "Bearer t0k" {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="`+srv.URL+`/token",service="test"`)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			if !strings.Contains(r.Header.Get("Accept"), "manifest.list.v2+json") {
+				http.Error(w, "accept", http.StatusNotAcceptable)
+				return
+			}
+			w.Header().Set("Docker-Content-Digest", digest)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	oldScheme := registryScheme
+	defer func() { registryScheme = oldScheme }()
+	registryScheme = "http"
+	host := strings.TrimPrefix(srv.URL, "http://")
+	got, err := registryDigest(host + "/library/alpine:3.20")
+	if err != nil || got != digest {
+		t.Fatalf("%s %v", got, err)
+	}
+	if _, err := registryDigest(host + "/library/missing:1"); err == nil {
+		t.Error("a missing image resolved")
+	}
+}

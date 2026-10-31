@@ -237,6 +237,9 @@ func imageDigest(ref string) (string, error) {
 	if _, d, ok := strings.Cut(ref, "@sha256:"); ok {
 		return "sha256:" + d, nil
 	}
+	if !haveDocker() {
+		return registryDigest(ref) // e.g. the cinema job in a GitLab pipeline (registry.go)
+	}
 	inspect := func() (string, error) {
 		return toolOutput("", []string{"docker", "image", "inspect", "--format", "{{json .RepoDigests}}", ref}, append(os.Environ(), DockerEnv()...))
 	}

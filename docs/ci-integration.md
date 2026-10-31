@@ -2,6 +2,8 @@
 
 `cinema setup` edits your workflows so covered jobs skip themselves. This page is exactly what it changes, and what it won't touch.
 
+GitLab CI works differently (covered jobs move into a child pipeline the `cinema` job writes): see [GitLab CI](gitlab.md).
+
 ## What setup writes
 
 For each workflow with jobs this machine can take over:

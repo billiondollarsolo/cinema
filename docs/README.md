@@ -7,6 +7,7 @@ CInema runs your CI's Linux jobs before you push, from the workflows you already
 | [Getting started](getting-started.md) | From an existing repo to a PR whose jobs skip themselves |
 | [How it works](how-it-works.md) | Receipts, the CI check, skip-in-place, what "proven" means |
 | [CI integration](ci-integration.md) | What `cinema setup` changes in your workflows, matrices, required checks, undo |
+| [GitLab CI](gitlab.md) | `.gitlab-ci.yml`: what the analyzer reads, the child pipeline that skips proven jobs, setup |
 | [Tasks reference](tasks.md) | Every field of `.cinema/tasks.yaml` |
 | [Machines and engines](hosts.md) | macOS, Windows and Linux hosts, container engines, emulation, remote machines |
 | [Gotchas](gotchas.md) | Everything that changes a result, and how CInema handles it |

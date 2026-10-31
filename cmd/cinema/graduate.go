@@ -140,7 +140,8 @@ func backtest(ctx context.Context, r *repo, t *task.Task, shas []string) (task.G
 			fmt.Printf("  %s  %s: the job was defined differently then; skipped\n", t.ID, short(sha))
 			continue
 		}
-		job, err := ciConclusion(sha, wf, analyzedKey(*leg))
+		f := forgeFor(wf)
+		job, err := f.conclusion(sha, *leg)
 		ci := job.Conclusion
 		if err != nil || (ci != "success" && ci != "failure") {
 			cleanup()
@@ -157,7 +158,7 @@ func backtest(ctx context.Context, r *repo, t *task.Task, shas []string) (task.G
 			return g, fmt.Sprintf("on %s CI passed and the stand-in failed: it doesn't do what the job does here", short(sha))
 		}
 		if ci == "failure" {
-			if why := sameFailures(tests, job.ID); why != "" {
+			if why := sameFailures(tests, f, job.ID); why != "" {
 				fmt.Printf("  %s  %s: both failed, not counted: %s\n", t.ID, short(sha), why)
 				continue
 			}
@@ -180,7 +181,7 @@ func livePairs(r *repo, t *task.Task, limit int) (agreed int, why string) {
 		return 0, ""
 	}
 	runs, err := r.st.TaskRuns(r.id, t.ID, 500)
-	if err != nil {
+	if err != nil || strings.HasPrefix(t.Covers, analyze.GitLabFile+"#") { // TODO(plan §11.7): GitLab live pairs
 		return 0, ""
 	}
 	local := map[string]store.TaskRun{} // source digest: newest clean run
@@ -258,7 +259,7 @@ func livePairs(r *repo, t *task.Task, limit int) (agreed int, why string) {
 			return agreed, fmt.Sprintf("on PR head %s CI passed and the stand-in failed on the same tree", short(wr.HeadSHA))
 		}
 		if !passed {
-			if why := sameFailures(run.Tests, job.ID); why != "" {
+			if why := sameFailures(run.Tests, githubForge{}, job.ID); why != "" { // live pairs: GitHub only so far
 				fmt.Printf("  %s  PR head %s: both failed, not counted: %s\n", t.ID, short(wr.HeadSHA), why)
 				continue
 			}
@@ -287,12 +288,12 @@ func errOrEmpty(err error) string {
 // a stand-in failing for its own reason (a missing file, a tool it lacks)
 // looks like CI failing in its tests (plan §11.5 item 6). Both sides are
 // parsed the same way, CI's from the job's log.
-func sameFailures(local *testreport.Summary, job int64) string {
+func sameFailures(local *testreport.Summary, f forge, job int64) string {
 	mine, why := testreport.FailedNames(local)
 	if why != "" {
 		return "the stand-in's failure: " + why
 	}
-	log, err := ciJobLog(job)
+	log, err := f.jobLog(job)
 	if err != nil {
 		return fmt.Sprintf("CI's job log: %v", err)
 	}

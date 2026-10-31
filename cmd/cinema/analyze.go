@@ -142,6 +142,9 @@ func draftFor(jobs []analyze.Job, cpus, memGB int) ([]byte, error) {
 		script := s(p.Body)
 		script.Style = yaml.LiteralStyle
 		argv := seq("bash", "-eo", "pipefail", "-c") // Actions' default shell on Linux
+		if len(p.Shell) > 0 {
+			argv = seq(p.Shell...) // GitLab: bash where the image has it, else sh
+		}
 		argv.Content = append(argv.Content, script)
 		t := m(s("argv"), argv, s("platform"), s("linux/amd64"))
 		probes := &yaml.Node{Kind: yaml.SequenceNode}
@@ -217,6 +220,10 @@ func draftFor(jobs []analyze.Job, cpus, memGB int) ([]byte, error) {
 		}
 		if strings.HasPrefix(strings.ToLower(j.RunsOn), "ubuntu-") {
 			t.Content = append(t.Content, s("runs_on"), s(j.RunsOn))
+		}
+		cpus, memGB := cpus, memGB
+		if p.CPUs > 0 && p.MemoryGB > 0 { // the job's runner, by its tags (GitLab)
+			cpus, memGB = p.CPUs, p.MemoryGB
 		}
 		t.Content = append(t.Content, s("cpus"), s(fmt.Sprint(cpus)), s("memory"), s(fmt.Sprintf("%dg", memGB)), s("timeout"), s(fmt.Sprintf("%dm", cmp.Or(p.TimeoutMinutes, 60))),
 			s("reuse"), m(s("allowed"), s("true"), s("max_age"), s("24h")))
