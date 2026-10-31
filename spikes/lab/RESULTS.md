@@ -278,3 +278,17 @@ Every draft with a proposal (task *and* review verdicts, except those using `sud
 | golangci-lint | 3 | all pass, 109 s; re-run finds nothing to do | |
 | traefik | 8 | lint fails (Go drift); webui-build deletes a tracked file | findings 3, 4 |
 | vite | 6 | all pass, 92 s; config reformatted by `format-check` | finding 7 |
+
+## From a Mac, no other hardware (2026-10-31, `cli#9`)
+
+The first PR whose Linux jobs skipped on evidence from a developer's laptop: an arm64 MacBook, Colima, the published runner image, amd64 emulated. `cinema setup` drafted cli's build (ubuntu leg), lint and govulncheck; `cinema graduate` backtested them against CI on the mirror's last 6 trunk commits (build agreed on 4, 2 of them failures; lint and govulncheck on 3, 1 failure each). On [cli#9](https://github.com/mjtechguy/cinema-lab-cli/pull/9), `cinema push --run` ran the three in 26.04 containers in 1.5 to 3.5 min, and CI **skipped lint and govulncheck and dropped build's ubuntu leg**; macOS and Windows legs ran as usual.
+
+What it took (each now fixed in CInema):
+
+1. **`ubuntu-latest` is Ubuntu 26.04.** The first round ran everything (`ENVIRONMENT_MISMATCH`): receipts came from a 24.04 image. Correct, and no saving. Runner images now exist per release and follow each job's `runs-on`.
+2. **Jobs pinned through `go.mod` could never skip.** verify re-analyzed the workflow without the repo root, so the Go pin was empty and `job_digest` never matched. Safe, and silent: it would have looked like "no receipts".
+3. **Two workflows, one job name** (`govulncheck` in lint.yml and govulncheck.yml): graduate compared with the wrong one. It now reads the workflow's own run.
+4. **A rerun of setup dropped graduations** and didn't recognize an older setup's unquoted conditions.
+5. **Runner memory varies between VMs.** One round refused lint's receipts and accepted build's on the same commit. CI now accepts memory within 1 GB or 10% of the declared size; CPUs and OS stay exact.
+6. **Spot checks clustered**: two runs from one push had ids 160 apart, both ≡ 0 mod 20, so both skipped nothing. Now hashed.
+7. **Installing CInema in CI** needed the repo public (`go install` at a pinned commit); a private build on a public mirror's release was refused as exfiltration, rightly.
