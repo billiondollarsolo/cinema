@@ -56,7 +56,7 @@ func TestRunnerShapeInEnv(t *testing.T) {
 	for _, c := range []struct {
 		measured, declared int
 		near               bool
-	}{{15, 16, true}, {16, 16, true}, {17, 16, true}, {14, 16, false}, {8, 16, false}, {7, 8, true}, {9, 8, false}} {
+	}{{15, 16, true}, {16, 16, true}, {17, 16, true}, {14, 16, false}, {8, 16, false}, {7, 8, true}, {9, 8, true}, {6, 8, false}} {
 		if NearMemory(c.measured, c.declared) != c.near {
 			t.Errorf("NearMemory(%d, %d) != %v", c.measured, c.declared, c.near)
 		}
