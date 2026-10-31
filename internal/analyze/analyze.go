@@ -745,7 +745,7 @@ var (
 	ghFiles  = regexp.MustCompile(`\$\{?GITHUB_(ENV|PATH|OUTPUT)\b`)
 	sudo     = regexp.MustCompile(`(^|[\s;&|(])sudo\s`)
 	// Lab: vite's preview job ran `pkg-pr-new publish` (it refused outside Actions).
-	publishes   = regexp.MustCompile(`\b(npm|pnpm|yarn|bun|pkg-pr-new|changeset|cargo|gem)(@[\w.^~-]+)? publish\b|\bgoreleaser release\b|\bdocker push\b|\btwine upload\b|\bgh release (create|upload)\b`)
+	publishes   = regexp.MustCompile(`\b(npm|pnpm|yarn|bun|pkg-pr-new|changeset|cargo|gem)(@[\w.^~-]+)? publish\b|\bgoreleaser release\b|\bdocker push\b|\btwine upload\b|\bgh release (create|upload)\b|\bmvn(w)?\b[^\n;&|]*\bdeploy\b|\bgradle(w)?\b[^\n;&|]*\bpublish\w*|\bdotnet nuget push\b|\bdeno publish\b`)
 	usesGo      = regexp.MustCompile(`(^|[\s;&|(])(go (build|test|vet|run|install|generate|mod|tool|list)|make)\b`)
 	usesNode    = regexp.MustCompile(`(^|[\s;&|(])(node|npm|npx|pnpm|yarn|corepack)\b`)
 	pipeToShell = regexp.MustCompile(`(curl|wget)\b[^|\n]*\|\s*(sudo\s+)?(ba)?sh\b`)
