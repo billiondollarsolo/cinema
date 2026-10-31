@@ -13,6 +13,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/billiondollarsolo/cinema/internal/analyze"
 	"github.com/billiondollarsolo/cinema/internal/task"
 )
 
@@ -44,7 +45,7 @@ var runnerImages = map[string]string{
 // ponytail: a constant, not a lookup. When GitHub moves it, CI measures the new
 // OS (os= in the environment) and receipts from here stop matching until this
 // follows: a miss, never a false skip.
-const ubuntuLatest = "ubuntu-26.04"
+const ubuntuLatest = analyze.UbuntuLatest // drafts read that image's tool cache too
 
 // runnerImage is the image a task's sandbox runs in: the user's image if set,
 // else the one for the job's runs-on (ubuntu-latest, ubuntu-24.04, …-arm).

@@ -1,6 +1,7 @@
 package analyze
 
 import (
+	"cmp"
 	"fmt"
 	"regexp"
 	"strings"
@@ -11,14 +12,15 @@ import (
 // runtime cinema provisions and adds any steps the action's side effects stand
 // for (setup-go puts GOPATH/bin on PATH).
 type SetupCtx struct {
-	Root  string                    // the repo, for version files ("" when unknown)
-	Ref   string                    // the action's ref (dtolnay/rust-toolchain@stable: "stable")
-	With  func(key string) string   // the step's with: value, matrix-substituted
-	has   func(key string) bool     // the input is given (even empty)
-	Env   map[string]string         // the job's resolved env (workflow, job), for ${{ env.X }}
-	pin   func(runtime, ver string) // sets the proposal's runtime pin (one version per task)
-	step  func(run, dir string)     // adds a step right after this one
-	probe func(argv []string)       // adds a version command to the environment fingerprint
+	Root   string                    // the repo, for version files ("" when unknown)
+	Ref    string                    // the action's ref (dtolnay/rust-toolchain@stable: "stable")
+	RunsOn string                    // the job's runs-on label (whose runner image's tool cache counts)
+	With   func(key string) string   // the step's with: value, matrix-substituted
+	has    func(key string) bool     // the input is given (even empty)
+	Env    map[string]string         // the job's resolved env (workflow, job), for ${{ env.X }}
+	pin    func(runtime, ver string) // sets the proposal's runtime pin (one version per task)
+	step   func(run, dir string)     // adds a step right after this one
+	probe  func(argv []string)       // adds a version command to the environment fingerprint
 	// Review: the draft has an issue a person must resolve (an unpinnable
 	// version, an option cinema doesn't reproduce). Note: informational.
 	Review, Note func(string)
@@ -43,7 +45,32 @@ func (c *SetupCtx) Exact(runtime, spec, file string, exact *regexp.Regexp) strin
 	if t, ok := map[string]string{"go": "Go", "node": "Node"}[runtime]; ok {
 		tool = t // their release lists' names
 	}
-	return exactVersion(c.Root, spec, exact.String(), tool, file, c.Review, c.Note)
+	return exactVersion(c.Root, spec, exact.String(), tool, file, "", c.Review, c.Note)
+}
+
+// ExactCached is Exact for an action that, without check-latest: true, takes
+// a matching version from the runner's tool cache before downloading the
+// newest (setup-python, setup-java): a floating spec is pinned to what the
+// job's runner image has cached, and CI checks its own tool cache.
+func (c *SetupCtx) ExactCached(runtime, spec, file string, exact *regexp.Regexp) string {
+	if strings.EqualFold(strings.TrimSpace(withEnv(c.With("check-latest"), c.Env)), "true") {
+		return c.Exact(runtime, spec, file, exact)
+	}
+	return exactVersion(c.Root, spec, exact.String(), runtime, file, cmp.Or(c.RunsOn, "ubuntu-latest"), c.Review, c.Note)
+}
+
+// Preinstalled records that CI's setup action for runtime installs next to
+// what the runner has preinstalled, so the gate checks the runner's (.NET:
+// no newer SDK than the pin). Only for a pin from a floating spec.
+func (c *SetupCtx) Preinstalled(runtime string) { c.Note(preinstalledNote + runtime) }
+
+// cacheFirst is the job's runner for exactVersion, unless check-latest is
+// true (then the action installs the newest release).
+func cacheFirst(checkLatest, runsOn string) string {
+	if strings.EqualFold(strings.TrimSpace(checkLatest), "true") {
+		return ""
+	}
+	return cmp.Or(runsOn, "ubuntu-latest")
 }
 
 // Probe fingerprints a tool the task doesn't pin by its version command
@@ -98,6 +125,7 @@ type Release struct {
 	Version string // exact ("3.12.7")
 	LTS     bool
 	Stable  bool // not a prerelease
+	GoLive  bool // .NET's go-live phase: a release candidate, Stable for setup-dotnet but not GA
 }
 
 var lister = map[string]func() ([]Release, error){}

@@ -213,6 +213,15 @@ func draftFor(jobs []analyze.Job, cpus, memGB int) ([]byte, error) {
 				fl.Content = append(fl.Content, s(k), s(p.Floating[k]))
 			}
 			t.Content = append(t.Content, s("floating"), fl)
+			if len(p.Preinstalled) > 0 {
+				pre := m()
+				for _, k := range keys {
+					if v, ok := p.Preinstalled[k]; ok {
+						pre.Content = append(pre.Content, s(k), &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: fmt.Sprint(v)})
+					}
+				}
+				t.Content = append(t.Content, s("preinstalled"), pre)
+			}
 		}
 		if p.Event != "" {
 			t.Content = append(t.Content, s("event"), s(p.Event))

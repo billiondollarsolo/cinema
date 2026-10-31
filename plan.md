@@ -400,6 +400,8 @@ A job's language toolchain must come from a pin, provisioned identically whereve
 
 `.tool-versions` (asdf, mise) is read for every language it names. A job whose language has no provider yet stays review with that reason, never runs against whatever is installed.
 
+**Floating specs pin what the job's runner uses.** Without `check-latest: true`, setup-go, setup-node, setup-python and setup-java take the newest matching version in the runner's tool cache, which GitHub's image preinstalls and which lags the newest release for days to weeks after each release (lab: click's `3.14` ran 3.14.9 while 3.14.10 was out). Drafts pin the version in the job's runner image's tool cache, read from the image's software report (actions/runner-images' `Ubuntu<release>-Readme.md`: Cached Tools, Java), falling back to the newest release when it lists none matching (the action downloads then) or can't be read; `check-latest: true` pins the newest release. CI checks the version its own tool cache gives (§11.2), so a wrong guess is a miss, never a skip. Measured against the projects' last green runs (2026-10-31): 19 of 19 legs drafted exactly CI's version (click 5, gson 6, cobra 8), against 15 of 19 for the newest release. During an image rollout runners carry two images for a few days; jobs run until the gate's runner has the pinned version. setup-dotnet without its own `DOTNET_INSTALL_DIR` installs next to the image's SDKs and runtimes: a single floating spec on the newest GA channel is a task (no preinstalled SDK can be newer, so `dotnet` uses the pin), checked in CI against the runner's SDK list; older channels stay review.
+
 ---
 
 ## 7. Receipts and keys
@@ -804,12 +806,14 @@ for task in tasks:
 
 | Floating in the workflow | Resolved at verify time from |
 |---|---|
-| `go-version: stable`, `1.26`, `go-version-file` with a range | Go's release index |
-| `node-version: lts/*`, `24` | nodejs.org's release index |
+| `go-version: stable`, `node-version: latest` | the release index (the action resolves these before its tool cache) |
+| `go-version: 1.26`, `node-version: lts/*` / `24`, `python-version: 3.14`, `java-version: 21` (Temurin), without `check-latest: true` | the runner's tool cache (`$RUNNER_TOOL_CACHE/<go\|node\|Python\|Java_Temurin-Hotspot_jdk>/<version>/x64` with `x64.complete`; the newest satisfying the spec, prereleases out, as `@actions/tool-cache`'s `find` and setup-java's `findInToolcache` match; Java's build from the JDK's `release` file), else the release index (the action downloads). Entries written after boot don't count; a task for another `runs_on` release than the gate's runner: RUN |
+| the same with `check-latest: true`; `mise`, `bun`, `deno`, `uv`, `rust`, `gradle` specs | the release index |
+| `dotnet-version: 10.0.x` next to the image's SDKs (no `DOTNET_INSTALL_DIR`) | the release index, and the runner's `/usr/share/dotnet/sdk`: any SDK newer than the pin (dotnet would use it) is a mismatch |
 | image by tag (`container:`, `services:`) | a registry HEAD (tag → digest) |
 | `runs-on: ubuntu-latest` | the runner's `ImageOS`/`ImageVersion` (the gate runs on the same label) |
 
-A mismatch is `ENVIRONMENT_MISMATCH` and the job runs. A source that can't be reached means RUN, never skip. Unpinned probes (a `toolchain: cmd` nothing fixes) can't be verified this way, so such tasks aren't eligible to skip; `cinema analyze` says why.
+The task says which applies (`preinstalled: {go: true}`, drafted from the step's `check-latest`); a task without it is checked both ways. A mismatch is `ENVIRONMENT_MISMATCH` and the job runs. A source that can't be reached means RUN, never skip. Unpinned probes (a `toolchain: cmd` nothing fixes) can't be verified this way, so such tasks aren't eligible to skip; `cinema analyze` says why.
 
 **Event.** A job can behave differently per event (`if: github.event_name == 'push'` on a step, scripts reading `GITHUB_REF`). The contract records the event a task was drafted for (`event: pull_request`), the receipt carries it, and the gate requires it to match the triggering event, else `EVENT_MISMATCH`. The analyzer drafts one task per event the job runs on when its steps differ by event, and sends jobs whose conditions it can't evaluate to review. Inside the container, the full default `GITHUB_*` set for that event is always set, since scripts and tools read them invisibly.
 

@@ -3,13 +3,16 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"github.com/billiondollarsolo/cinema/internal/analyze"
 	"github.com/billiondollarsolo/cinema/internal/task"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // gateEnv: a dev repo that pushes code + receipts to a bare remote, and a
@@ -471,6 +474,95 @@ func TestFloatingMoved(t *testing.T) {
 	floatingResolve = func(tool, spec string) (string, error) { return "1.84.0", nil }
 	if why := floatingMoved(rs); why == "" {
 		t.Fatal("rust moved to 1.84.0: must run")
+	}
+}
+
+// Without check-latest the job's setup action takes the runner's tool cache
+// first: the gate checks what its own runner's cache gives, not the newest
+// release (lab: click's 3.14 ran the cached 3.14.9 while 3.14.10 was out).
+func TestFloatingToolCache(t *testing.T) {
+	old := floatingResolve
+	defer func() { floatingResolve = old }()
+	floatingResolve = func(tool, spec string) (string, error) { return "1.26.10", nil }
+	cache := t.TempDir()
+	cacheGo := func(v string) { // as the runner image made it, before this boot
+		p := filepath.Join(cache, "go", v, map[string]string{"amd64": "x64", "arm64": "arm64"}[runtime.GOARCH])
+		os.MkdirAll(p, 0o755)
+		os.WriteFile(p+".complete", nil, 0o644)
+		long := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+		os.Chtimes(p+".complete", long, long)
+	}
+	cacheGo("1.26.9")
+	t.Setenv("RUNNER_TOOL_CACHE", cache)
+	tk := func(pin string, pre ...bool) *task.Task {
+		t := &task.Task{Runtime: task.Runtime{Go: pin}, Floating: map[string]string{"go": "1.26"}}
+		if len(pre) > 0 {
+			t.Preinstalled = map[string]bool{"go": pre[0]}
+		}
+		return t
+	}
+	for _, c := range []struct {
+		name string
+		t    *task.Task
+		run  string // "" reuses
+	}{
+		{"the cache's", tk("1.26.9", true), ""},
+		{"not the cache's", tk("1.26.10", true), "is 1.26.9 on this runner"},
+		{"check-latest", tk("1.26.10", false), ""},
+		{"check-latest, old pin", tk("1.26.9", false), "is 1.26.10 today"},
+		// Drafted before preinstalled: both must be the pin.
+		{"old task, newest pin", tk("1.26.10"), "is 1.26.9 on this runner"},
+		{"old task, cached pin", tk("1.26.9"), "is 1.26.10 today"},
+	} {
+		if why := floatingMoved(c.t); (c.run == "") != (why == "") || !strings.Contains(why, c.run) {
+			t.Errorf("%s: %q, want %q", c.name, why, c.run)
+		}
+	}
+	cacheGo("1.26.10") // a newer image
+	if why := floatingMoved(tk("1.26.9", true)); !strings.Contains(why, "is 1.26.10 on this runner") {
+		t.Errorf("newer image: %q", why)
+	}
+	other := tk("1.26.10", true)
+	other.RunsOn = "ubuntu-10.04"
+	if why := floatingMoved(other); !strings.Contains(why, "the job runs on ubuntu-10.04") {
+		t.Errorf("another release's runner: %q", why)
+	}
+	t.Setenv("RUNNER_TOOL_CACHE", "")
+	if why := floatingMoved(tk("1.26.10", true)); !strings.Contains(why, "RUNNER_TOOL_CACHE") {
+		t.Errorf("no tool cache: %q", why)
+	}
+	if why := floatingMoved(tk("1.26.10", false)); why != "" {
+		t.Errorf("check-latest needs no tool cache: %q", why)
+	}
+}
+
+// .NET next to the runner's SDKs: the pin must be the newest of its spec and
+// no SDK on the runner newer.
+func TestFloatingDotnetPreinstalled(t *testing.T) {
+	old, oldSDKs := floatingResolve, analyze.DotnetSDKs
+	defer func() { floatingResolve, analyze.DotnetSDKs = old, oldSDKs }()
+	newest := "10.0.403"
+	floatingResolve = func(tool, spec string) (string, error) { return newest, nil }
+	analyze.DotnetSDKs = t.TempDir()
+	for _, v := range []string{"8.0.427", "9.0.320", "10.0.114", "10.0.403"} {
+		os.Mkdir(filepath.Join(analyze.DotnetSDKs, v), 0o755)
+	}
+	tk := &task.Task{Runtime: task.Runtime{Other: map[string]string{"dotnet": "10.0.403"}}, Floating: map[string]string{"dotnet": "10.0.x"}, Preinstalled: map[string]bool{"dotnet": true}}
+	if why := floatingMoved(tk); why != "" {
+		t.Fatalf("nothing newer: %q", why)
+	}
+	newest = "10.0.404"
+	if why := floatingMoved(tk); !strings.Contains(why, "10.0.404 today") {
+		t.Fatalf("setup-dotnet would install 10.0.404: %q", why)
+	}
+	newest = "10.0.403"
+	os.Mkdir(filepath.Join(analyze.DotnetSDKs, "11.0.100"), 0o755)
+	if why := floatingMoved(tk); !strings.Contains(why, "11.0.100, newer than") {
+		t.Fatalf("the runner has 11.0.100: %q", why)
+	}
+	tk.Preinstalled["dotnet"] = false // its own DOTNET_INSTALL_DIR
+	if why := floatingMoved(tk); why != "" {
+		t.Fatalf("own install dir: %q", why)
 	}
 }
 

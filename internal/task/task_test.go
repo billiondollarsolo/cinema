@@ -80,6 +80,7 @@ func TestParseRejects(t *testing.T) {
 		"bad capture":         task("    reuse: {allowed: true, max_age: 1h, capture: sometimes}\n"),
 		"go test cache":       "schema_version: 1\ntasks:\n  t: {argv: [go, test, ./...], platform: any}\n", // ACC-020
 		"null task":           "schema_version: 1\ntasks:\n  t:\n",
+		"preinstalled alone":  task("    runtime: {go: 1.26.9}\n    preinstalled: {go: true}\n"),
 		"not a mapping":       "- a\n- b\n",
 		"oversized":           strings.Repeat("#", maxConfigSize+1),
 	} {
@@ -87,6 +88,7 @@ func TestParseRejects(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
+	mustParse(t, task("    runtime: {go: 1.26.9}\n    floating: {go: \"1.26\"}\n    preinstalled: {go: true}\n"))
 	// accept_tool_cache: true is the explicit opt-in; other uncacheable flags also qualify.
 	for _, argv := range []string{"[go, test, ./...]\n    accept_tool_cache: true", "[go, test, -count=1, ./...]",
 		"[go, test, -count, \"1\", ./...]", "[go, test, -fuzz, FuzzX, ./x]", "[go, test, --bench=., ./...]"} {

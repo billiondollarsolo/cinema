@@ -188,7 +188,7 @@ func TestVersionFileUntrusted(t *testing.T) {
 	if v := versionFromFile(d, ".nvmrc"); v != "" {
 		t.Fatalf("followed a symlink: %q", v)
 	}
-	if v := exactVersion(d, "", `^x$`, "Node", "../../etc/passwd", func(string) {}, func(string) {}); v != "" {
+	if v := exactVersion(d, "", `^x$`, "Node", "../../etc/passwd", "", func(string) {}, func(string) {}); v != "" {
 		t.Fatalf("read outside the repo: %q", v)
 	}
 }

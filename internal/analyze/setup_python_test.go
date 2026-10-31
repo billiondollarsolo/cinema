@@ -19,6 +19,9 @@ func fakeReleases(t *testing.T) {
 		case uvManifest:
 			return []byte(`{"version":"0.9.6","artifacts":[]}` + "\n" + `{"version":"0.9.5","artifacts":[]}` + "\n" + `{"version":"0.8.24","artifacts":[]}` + "\n"), nil
 		}
+		if b, ok := fakeImageReport(url); ok {
+			return b, nil
+		}
 		return nil, errors.New("offline")
 	}
 	releases.m = map[string][]release{}
@@ -97,7 +100,7 @@ jobs:
 		verdict, python, reason string
 	}{
 		"exact":         {Task, "3.12.7", ""},
-		"float":         {Review, "3.12.8", "without check-latest: true"},
+		"float":         {Task, "3.12.7", ""}, // the image's tool cache has 3.12.7, the newest is 3.12.8
 		"float-latest":  {Task, "3.12.8", ""},
 		"default-file":  {Task, "3.11.10", ""},
 		"tool-versions": {Task, "3.12.7", ""},
@@ -122,6 +125,16 @@ jobs:
 	}
 	if got := jobs["float"].Proposal.Floating["python"]; got != "3.12" {
 		t.Errorf("floating python %q, want 3.12 (CI resolves it again)", got)
+	}
+	// Without check-latest CI checks its tool cache; with it, the newest release.
+	if pre, ok := jobs["float"].Proposal.Preinstalled["python"]; !pre || !ok {
+		t.Errorf("float: preinstalled %v, want python: true", jobs["float"].Proposal.Preinstalled)
+	}
+	if pre, ok := jobs["float-latest"].Proposal.Preinstalled["python"]; pre || !ok {
+		t.Errorf("float-latest: preinstalled %v, want python: false", jobs["float-latest"].Proposal.Preinstalled)
+	}
+	if p := jobs["exact"].Proposal; len(p.Floating)+len(p.Preinstalled) != 0 {
+		t.Errorf("exact: floating %v preinstalled %v", p.Floating, p.Preinstalled)
 	}
 	body := jobs["exact"].Proposal.Body
 	if !strings.Contains(body, `cp -a "${pythonLocation:?}/." "$d"`) || strings.Index(body, "cinema-python") > strings.Index(body, "pip install -r") {

@@ -370,3 +370,19 @@ Before the fixes below, hono had 1 task and gson's legs and gradle-versions-plug
 13. Smaller: the onePin message blamed "a rebuilt artifact's producer" for hono's Node set up twice (now says either); `cinema log` has no `--config`, so a run of a draft other than `.cinema/tasks.yaml` can't be read back; `${{ matrix.x || '' }}` evaluated to nothing leaves a trailing space, and the draft's argv turns into a one-line quoted string.
 
 **Timing:** emulated runs took 1.4–2.5× CI's job time (deno 22 s vs 15 s, gson JDK 17 3m28 vs 1m36, petclinic Gradle 4m18 vs 2m51), with `-j 2` on a VM shared with other runs. hono's `main` hit vitest's 5 s test timeouts at `-j 2` and passed alone.
+
+## Floating specs on the runner's tool cache (2026-10-31, follow-up)
+
+Findings 3 (Python) and 5 (Java) and 12 (.NET) above, and the same behaviour in setup-go and setup-node, changed how floating specs are drafted and checked: drafts pin the version the job's runner image has in its tool cache (from actions/runner-images' software report), and `cinema verify` resolves each `floating:` spec against its own runner's tool cache as the action does (`preinstalled: true`), or against the newest release with `check-latest: true`. Without `check-latest`, these jobs are now tasks instead of review.
+
+Measured with `cinema analyze` today against each project's last green CI run (job logs: "Successfully set up CPython (…)", "Resolved Java … from tool-cache", "Found in cache @ …", "go version …"):
+
+| Project | CI run (image) | Legs | Drafted = CI's version | Newest release = CI's version |
+|---|---|---|---|---|
+| pallets/click | Oct 29 (26.04, 20261025.179.1) | Python 3.10–3.14 | 5/5 (3.14.9, 3.13.17, 3.12.15, 3.11.17 cached; 3.10.22 downloaded) | 1/5 (3.14.10, 3.13.18, … were out) |
+| google/gson | Oct 30 (26.04, 20261025.179.1) | Temurin 11/17/21/25 (6 jobs) | 6/6 (11's is the respin 11.0.32.1+1, Adoptium's 11.0.32+101) | 6/6 |
+| spf13/cobra | Oct 21 (24.04, 20261018/20261012) | Go 1.17.x–1.24.x | 8/8 | 8/8 (end-of-life lines) |
+| expressjs/express | Oct 23 (26.04, 20261012.163.1) | Node 18–26, `lts/*` | older image: 22.23.3/24.21.0 then, 22.23.4/24.22.1 cached now | – |
+
+cobra's matrix ran on two image versions in one run (20261018 and 20261012): rollouts are real, so the gate's runner can differ from the one a job would get for a few days. NSubstitute's `format-verify` (`dotnet-version: 10.0.x`, no `DOTNET_INSTALL_DIR`) is now a task: 10.0.403 is the newest GA SDK, the 26.04 image's newest preinstalled SDK too, and its root `global.json` only configures the test runner.
+

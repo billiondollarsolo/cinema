@@ -77,6 +77,13 @@ type Task struct {
 	// ({go: stable, node: "lts/*"}). The gate resolves them again on every run
 	// and runs the job if today's release isn't the pin (plan §11.2). Metadata.
 	Floating map[string]string `yaml:"floating"`
+	// Preinstalled, per floating: entry, says what CI's setup action uses:
+	// true, what the runner has preinstalled first (setup-go/node/python/java
+	// without check-latest take the tool cache's newest match; setup-dotnet
+	// installs next to the image's SDKs), so the gate checks the runner's
+	// tool cache (or that no SDK there is newer than the pin); false, the
+	// newest release. Absent (tasks drafted before it): both must be the pin.
+	Preinstalled map[string]bool `yaml:"preinstalled"`
 	// Graduated: the stand-in agreed with CI for exactly this job definition
 	// (plan §11.5). Without it, or for another job_digest, the covered job runs
 	// in CI whatever the receipts say (shadow mode). Written by cinema graduate,
@@ -327,6 +334,11 @@ func (t *Task) validate() error {
 	for k := range t.Floating {
 		if t.Runtime.Get(k) == "" {
 			return fmt.Errorf("floating: %q has no runtime: pin", k)
+		}
+	}
+	for k := range t.Preinstalled {
+		if _, ok := t.Floating[k]; !ok {
+			return fmt.Errorf("preinstalled: %q isn't in floating:", k)
 		}
 	}
 	switch t.Event {

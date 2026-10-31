@@ -74,6 +74,11 @@ type Proposal struct {
 	// Floating: the version specs the pins were resolved from ("Go": "stable"),
 	// so the gate re-resolves them (plan §11.2).
 	Floating map[string]string `json:"floating,omitempty"`
+	// Preinstalled, for floating pins of Go, Node, Python, Java and .NET: true
+	// when CI's setup action uses what the runner has preinstalled first (its
+	// tool cache without check-latest; .NET's preinstalled SDKs), so the gate
+	// checks the runner's; false when it installs the newest release.
+	Preinstalled map[string]bool `json:"preinstalled,omitempty"`
 	// TimeoutMinutes: the job's timeout-minutes (GitHub's default is 360).
 	TimeoutMinutes int `json:"timeout_minutes,omitempty"`
 	// Shell: the argv the script is run with, before the script itself (empty:
@@ -396,13 +401,16 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 			note("builds artifact " + str(s.With["name"]) + " as job " + producer + " does, in a fresh copy of the commit (CI builds it once and shares it)")
 		case strings.Contains(action, "artifact") && !strings.Contains(action, "upload") && !strings.Contains(action, "save"):
 			skip("needs artifacts from another job (download-artifact)")
+		case (action == "actions/setup-go" || action == "actions/setup-node") && strings.Contains(sub(str(s.With["check-latest"])), "${{"):
+			// Unknown: the tool cache's version or the newest release.
+			review(action + "'s check-latest uses an expression: " + firstExpr(sub(str(s.With["check-latest"]))))
 		case action == "actions/setup-go":
-			p.Go = onePin(p.Go, exactVersion(root, sub(str(s.With["go-version"])), `^1\.[0-9]+\.[0-9]+$`, "Go", str(s.With["go-version-file"]), review, note), "Go", review)
+			p.Go = onePin(p.Go, exactVersion(root, sub(str(s.With["go-version"])), `^1\.[0-9]+\.[0-9]+$`, "Go", str(s.With["go-version-file"]), cacheFirst(sub(str(s.With["check-latest"])), r.RunsOn), review, note), "Go", review)
 			// setup-go also puts GOPATH/bin on PATH: tools a job `go install`s are
 			// then found (P4-1: cli's go-licenses; the VPS's login PATH hid it).
 			steps = slices.Insert(slices.Clone(steps), i+1, step{Run: `echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"`, Dir: "."})
 		case action == "actions/setup-node":
-			p.Node = onePin(p.Node, exactVersion(root, sub(str(s.With["node-version"])), `^[0-9]+\.[0-9]+\.[0-9]+$`, "Node", str(s.With["node-version-file"]), review, note), "Node", review)
+			p.Node = onePin(p.Node, exactVersion(root, sub(str(s.With["node-version"])), `^[0-9]+\.[0-9]+\.[0-9]+$`, "Node", str(s.With["node-version-file"]), cacheFirst(sub(str(s.With["check-latest"])), r.RunsOn), review, note), "Node", review)
 		case action == "pnpm/setup":
 			// pnpm and a runtime in one step (runtime: node@24): the Node pin as
 			// setup-node's, then pnpm as pnpm/action-setup's.
@@ -413,7 +421,7 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 				if ver == "lts" {
 					ver = "lts/*"
 				}
-				p.Node = onePin(p.Node, exactVersion(root, ver, `^[0-9]+\.[0-9]+\.[0-9]+$`, "Node", "", review, note), "Node", review)
+				p.Node = onePin(p.Node, exactVersion(root, ver, `^[0-9]+\.[0-9]+\.[0-9]+$`, "Node", "", "", review, note), "Node", review)
 			default:
 				review("uses pnpm/setup with runtime " + name + ": cinema provisions Go and Node only so far")
 			}
@@ -436,7 +444,7 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 			steps = slices.Insert(slices.Clone(steps), i+1, step{Run: run, Dir: str(s.With["working-directory"])})
 		case setupActions[strings.ToLower(action)] != nil:
 			_, ref, _ := strings.Cut(uses, "@")
-			c := &SetupCtx{Root: root, Ref: ref, With: func(k string) string { return sub(str(s.With[k])) }, Env: envVals, Review: review, Note: note,
+			c := &SetupCtx{Root: root, Ref: ref, RunsOn: r.RunsOn, With: func(k string) string { return sub(str(s.With[k])) }, Env: envVals, Review: review, Note: note,
 				has: func(k string) bool { _, ok := s.With[k]; return ok }, pin: pin, probe: probe,
 				step: func(run, dir string) {
 					steps = slices.Insert(slices.Clone(steps), i+1, step{Run: run, Dir: cmp.Or(dir, ".")})
@@ -543,23 +551,41 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 		b.WriteString(strings.Join(body, "\n"))
 		p.Body = b.String()
 		var notes []string
+		pre := map[string]bool{}
 		for _, n := range r.Notes {
+			if rt, ok := strings.CutPrefix(n, preinstalledNote); ok {
+				pre[rt] = true
+				continue
+			}
 			if kv, ok := strings.CutPrefix(n, floatingNote); ok {
 				tool, spec, _ := strings.Cut(kv, "=")
 				spec, got, _ := strings.Cut(spec, "\x00")
+				got, flag, _ := strings.Cut(got, "\x00")
 				// Only the spec the pin came from: with several (setup-dotnet's
 				// 10.0.x, 9.0.x, 8.0.x; setup-node twice) the first pin is kept.
 				if pinned := map[string]string{"Go": p.Go, "Node": p.Node}[tool]; cmp.Or(pinned, p.Runtimes[tool]) == got {
 					if p.Floating == nil {
 						p.Floating = map[string]string{}
 					}
-					p.Floating[strings.ToLower(tool)] = spec
+					rt := strings.ToLower(tool)
+					p.Floating[rt] = spec
+					pre[rt] = pre[rt] || flag != ""
 				}
 				continue
 			}
 			notes = append(notes, n)
 		}
 		r.Notes = notes
+		// Said for every floating pin whose action may use the runner's own:
+		// a task without it (from before) is checked both ways in CI.
+		for rt := range p.Floating {
+			if UsesRunnerFirst(rt) {
+				if p.Preinstalled == nil {
+					p.Preinstalled = map[string]bool{}
+				}
+				p.Preinstalled[rt] = pre[rt]
+			}
+		}
 		p.TimeoutMinutes = 360 // GitHub's default
 		if n, err := strconv.Atoi(strings.TrimSpace(sub(j.Timeout))); err == nil && n > 0 {
 			p.TimeoutMinutes = n
@@ -875,7 +901,12 @@ func evalValue(src string, combo map[string]string) (string, bool) {
 	return val, true
 }
 
-func exactVersion(root, v, pattern, tool, file string, review, note func(string)) string {
+// exactVersion: v (or the version file's) as written if exact, else the
+// release the job's setup action would install today. runsOn is the job's
+// runner when that action takes a matching version from the runner's tool
+// cache first (setup-go/node/python/java without check-latest): then that's
+// the runner image's cached version, if it has one.
+func exactVersion(root, v, pattern, tool, file, runsOn string, review, note func(string)) string {
 	if v == "" && file != "" && root != "" && filepath.IsLocal(filepath.FromSlash(file)) {
 		v = versionFromFile(root, file)
 		if filepath.Base(file) == ".tool-versions" {
@@ -887,10 +918,30 @@ func exactVersion(root, v, pattern, tool, file string, review, note func(string)
 		return v
 	}
 	if v != "" && !strings.Contains(v, "${{") {
-		// What setup-go/setup-node would pick today, pinned so evidence and gate agree.
+		// What the setup action would pick today, pinned so evidence and gate agree.
 		if got, err := resolve(tool, v); err == nil && exact.MatchString(got) {
-			note(fmt.Sprintf("%s %q resolved to %s, the newest matching release today; CI checks it again on every run (floating:)", tool, v, got))
-			note(floatingNote + tool + "=" + v + "\x00" + got)
+			rt := strings.ToLower(tool)
+			switch {
+			case runsOn == "":
+				note(fmt.Sprintf("%s %q resolved to %s, the newest matching release today; CI checks it again on every run (floating:)", tool, v, got))
+			default:
+				cached, image, err := imageCached(runsOn, rt)
+				pick := OnRunner(rt, v, got, false, cached)
+				switch {
+				case err != nil:
+					note(fmt.Sprintf("%s %q resolved to %s, the newest matching release today: the runner image's tool cache couldn't be read (%v); CI checks the version its tool cache gives on every run and runs the job if it isn't the pin (floating:)", tool, v, got, err))
+				case pick != got && exact.MatchString(pick):
+					note(fmt.Sprintf("%s %q resolved to %s, the version %s's runner image (%s) has in its tool cache, which its setup action takes without check-latest (the newest release is %s); CI checks its own tool cache on every run (floating:)", tool, v, pick, runsOn, image, got))
+					got = pick
+				default:
+					note(fmt.Sprintf("%s %q resolved to %s, the newest matching release, which %s's runner image (%s) has in its tool cache or downloads; CI checks its own tool cache on every run (floating:)", tool, v, got, runsOn, image))
+				}
+			}
+			flag := ""
+			if runsOn != "" {
+				flag = "preinstalled"
+			}
+			note(floatingNote + tool + "=" + v + "\x00" + got + "\x00" + flag)
 			return got
 		}
 	}
@@ -1431,3 +1482,8 @@ func eventDependent(j *job) bool {
 }
 
 const floatingNote = "\x00floating:" // internal marker in Notes, turned into Proposal.Floating
+
+// preinstalledNote marks a runtime whose CI setup action uses what the runner
+// has preinstalled first (Proposal.Preinstalled). It starts with floatingNote,
+// so the markers are dropped together.
+const preinstalledNote = floatingNote + "preinstalled\x00"

@@ -22,6 +22,9 @@ func fakeJavaReleases(t *testing.T) {
 		case strings.Contains(url, "services.gradle.org/versions/all"):
 			return []byte(`[{"version":"9.9-rc-1","rcFor":"9.9"},{"version":"9.8.2","current":true},{"version":"8.14.4"},{"version":"9.8.1"}]`), nil
 		}
+		if b, ok := fakeImageReport(url); ok {
+			return b, nil
+		}
 		return nil, os.ErrNotExist
 	}
 }
@@ -52,7 +55,10 @@ func TestSetupJavaTranslated(t *testing.T) {
 		{`{distribution: temurin, java-version: "21.0.5+11"}`, "temurin-21.0.5+11", ""},
 		{`{distribution: temurin, java-version: "21", check-latest: true}`, "temurin-21.0.6+7", ""},
 		{`{distribution: temurin, java-version: "17.x", check-latest: true}`, "temurin-17.0.20+101", ""},
-		{`{distribution: temurin, java-version: "21"}`, "temurin-21.0.6+7", "without check-latest: true"},
+		{`{distribution: temurin, java-version: "21"}`, "temurin-21.0.5+11", ""}, // the image's (setup-java takes it without check-latest)
+		{`{distribution: temurin, java-version: "11.x"}`, "", "isn't exact"},     // nothing on Adoptium's list
+		{`{distribution: temurin, java-version: "25"}`, "temurin-25.0.1+8", ""},  // not in the image's tool cache: downloaded
+		{`{distribution: temurin, java-version: "21", check-latest: "${{ env.X }}"}`, "", "expression"},
 		{`{distribution: temurin, java-version: "21.0.5"}`, "", "newest build of 21.0.5"},
 		{`{distribution: zulu, java-version: "21"}`, "", "distribution zulu"},
 		{`{java-version: "21"}`, "", "without a distribution"},
@@ -72,6 +78,11 @@ func TestSetupJavaTranslated(t *testing.T) {
 	}
 	if j := javaJob(t, "", "      - uses: actions/setup-java@v5\n        with: {distribution: temurin, java-version: \"21\", check-latest: true}\n"); j.Proposal.Floating["java"] != "temurin-21" {
 		t.Errorf("floating java %v, want temurin-21 (CI resolves it again)", j.Proposal.Floating)
+	} else if pre, ok := j.Proposal.Preinstalled["java"]; pre || !ok {
+		t.Errorf("check-latest: preinstalled %v, want java: false", j.Proposal.Preinstalled)
+	}
+	if j := javaJob(t, "", "      - uses: actions/setup-java@v5\n        with: {distribution: temurin, java-version: \"21\"}\n"); !j.Proposal.Preinstalled["java"] {
+		t.Errorf("no check-latest: preinstalled %v, want java: true (CI checks its tool cache)", j.Proposal.Preinstalled)
 	}
 	j := javaJob(t, "", "      - uses: actions/setup-java@v5\n        with: {distribution: temurin, java-version: \"21.0.5+11\"}\n")
 	if !strings.Contains(j.Proposal.Body, `MAVEN_ARGS=${MAVEN_ARGS:+$MAVEN_ARGS }-ntp`) || strings.Index(j.Proposal.Body, "-ntp") > strings.Index(j.Proposal.Body, "./mvnw") {

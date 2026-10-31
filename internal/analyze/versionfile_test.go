@@ -16,10 +16,10 @@ func TestToolVersionsNodeAndGo(t *testing.T) {
 	}
 	var reviews []string
 	rev := func(s string) { reviews = append(reviews, s) }
-	if v := exactVersion(d, "", `^[0-9]+\.[0-9]+\.[0-9]+$`, "Node", ".tool-versions", rev, func(string) {}); v != "24.21.0" {
+	if v := exactVersion(d, "", `^[0-9]+\.[0-9]+\.[0-9]+$`, "Node", ".tool-versions", "", rev, func(string) {}); v != "24.21.0" {
 		t.Errorf("Node from .tool-versions = %q, want 24.21.0 (reviews %q)", v, reviews)
 	}
-	if v := exactVersion(d, "", `^1\.[0-9]+\.[0-9]+$`, "Go", ".tool-versions", rev, func(string) {}); v != "1.26.10" {
+	if v := exactVersion(d, "", `^1\.[0-9]+\.[0-9]+$`, "Go", ".tool-versions", "", rev, func(string) {}); v != "1.26.10" {
 		t.Errorf("Go from .tool-versions = %q, want 1.26.10 (reviews %q)", v, reviews)
 	}
 	for _, c := range []struct{ in, tool, want string }{

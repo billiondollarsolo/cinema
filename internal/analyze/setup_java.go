@@ -106,19 +106,20 @@ func setupJava(c *SetupCtx) {
 		c.Review(fmt.Sprintf("Java version %q: cinema provisions an exact Temurin build (21.0.5+11) or the newest of a feature line (21, 21.0); EA, latest and ranges stay with CI", spec))
 		return
 	}
-	got := c.Exact("java", "temurin-"+spec, "", task.LookupRuntime("java").Version)
+	// Without check-latest, setup-java takes the newest matching JDK in the
+	// runner's tool cache (hosted images carry Temurin 11/17/21/25), which
+	// lags Adoptium's newest by up to an image release (gson, 2026-10: 17.0.20
+	// while 17.0.21+9 was out): the pin is the image's, and CI checks its own.
+	exact := task.LookupRuntime("java").Version
+	exactFn := c.Exact
+	if floating {
+		exactFn = c.ExactCached // c.Exact with check-latest: true
+	}
+	got := exactFn("java", "temurin-"+spec, "", exact)
 	if got == "" {
 		return
 	}
 	c.Pin("java", got)
-	if floating {
-		if !strings.EqualFold(with("check-latest"), "true") {
-			// Without check-latest, setup-java takes a matching JDK from the
-			// runner's tool cache (hosted images carry Temurin 8/11/17/21/25),
-			// which lags Adoptium's newest by up to an image release.
-			c.Review(fmt.Sprintf("Java %q without check-latest: true: CI uses the runner image's preinstalled Temurin %s, not necessarily %s; set check-latest: true (or an exact build) so CI and the pin agree", spec, spec, got))
-		}
-	}
 	javaMavenInputs(c, with)
 	if !strings.EqualFold(with("show-download-progress"), "true") {
 		// setup-java appends -ntp to MAVEN_ARGS (Maven 3.9+ reads it): logs only, but cheap to match.

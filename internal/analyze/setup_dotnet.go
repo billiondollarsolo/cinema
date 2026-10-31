@@ -2,6 +2,7 @@ package analyze
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -49,11 +50,64 @@ func dotnetReleases() ([]Release, error) {
 	var out []Release
 	for _, c := range idx.Channels {
 		if c.LatestSDK != "" {
-			out = append(out, Release{Version: c.LatestSDK, Stable: c.Phase != "preview"})
+			out = append(out, Release{Version: c.LatestSDK, Stable: c.Phase != "preview", GoLive: c.Phase == "go-live"})
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return versionLess(out[j].Version, out[i].Version) })
 	return out, nil
+}
+
+// newestGASDK is the newest SDK of the newest channel that's past release
+// candidates (go-live is an RC), "" if unknown.
+func newestGASDK() string {
+	rs, err := list("dotnet")
+	if err != nil {
+		return ""
+	}
+	for _, r := range rs {
+		if r.Stable && !r.GoLive {
+			return r.Version
+		}
+	}
+	return ""
+}
+
+// olderGlobalJSON is a global.json in the repo that can make dotnet pick an
+// SDK older than the newest installed, "" if none (dotnet reads the nearest
+// one up from where it runs). No sdk.version, or a latest* rollForward
+// (latestPatch is the default), takes the newest SDK that satisfies it: the
+// pin when CI has none newer, else nothing locally (only the pin is there),
+// so the task fails rather than passes. patch, feature, minor and major take
+// the lowest that does: an image's 10.0.1xx over the pinned 10.0.403.
+func olderGlobalJSON(root string) string {
+	found := ""
+	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return nil
+		case d.IsDir() && (d.Name() == ".git" || d.Name() == "node_modules"):
+			return filepath.SkipDir
+		case d.IsDir() || d.Name() != "global.json":
+			return nil
+		}
+		rel, _ := filepath.Rel(root, p)
+		b, err := readRepo(root, filepath.ToSlash(rel))
+		var g struct {
+			SDK struct {
+				Version     string `json:"version"`
+				RollForward string `json:"rollForward"`
+			} `json:"sdk"`
+		}
+		if err == nil {
+			err = json.Unmarshal(bytes.TrimSpace(bytes.TrimPrefix(b, []byte("\xef\xbb\xbf"))), &g)
+		}
+		if err != nil || g.SDK.Version != "" && slices.Contains([]string{"patch", "feature", "minor", "major"}, g.SDK.RollForward) {
+			found = filepath.ToSlash(rel)
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 // versionLess compares the numeric parts of two versions (prereleases aside).
@@ -126,14 +180,13 @@ func setupDotnet(c *SetupCtx) {
 		c.Review("setup-dotnet installs an " + a + " SDK on an x64 runner")
 	}
 	dir := c.Env["DOTNET_INSTALL_DIR"]
-	switch {
-	case dir == "" || strings.HasPrefix(dir, "/usr/"):
-		c.Review("setup-dotnet installs into /usr/share/dotnet next to the runner's preinstalled SDKs and runtimes: dotnet there picks the newest SDK unless global.json selects one, and apps run on the newest runtime patch present. Give it a directory of its own (job env DOTNET_INSTALL_DIR: ~/.dotnet-sdk, and skip-lts-prepass: true) so CI uses exactly the pinned SDK")
-	case c.With("skip-lts-prepass") != "true":
+	shared := dir == "" || strings.HasPrefix(dir, "/usr/")
+	if !shared && c.With("skip-lts-prepass") != "true" {
 		c.Review("setup-dotnet first installs the newest LTS .NET runtime and its dotnet host (it floats, and apps may roll forward to it): set skip-lts-prepass: true so CI uses exactly the pinned SDK")
 	}
 
 	var pins []string
+	floated := false
 	for _, s := range specs {
 		v := ""
 		switch {
@@ -143,6 +196,7 @@ func setupDotnet(c *SetupCtx) {
 			c.Review(fmt.Sprintf(".NET version %q floats in a way cinema can't check again in CI yet: pin an exact SDK in runtime:", s))
 		default:
 			v = c.Exact("dotnet", s, "", exact) // recorded as floating: when resolved
+			floated = v != ""
 		}
 		if v != "" && !slices.Contains(pins, v) {
 			pins = append(pins, v)
@@ -154,6 +208,33 @@ func setupDotnet(c *SetupCtx) {
 	case 1:
 	default:
 		c.Review("setup-dotnet installs several SDKs (" + strings.Join(pins, ", ") + "): a task pins one, and with several dotnet uses the newest unless global.json picks one")
+	}
+	if shared {
+		// Next to the image's SDKs, dotnet uses the newest SDK and apps the
+		// newest runtime patch present. With one floating spec on the newest
+		// GA channel, that's the pin's own: the image's SDKs are that channel's
+		// or older, and CI runs the job if its runner has any newer (lab:
+		// NSubstitute's 10.0.x used 10.0.401, that day's newest). An older
+		// channel loses to the image's newer SDKs; global.json picks among them.
+		why := ""
+		switch ga := newestGASDK(); {
+		case !floated || len(specs) != 1:
+			why = "only a single floating spec on the newest GA channel (10.0.x) is the SDK dotnet uses there"
+		case ga != pins[0]:
+			why = fmt.Sprintf("%s isn't the newest GA SDK (%s), so the image's newer SDKs win", pins[0], cmp.Or(ga, "unknown"))
+		case c.Root == "":
+			why = "the repo isn't here to look for global.json"
+		default:
+			if f := olderGlobalJSON(c.Root); f != "" {
+				why = f + " can select an older SDK among the image's (or isn't plain JSON)"
+			}
+		}
+		c.Preinstalled("dotnet") // also for a review: approved as is, CI still checks
+		if why != "" {
+			c.Review("setup-dotnet installs into /usr/share/dotnet next to the runner's preinstalled SDKs and runtimes: dotnet there picks the newest SDK unless global.json selects one, and apps run on the newest runtime patch present; " + why + ". Give it a directory of its own (job env DOTNET_INSTALL_DIR: ~/.dotnet-sdk, and skip-lts-prepass: true) so CI uses exactly the pinned SDK")
+		} else {
+			c.Note("setup-dotnet installs " + pins[0] + " next to the runner's preinstalled SDKs: it's the newest GA SDK, so dotnet uses it there; CI checks its runner has no newer SDK on every run (preinstalled:)")
+		}
 	}
 	c.Pin("dotnet", pins[0])
 	// GitHub's image puts ~/.dotnet/tools (dotnet tool install -g) on PATH.

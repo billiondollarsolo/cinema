@@ -50,6 +50,25 @@ func TestDraftProbesUnpinnedTools(t *testing.T) {
 	}
 }
 
+// floating: and preinstalled: load as drafted, false values included (absent
+// means a task from before, checked both ways).
+func TestDraftPreinstalledLoads(t *testing.T) {
+	p := &analyze.Proposal{ID: "test", Go: "1.26.9", Node: "24.22.2", Body: "(\nmake test\n)",
+		Floating: map[string]string{"go": "1.26", "node": "lts/*"}, Preinstalled: map[string]bool{"go": true, "node": false}}
+	out, err := draft([]analyze.Job{{Workflow: "ci.yml", ID: "test", Verdict: analyze.Task, Proposal: p}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := task.Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	tk := cfg.Tasks["test"]
+	if pre, ok := tk.Preinstalled["node"]; tk.Floating["go"] != "1.26" || !tk.Preinstalled["go"] || pre || !ok {
+		t.Fatalf("floating %v preinstalled %v\n%s", tk.Floating, tk.Preinstalled, out)
+	}
+}
+
 // A drafted services: block loads as task services.
 func TestDraftServicesLoad(t *testing.T) {
 	jobs := []analyze.Job{{Workflow: "ci.yml", ID: "db", Verdict: analyze.Task, Proposal: &analyze.Proposal{ID: "db", Body: "(\nmake test\n)",

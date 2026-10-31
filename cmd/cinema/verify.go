@@ -12,6 +12,7 @@ import (
 	"github.com/billiondollarsolo/cinema/internal/analyze"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -713,20 +714,77 @@ func eventName(ev ghEvent) string {
 }
 
 // floatingMoved resolves a task's floating: specs as CI's setup actions would
-// today. A pin that isn't today's release, or a spec that can't be resolved,
-// means the job runs: the receipt describes yesterday's toolchain (plan §11.2).
+// on this runner today. A pin that isn't what the job would use, or a spec
+// that can't be resolved, means the job runs: the receipt describes another
+// toolchain (plan §11.2). Go, Node, Python and Java without check-latest use
+// the tool cache's newest match (the newest release only when none matches);
+// .NET next to the image's SDKs uses the newest SDK there. A task that doesn't
+// say which (drafted before preinstalled:) must match both ways.
 func floatingMoved(t *task.Task) string {
-	for tool, spec := range t.Floating {
-		pin := t.Runtime.Get(tool)
-		got, err := floatingResolve(cmp.Or(map[string]string{"go": "Go", "node": "Node"}[tool], tool), spec)
-		switch {
-		case err != nil:
+	for _, tool := range sortedFloating(t) {
+		spec, pin := t.Floating[tool], t.Runtime.Get(tool)
+		is := func(v string) bool { return v == pin || strings.HasPrefix(pin, v+"+") } // 1.83.0+clippy is 1.83.0 with components
+		newest, err := floatingResolve(cmp.Or(map[string]string{"go": "Go", "node": "Node"}[tool], tool), spec)
+		if err != nil {
 			return fmt.Sprintf("can't resolve %s %q today (%v): running it", tool, spec, err)
-		case got != pin && !strings.HasPrefix(pin, got+"+"): // 1.83.0+clippy is 1.83.0 with components
-			return fmt.Sprintf("%s %q is %s today; the task pins %s: running it (rerun cinema setup to pin the new release)", tool, spec, got, pin)
+		}
+		pre, known := t.Preinstalled[tool]
+		if (!known || !pre || tool == "dotnet") && !is(newest) { // setup-dotnet installs the newest of the spec, whatever is preinstalled
+			return fmt.Sprintf("%s %q is %s today; the task pins %s: running it (rerun cinema setup to pin the new release)", tool, spec, newest, pin)
+		}
+		if known && !pre || !analyze.UsesRunnerFirst(tool) || tool != "dotnet" && analyze.BeforeCache(spec) {
+			continue
+		}
+		if why := runnerElsewhere(t); why != "" {
+			return fmt.Sprintf("%s %q comes from the runner's preinstalled %s, and %s: running it", tool, spec, tool, why)
+		}
+		if tool == "dotnet" {
+			newer, err := analyze.NewerSDKs(analyze.DotnetSDKs, pin)
+			switch {
+			case err != nil:
+				return fmt.Sprintf("can't list this runner's .NET SDKs (%v): running it", err)
+			case len(newer) > 0:
+				return fmt.Sprintf("this runner has .NET SDK %s, newer than the pinned %s, and dotnet uses the newest: running it", strings.Join(newer, ", "), pin)
+			}
+			continue
+		}
+		dir := os.Getenv("RUNNER_TOOL_CACHE")
+		if dir == "" {
+			return fmt.Sprintf("%s %q comes from the runner's tool cache, and RUNNER_TOOL_CACHE isn't set (not a GitHub runner): running it", tool, spec)
+		}
+		cached, err := analyze.ToolCache(dir, tool)
+		if err != nil {
+			return fmt.Sprintf("can't read the runner's tool cache (%v): running it", err)
+		}
+		if got := analyze.OnRunner(tool, spec, newest, false, cached); !is(got) {
+			return fmt.Sprintf("%s %q is %s on this runner (its tool cache; the newest release is %s); the task pins %s: running it (rerun cinema setup)", tool, spec, got, newest, pin)
 		}
 	}
 	return ""
 }
 
+// runnerElsewhere: why this runner's preinstalled tools aren't the covered
+// job's, or "". The gate runs on ubuntu-latest: a job on another release has
+// another image (a non-container task's os= says so too; a container job's
+// setup actions still use the host's tool cache).
+func runnerElsewhere(t *task.Task) string {
+	l := strings.ToLower(t.RunsOn)
+	if l == "" || l == "ubuntu-latest" {
+		return ""
+	}
+	if _, _, rel := task.HostShape(); rel != l {
+		return "the job runs on " + t.RunsOn + ", this runner is " + cmp.Or(rel, "unknown")
+	}
+	return ""
+}
+
 var floatingResolve = analyze.Resolve // a var for tests
+
+func sortedFloating(t *task.Task) []string {
+	ks := make([]string, 0, len(t.Floating))
+	for k := range t.Floating {
+		ks = append(ks, k)
+	}
+	slices.Sort(ks)
+	return ks
+}

@@ -72,6 +72,14 @@ func list(tool string) ([]release, error) {
 			out = append(out, release{Version: strings.TrimPrefix(r.Version, "go"), Stable: r.Stable})
 		}
 	default:
+		if rel, ok := strings.CutPrefix(tool, "image:"); ok {
+			rs, err := imageReport(rel)
+			if err != nil {
+				return nil, err
+			}
+			out = rs
+			break
+		}
 		f := lister[tool]
 		if f == nil {
 			return nil, fmt.Errorf("no release list for %s", tool)

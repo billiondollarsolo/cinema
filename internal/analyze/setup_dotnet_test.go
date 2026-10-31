@@ -50,6 +50,48 @@ func dotnetJob(t *testing.T, root, env, with string) Job {
 
 const ownDir = "    env: {DOTNET_INSTALL_DIR: ~/.dotnet-sdk}\n"
 
+// Next to the runner's preinstalled SDKs (lab finding 12): only a floating
+// spec on the newest GA channel is the SDK dotnet uses there, and CI checks
+// its runner has none newer (preinstalled:).
+func TestDotnetNewestChannelShared(t *testing.T) {
+	fakeDotnetIndex(t)
+	for name, c := range map[string]struct{ with, globalJSON, review string }{
+		"newest channel":                {"dotnet-version: 10.0.x", "", ""},
+		"channel + latest":              {"dotnet-version: latest, dotnet-channel: \"10.0\"", "", ""},
+		"with prepass off":              {"dotnet-version: 10.0.x, skip-lts-prepass: true", "", ""},
+		"older channel":                 {"dotnet-version: 8.0.x", "", "isn't the newest GA SDK (10.0.403)"},
+		"latest is an RC":               {"dotnet-version: latest", "", "isn't the newest GA SDK"},
+		"exact":                         {"dotnet-version: 10.0.403", "", "only a single floating spec"},
+		"several":                       {"dotnet-version: \"10.0.x\\n8.0.x\"", "", "several SDKs"},
+		"global.json, test runner only": {"dotnet-version: 10.0.x", `{"test":{"runner":"Microsoft.Testing.Platform"}}`, ""}, // NSubstitute
+		"global.json, latestFeature":    {"dotnet-version: 10.0.x", `{"sdk":{"version":"10.0.100","rollForward":"latestFeature"}}`, ""},
+		"global.json, default":          {"dotnet-version: 10.0.x", `{"sdk":{"version":"10.0.100"}}`, ""}, // latestPatch: fails locally, never a pass
+		"global.json, feature":          {"dotnet-version: 10.0.x", `{"sdk":{"version":"10.0.100","rollForward":"feature"}}`, "src/global.json can select an older SDK"},
+		"global.json, comments":         {"dotnet-version: 10.0.x", "{// x\n}", "src/global.json can select"},
+	} {
+		d := t.TempDir()
+		if c.globalJSON != "" {
+			os.MkdirAll(filepath.Join(d, "src"), 0o755)
+			os.WriteFile(filepath.Join(d, "src", "global.json"), []byte(c.globalJSON), 0o644)
+		}
+		j := dotnetJob(t, d, "", c.with)
+		reasons := strings.Join(j.Reasons, "\n")
+		if c.review != "" {
+			if j.Verdict != Review || !strings.Contains(reasons, c.review) {
+				t.Errorf("%s: %s %q", name, j.Verdict, reasons)
+			}
+			continue
+		}
+		if p := j.Proposal; j.Verdict != Task || p.Runtimes["dotnet"] != "10.0.403" || !p.Preinstalled["dotnet"] || p.Floating["dotnet"] == "" {
+			t.Errorf("%s: %s %q %+v", name, j.Verdict, reasons, p)
+		}
+	}
+	// In a directory of its own, the runner's SDKs don't matter.
+	if j := dotnetJob(t, t.TempDir(), ownDir, "dotnet-version: 8.0.x, skip-lts-prepass: true"); j.Verdict != Task || j.Proposal.Preinstalled["dotnet"] {
+		t.Errorf("own dir: %s %v preinstalled %v", j.Verdict, j.Reasons, j.Proposal.Preinstalled)
+	}
+}
+
 func TestSetupDotnet(t *testing.T) {
 	fakeDotnetIndex(t)
 	root := t.TempDir()
