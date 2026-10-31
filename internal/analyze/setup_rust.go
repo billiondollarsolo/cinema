@@ -2,6 +2,8 @@ package analyze
 
 import (
 	"cmp"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -297,7 +299,7 @@ func readRustToolchain(root string) (f *rustFile, name, why string) {
 		return nil, "", "Rust: both rust-toolchain and rust-toolchain.toml: pin the toolchain in runtime:"
 	}
 	name = found[0]
-	src := versionFromFile(filepath.Join(root, name)) // no symlinks, capped
+	src := versionFromFile(root, name) // no symlinks, capped
 	bad := func(what string) (*rustFile, string, string) {
 		return nil, name, "Rust: " + name + ": " + what + ": pin the toolchain in runtime:"
 	}
@@ -375,9 +377,13 @@ func rustUncomment(s string) string {
 
 // rustConfigFlags: the repo's .cargo/config sets rustflags.
 func rustConfigFlags(root string) bool {
+	if root == "" {
+		return false
+	}
 	for _, n := range []string{"config.toml", "config"} {
-		if b, err := os.ReadFile(filepath.Join(root, ".cargo", n)); err == nil && strings.Contains(string(b), "rustflags") {
-			return true
+		b, err := readRepo(root, ".cargo/"+n)
+		if err == nil && strings.Contains(string(b), "rustflags") || err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return true // or can't tell: cargo would read it
 		}
 	}
 	return false

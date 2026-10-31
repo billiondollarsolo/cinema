@@ -3,7 +3,6 @@ package analyze
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -34,7 +33,7 @@ func withEnv(s string, env map[string]string) string {
 func golangciStep(root string, with map[string]any, env map[string]string, note func(string)) (string, string) {
 	v := withEnv(str(with["version"]), env)
 	if f := str(with["version-file"]); v == "" && f != "" && filepath.IsLocal(filepath.FromSlash(f)) {
-		v = versionFromFile(filepath.Join(root, filepath.FromSlash(f)))
+		v = versionFromFile(root, f)
 	}
 	m := exactSemver.FindStringSubmatch(strings.TrimSpace(v))
 	if m == nil {
@@ -73,7 +72,7 @@ func pnpmStep(root string, with map[string]any, env map[string]string, note func
 		var pkg struct {
 			PackageManager string `json:"packageManager"`
 		}
-		if b, err := os.ReadFile(filepath.Join(root, "package.json")); err == nil && json.Unmarshal(b, &pkg) == nil {
+		if b, err := readRepo(root, "package.json"); err == nil && json.Unmarshal(b, &pkg) == nil {
 			if pm, ok := strings.CutPrefix(pkg.PackageManager, "pnpm@"); ok {
 				v, _, _ = strings.Cut(pm, "+")
 			}

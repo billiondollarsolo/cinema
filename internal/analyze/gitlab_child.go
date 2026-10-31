@@ -29,7 +29,7 @@ type GitLabConfig struct{ c *glConfig }
 // LoadGitLab parses root's .gitlab-ci.yml (src, if not nil).
 func LoadGitLab(root string, src []byte) (*GitLabConfig, error) {
 	if src == nil {
-		b, err := readRepoFile(root, GitLabFile)
+		b, err := readRepoNoLinks(root, GitLabFile)
 		if err != nil {
 			return nil, err
 		}
@@ -41,6 +41,10 @@ func LoadGitLab(root string, src []byte) (*GitLabConfig, error) {
 	}
 	return &GitLabConfig{c}, nil
 }
+
+// DefaultBranch is the project's default branch, from origin/HEAD ("" if
+// unknown).
+func (g *GitLabConfig) DefaultBranch() string { return gitlabRepo(g.c.root).DefaultBranch }
 
 // Stages are the pipeline's stages, in order.
 func (g *GitLabConfig) Stages() []string { return slices.Clone(g.c.stages) }

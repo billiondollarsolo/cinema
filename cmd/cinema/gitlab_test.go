@@ -13,6 +13,8 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/billiondollarsolo/cinema/internal/analyze"
+	"github.com/billiondollarsolo/cinema/internal/plan"
+	"github.com/billiondollarsolo/cinema/internal/task"
 )
 
 // glPipelineEnv is a GitLab job's view of the project (the analyzer reads it).
@@ -97,7 +99,7 @@ func TestPlanGitLab(t *testing.T) {
 	if !strings.HasPrefix(out, strings.NewReplacer("\nunit:\n", "\n.cinema:unit:\n", "\n\"lint go\":\n", "\n\".cinema:lint go\":\n", "\nuses-compile:\n", "\n.cinema:uses-compile:\n").Replace(glSetupCI)) {
 		t.Fatalf("the rest of the file changed:\n%s", out)
 	}
-	for _, want := range []string{"cinema verify --gitlab-child .cinema-child.yml", "cinema@v0.1.0", "strategy: depend",
+	for _, want := range []string{"cinema verify --gitlab-child .cinema-child.yml --trust-branch main\n", "cinema@v0.1.0", "strategy: depend",
 		"- artifact: .cinema-child.yml", "stage: \"build\"", "stage: \"test\"", "GIT_DEPTH: \"0\""} {
 		if !strings.Contains(out, want) {
 			t.Errorf("setup's jobs lack %q:\n%s", want, out)
@@ -179,31 +181,44 @@ func TestPlanGitLabPipelines(t *testing.T) {
 
 func TestGitLabEvent(t *testing.T) {
 	env := func(kv ...string) func(string) (string, bool) {
-		m := map[string]string{"GITLAB_CI": "true", "CI_SERVER_HOST": "gitlab.example.com", "CI_PROJECT_PATH": "Group/Sub/Proj"}
+		m := map[string]string{"GITLAB_CI": "true", "CI_SERVER_HOST": "gitlab.example.com", "CI_PROJECT_PATH": "Group/Sub/Proj", "CI_PROJECT_ID": "7"}
 		for i := 0; i+1 < len(kv); i += 2 {
 			m[kv[i]] = kv[i+1]
 		}
 		return func(k string) (string, bool) { v, ok := m[k]; return v, ok }
 	}
+	sha := func(c string) string { return strings.Repeat(c, 40) }
 	e, err := gitlabEvent(env("CI_PIPELINE_SOURCE", "push"), "", "c0")
 	if err != nil || e.name != "push" || e.base != "c0" || e.repo != "gitlab.example.com/group/sub/proj" || e.allRun != "" {
 		t.Fatalf("push: %+v %v", e, err)
 	}
 	e, _ = gitlabEvent(env("CI_PIPELINE_SOURCE", "merge_request_event", "CI_MERGE_REQUEST_EVENT_TYPE", "merged_result",
-		"CI_MERGE_REQUEST_TARGET_BRANCH_SHA", "b1", "CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", "h1",
-		"CI_MERGE_REQUEST_PROJECT_ID", "7", "CI_MERGE_REQUEST_SOURCE_PROJECT_ID", "7"), "", "m1")
-	if e.name != "pull_request" || e.base != "b1" || e.head != "h1" || !e.change || e.fork {
+		"CI_MERGE_REQUEST_TARGET_BRANCH_SHA", sha("b"), "CI_MERGE_REQUEST_SOURCE_BRANCH_SHA", sha("1"),
+		"CI_MERGE_REQUEST_PROJECT_ID", "7", "CI_MERGE_REQUEST_SOURCE_PROJECT_ID", "7"), "", sha("2"))
+	if e.name != "pull_request" || e.base != sha("b") || e.head != sha("1") || !e.change || e.fork {
 		t.Fatalf("merged result: %+v", e)
 	}
 	e, _ = gitlabEvent(env("CI_PIPELINE_SOURCE", "merge_request_event", "CI_MERGE_REQUEST_EVENT_TYPE", "detached",
-		"CI_MERGE_REQUEST_DIFF_BASE_SHA", "d1", "CI_MERGE_REQUEST_PROJECT_ID", "7", "CI_MERGE_REQUEST_SOURCE_PROJECT_ID", "9"), "", "h2")
-	if e.base != "d1" || e.head != "h2" || !e.fork {
+		"CI_MERGE_REQUEST_DIFF_BASE_SHA", sha("d"), "CI_MERGE_REQUEST_PROJECT_ID", "7", "CI_MERGE_REQUEST_SOURCE_PROJECT_ID", "9"), "", sha("3"))
+	if e.base != sha("d") || e.head != sha("3") || !e.fork {
 		t.Fatalf("fork MR: %+v", e)
 	}
+	// Project IDs that are missing (a pipeline variable can blank them) or
+	// disagree with the project the job runs in count as a fork.
+	for _, kv := range [][]string{{}, {"CI_MERGE_REQUEST_PROJECT_ID", "7"}, {"CI_MERGE_REQUEST_PROJECT_ID", "9", "CI_MERGE_REQUEST_SOURCE_PROJECT_ID", "9"}} {
+		e, _ = gitlabEvent(env(append([]string{"CI_PIPELINE_SOURCE", "merge_request_event", "CI_MERGE_REQUEST_TARGET_BRANCH_SHA", sha("b")}, kv...)...), "", sha("4"))
+		if !e.fork {
+			t.Errorf("%v: not a fork", kv)
+		}
+	}
 	e, _ = gitlabEvent(env("CI_PIPELINE_SOURCE", "merge_request_event", "CI_MERGE_REQUEST_EVENT_TYPE", "merge_train",
-		"CI_MERGE_REQUEST_TARGET_BRANCH_SHA", "b1"), "", "t1")
+		"CI_MERGE_REQUEST_TARGET_BRANCH_SHA", sha("b")), "", sha("5"))
 	if e.name != "merge_group" {
 		t.Fatalf("merge train: %+v", e)
+	}
+	// The SHAs reach git's command line: anything but a commit ID is refused.
+	if _, err := gitlabEvent(env("CI_PIPELINE_SOURCE", "merge_request_event", "CI_MERGE_REQUEST_TARGET_BRANCH_SHA", "--output=/tmp/x"), "", sha("6")); err == nil {
+		t.Error("took an option for the base commit")
 	}
 	for _, src := range []string{"web", "api", "trigger", "schedule", "pipeline"} {
 		if e, _ := gitlabEvent(env("CI_PIPELINE_SOURCE", src), "", "c"); e.allRun == "" {
@@ -269,6 +284,7 @@ other:
 	}
 	g.write(".gitlab-ci.yml", string(p.out))
 	g.write(".cinema/tasks.yaml", tasks)
+	g.write(GitLabTrustFile, g.keys)
 	g.git("add", "-A")
 	g.git("commit", "-qm", "gitlab")
 	if out, code := g.cinema("trust"); code != 0 {
@@ -279,13 +295,18 @@ other:
 	if out, code := g.cinema("push"); code != 0 {
 		t.Fatalf("push: %s", out)
 	}
+	trust := "main" // the cinema job's --trust-branch
 	child := func(source string, extra ...string) (map[string]any, string) {
 		ci := filepath.Join(t.TempDir(), "ci")
 		mustRun(t, "", "git", "clone", "-q", g.bare, ci)
-		cmd := exec.Command(bin, "verify", "--gitlab-child", ".cinema-child.yml")
+		args := []string{"verify", "--gitlab-child", ".cinema-child.yml"}
+		if trust != "" {
+			args = append(args, "--trust-branch", trust)
+		}
+		cmd := exec.Command(bin, args...)
 		cmd.Dir = ci
-		cmd.Env = append(append(os.Environ(), "CINEMA_TRUSTED_KEYS="+g.keys, "CI_PIPELINE_SOURCE="+source, "CINEMA_DATA_DIR="+t.TempDir(),
-			"CI_MERGE_REQUEST_TARGET_BRANCH_NAME=main", "CI_MERGE_REQUEST_PROJECT_ID=7", "CI_MERGE_REQUEST_SOURCE_PROJECT_ID=7"), extra...)
+		cmd.Env = append(append(os.Environ(), "CI_PIPELINE_SOURCE="+source, "CINEMA_DATA_DIR="+t.TempDir(),
+			"CI_MERGE_REQUEST_TARGET_BRANCH_NAME=main", "CI_PROJECT_ID=7", "CI_MERGE_REQUEST_PROJECT_ID=7", "CI_MERGE_REQUEST_SOURCE_PROJECT_ID=7"), extra...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("%v\n%s", err, out)
@@ -321,6 +342,9 @@ other:
 	if l, _ := v["lint"].(map[string]any); l == nil || fmt.Sprint(l["rules"]) != "[map[when:on_success]]" {
 		t.Errorf("lint in a merge request pipeline:\n%s", log)
 	}
+	if !regexp.MustCompile(`REUSE +unit`).MatchString(log) {
+		t.Errorf("unit's receipt isn't reused in a merge request pipeline:\n%s", log)
+	}
 	// Another source: every task runs, so every hidden job is in the child.
 	v, log = child("web")
 	if _, ok := v["unit"]; !ok || !regexp.MustCompile(`pipeline source web`).MatchString(log) {
@@ -331,6 +355,36 @@ other:
 	v, log = child("push", "CI_PROJECT_PATH=")
 	if _, ok := v["unit"]; !ok || !strings.Contains(log, "every covered job runs") {
 		t.Errorf("unjudgeable pipeline:\n%s", log)
+	}
+
+	// Pipeline variables can't name the trust root: CINEMA_TRUSTED_KEYS (as
+	// git push -o ci.variable=… would set it) is ignored, and a trust branch
+	// without the file means every task runs.
+	main := mustRun(t, g.repo, "git", "rev-parse", "HEAD")
+	g.git("rm", "-q", GitLabTrustFile)
+	g.git("commit", "-qm", "no keys")
+	g.git("push", "-q", g.bare, "HEAD:nokeys")
+	g.write("side.txt", "x")
+	g.git("add", "-A")
+	g.git("commit", "-qm", "side")
+	side := mustRun(t, g.repo, "git", "rev-parse", "HEAD")
+	g.git("push", "-q", g.bare, "HEAD:side")
+	g.git("reset", "-q", "--hard", main)
+	trust = "nokeys"
+	v, log = child("push", "CINEMA_TRUSTED_KEYS="+g.keys)
+	if _, ok := v["unit"]; !ok || !strings.Contains(log, "CINEMA_TRUSTED_KEYS is ignored on GitLab") || !strings.Contains(log, "no "+GitLabTrustFile+" on nokeys") {
+		t.Errorf("keys from the environment:\n%s", log)
+	}
+	trust = "" // a cinema job from before --trust-branch
+	if v, log = child("push", "CINEMA_TRUSTED_KEYS="+g.keys); v["unit"] == nil || !strings.Contains(log, "--trust-branch") {
+		t.Errorf("no trust branch:\n%s", log)
+	}
+	// A merge request whose base (tasks.yaml) a pipeline variable points at a
+	// commit that isn't on the trust branch: every task runs.
+	trust = "main"
+	v, log = child("merge_request_event", "CI_MERGE_REQUEST_TARGET_BRANCH_SHA="+side)
+	if !strings.Contains(log, "isn't on main") || regexp.MustCompile(`REUSE +unit`).MatchString(log) {
+		t.Errorf("base off the trust branch:\n%s", log)
 	}
 }
 
@@ -378,5 +432,37 @@ func TestGitLabForgeConclusion(t *testing.T) {
 	}
 	if got, _ := f.conclusion("zzz", analyze.Job{Name: "lint"}); got.Conclusion != "none" {
 		t.Errorf("no pipeline: %+v", got)
+	}
+}
+
+// An include cinema can't read can change any job, and no job digest covers
+// its content: while there is one, the child pipeline runs every covered
+// job, even one whose graduated task was reused.
+func TestGitLabChildUnreadableInclude(t *testing.T) {
+	glPipelineEnv(t)
+	t.Setenv("CI_PIPELINE_SOURCE", "push")
+	t.Setenv("CI_PIPELINE_ID", "") // no spot check
+	for _, inc := range []string{"", "include: [{remote: 'https://example.com/ci.yml'}]\n"} {
+		root := t.TempDir()
+		os.WriteFile(filepath.Join(root, analyze.GitLabFile), []byte(inc+".cinema:unit:\n  image: alpine:3.20\n  script: [make test]\n"), 0o644)
+		var d string
+		for _, j := range glJobs(t, root, nil) {
+			if j.ID == "unit" {
+				d = j.LegDigest()
+			}
+		}
+		if d == "" {
+			t.Fatal("no digest for unit")
+		}
+		cfg := &task.Config{Tasks: map[string]*task.Task{"unit": {ID: "unit", Covers: analyze.GitLabFile + "#unit", JobDigest: d, Graduated: &task.Graduation{JobDigest: d}}}}
+		rep := gateReport{Tasks: []gateTaskReport{{GateDecision: plan.GateDecision{Task: "unit", Decision: plan.GateReuse}}}}
+		out := filepath.Join(root, "child.yml")
+		if err := writeGitLabChild(cfg, rep, root, out); err != nil {
+			t.Fatal(err)
+		}
+		b, _ := os.ReadFile(out)
+		if runs := strings.Contains(string(b), `"unit":`); runs != (inc != "") {
+			t.Errorf("%q: unit runs = %v:\n%s", inc, runs, b)
+		}
 	}
 }

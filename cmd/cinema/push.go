@@ -40,7 +40,7 @@ func cmdKeys(args []string) int {
 			fmt.Fprintf(os.Stderr, "cinema keys: %v\n", err)
 			return exitBadArgs
 		}
-		fmt.Fprintln(os.Stderr, "created this machine's signing key; add the line below to the repo variable CINEMA_TRUSTED_KEYS:")
+		fmt.Fprintln(os.Stderr, "created this machine's signing key; add the line below to the repo variable CINEMA_TRUSTED_KEYS (GitHub) or to "+GitLabTrustFile+" on the default branch (GitLab):")
 	} else {
 		priv, err := evidence.LoadKey(dir)
 		if err != nil {

@@ -36,7 +36,7 @@
 
 | Command | What it does |
 |---|---|
-| `cinema keys init \| export` | Creates this machine's signing key; prints its public line for `CINEMA_TRUSTED_KEYS`. |
+| `cinema keys init \| export` | Creates this machine's signing key; prints its public line for `CINEMA_TRUSTED_KEYS` (GitLab: `.cinema/trusted-keys` on the default branch). |
 | `cinema push [--remote R] [--run [-j N]] [--merge-base REF] [--commit REV]... [--notes-only] [--dry-run]` | Signs receipts for the commits being pushed (failed runs too, so a retry elsewhere can't hide them) and pushes the branch and the notes together. `--run` first runs whatever lacks clean evidence for HEAD and for HEAD merged into the default branch (`--merge-base`; `none` to skip). `--notes-only` pushes evidence without the branch. `--dry-run` shows what would be signed. |
 
 ## In CI
@@ -44,6 +44,7 @@
 | Command | What it does |
 |---|---|
 | `cinema verify --event FILE --skip-outputs WORKFLOW` | What setup's `cinema` job runs: verifies receipts for the tasks covering that workflow's jobs, writes `skip_<job>` / `exclude_<job>` step outputs, and a job summary on the run page: each covered job, skipped or run, and why. |
+| `cinema verify --gitlab-child FILE --trust-branch BRANCH` | What setup's GitLab `cinema` job runs: the same judgment, with the trusted keys from `.cinema/trusted-keys` on `BRANCH`; writes the child pipeline of the covered jobs that still need to run ([gitlab.md](gitlab.md)). |
 | `cinema verify --event FILE [--execute [--task ID]] [--report FILE]` | The older gate form: reuse what's proven, run the rest in this job (`--execute`), write `gate-report.json`. |
 
 ## Test results

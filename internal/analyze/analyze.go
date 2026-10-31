@@ -10,15 +10,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"unicode"
 
 	"go.yaml.in/yaml/v3"
@@ -140,9 +139,9 @@ func Repo(root string) ([]Job, error) {
 	sort.Strings(files)
 	var out []Job
 	for _, f := range files {
-		b, err := os.ReadFile(f)
+		b, err := readRepo(root, filepath.Join(".github", "workflows", filepath.Base(f)))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%s: %w", filepath.Base(f), err)
 		}
 		jobs, err := workflowAt(root, filepath.Base(f), b)
 		if err != nil {
@@ -878,7 +877,7 @@ func evalValue(src string, combo map[string]string) (string, bool) {
 
 func exactVersion(root, v, pattern, tool, file string, review, note func(string)) string {
 	if v == "" && file != "" && root != "" && filepath.IsLocal(filepath.FromSlash(file)) {
-		v = versionFromFile(filepath.Join(root, filepath.FromSlash(file)))
+		v = versionFromFile(root, file)
 		if filepath.Base(file) == ".tool-versions" {
 			v = toolVersionsEntry(v, tool)
 		}
@@ -909,22 +908,14 @@ func exactVersion(root, v, pattern, tool, file string, review, note func(string)
 // versionFromFile reads a version file the way setup-go/setup-node do:
 // .go-version / .nvmrc / .node-version hold the version; go.mod's toolchain
 // directive wins over its go directive. "" if absent or unreadable.
-// The workflow names the file, so it's untrusted: a symlink to /dev/zero or a
-// FIFO must not hang or exhaust memory (no symlinks, regular files, capped read).
-func versionFromFile(path string) string {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+// The workflow names the file, so it's untrusted: it's read inside the repo
+// only, a regular file, capped (readRepo).
+func versionFromFile(root, rel string) string {
+	b, err := readRepo(root, rel)
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
-	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
-		return ""
-	}
-	b, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
-	if err != nil || len(b) > 1<<20 {
-		return ""
-	}
-	if filepath.Base(path) == "go.mod" {
+	if path.Base(filepath.ToSlash(rel)) == "go.mod" {
 		var goDir string
 		for _, line := range strings.Split(string(b), "\n") {
 			f := strings.Fields(line)
@@ -1277,7 +1268,7 @@ func Printable(s string) string {
 // firstFile is the first of names that exists as a regular file in root ("" if none).
 func firstFile(root string, names ...string) string {
 	for _, n := range names {
-		if fi, err := os.Lstat(filepath.Join(root, n)); root != "" && err == nil && fi.Mode().IsRegular() {
+		if fi, err := lstatRepo(root, n); err == nil && fi.Mode().IsRegular() {
 			return n
 		}
 	}

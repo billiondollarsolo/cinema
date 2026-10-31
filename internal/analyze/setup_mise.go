@@ -1,7 +1,9 @@
 package analyze
 
 import (
-	"os"
+	"errors"
+	"io/fs"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -144,12 +146,16 @@ func miseConfig(root, wd string, inputs map[string]string, files []string, lock 
 		if !filepath.IsLocal(filepath.FromSlash(wd)) {
 			return nil, nil, "working_directory " + wd + " is outside the repo"
 		}
+		if _, err := statRepo(root, wd); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, nil, "working_directory " + wd + " leads outside the repo (a symlink?)"
+		}
 		dirs = append(dirs, filepath.ToSlash(filepath.Clean(wd)))
 	}
 	locked := map[string]string{}
 	for i, d := range dirs {
 		for _, cd := range []string{"mise/conf.d", ".mise/conf.d", ".config/mise/conf.d"} {
-			if fi, err := os.Lstat(filepath.Join(root, d, cd)); err == nil && fi.IsDir() {
+			// Anything there, or a path that leaves the repo: mise would read it.
+			if _, err := statRepo(root, path.Join(d, cd)); !errors.Is(err, fs.ErrNotExist) {
 				return nil, nil, "config fragments in " + cd + ": pin the tools in runtime:"
 			}
 		}
@@ -157,7 +163,7 @@ func miseConfig(root, wd string, inputs map[string]string, files []string, lock 
 			name := filepath.ToSlash(filepath.Join(d, f))
 			src, given := inputs[f]
 			if !given || i != len(dirs)-1 {
-				b := readSmall(filepath.Join(root, filepath.FromSlash(name)))
+				b := readSmall(root, name)
 				if b == nil {
 					continue
 				}
@@ -173,7 +179,7 @@ func miseConfig(root, wd string, inputs map[string]string, files []string, lock 
 				return nil, nil, why
 			}
 		}
-		if b := readSmall(filepath.Join(root, d, "mise.lock")); lock && b != nil {
+		if b := readSmall(root, path.Join(d, "mise.lock")); lock && b != nil {
 			if why := parseMiseLock(string(b), locked); why != "" {
 				return nil, nil, why
 			}

@@ -146,10 +146,10 @@ func TestVersionFile(t *testing.T) {
 	d := t.TempDir()
 	os.WriteFile(filepath.Join(d, "go.mod"), []byte("module x\n\ngo 1.26.0\n\ntoolchain go1.26.10\n"), 0o644)
 	os.WriteFile(filepath.Join(d, ".nvmrc"), []byte("v22.23.4\n"), 0o644)
-	if v := versionFromFile(filepath.Join(d, "go.mod")); v != "1.26.10" {
+	if v := versionFromFile(d, "go.mod"); v != "1.26.10" {
 		t.Errorf("go.mod: %q", v)
 	}
-	if v := versionFromFile(filepath.Join(d, ".nvmrc")); v != "22.23.4" {
+	if v := versionFromFile(d, ".nvmrc"); v != "22.23.4" {
 		t.Errorf(".nvmrc: %q", v)
 	}
 }
@@ -185,7 +185,7 @@ func TestPrintable(t *testing.T) {
 func TestVersionFileUntrusted(t *testing.T) {
 	d := t.TempDir()
 	os.Symlink("/dev/zero", filepath.Join(d, ".nvmrc"))
-	if v := versionFromFile(filepath.Join(d, ".nvmrc")); v != "" {
+	if v := versionFromFile(d, ".nvmrc"); v != "" {
 		t.Fatalf("followed a symlink: %q", v)
 	}
 	if v := exactVersion(d, "", `^x$`, "Node", "../../etc/passwd", func(string) {}, func(string) {}); v != "" {

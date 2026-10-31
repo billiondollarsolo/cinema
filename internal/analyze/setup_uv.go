@@ -140,7 +140,7 @@ func uvVersionFromFiles(root, dir, versionFile string) (spec, from, why string) 
 		if !filepath.IsLocal(filepath.FromSlash(rel)) {
 			return "", "setup-uv version-file " + name + ": outside the repo", true
 		}
-		text := versionFromFile(filepath.Join(root, filepath.FromSlash(rel)))
+		text := versionFromFile(root, rel)
 		if text == "" {
 			return "", "", false
 		}

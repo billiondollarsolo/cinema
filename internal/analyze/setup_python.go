@@ -136,7 +136,7 @@ func pythonVersionFile(root, file string) string {
 	if root == "" || !filepath.IsLocal(filepath.FromSlash(file)) || filepath.Base(file) == "pyproject.toml" {
 		return ""
 	}
-	text := versionFromFile(filepath.Join(root, filepath.FromSlash(file)))
+	text := versionFromFile(root, file)
 	var out []string
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)

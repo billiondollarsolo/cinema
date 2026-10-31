@@ -4,14 +4,11 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
-	"io"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/billiondollarsolo/cinema/internal/task"
 )
@@ -168,7 +165,7 @@ func javaVersionFile(root, file string) (version, dist string) {
 	if root == "" || !filepath.IsLocal(filepath.FromSlash(file)) {
 		return "", ""
 	}
-	b := readSmall(filepath.Join(root, filepath.FromSlash(file)))
+	b := readSmall(root, file)
 	content := strings.TrimSpace(string(b))
 	switch filepath.Base(file) {
 	case ".tool-versions":
@@ -193,24 +190,6 @@ func javaVersionFile(root, file string) (version, dist string) {
 		}
 	}
 	return strings.TrimPrefix(version, "1."), dist // 1.8 is 8
-}
-
-// readSmall reads a workflow-named file without following symlinks or
-// blocking on a FIFO, capped (it's untrusted, like versionFromFile's).
-func readSmall(path string) []byte {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
-		return nil
-	}
-	b, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
-	if err != nil || len(b) > 1<<20 {
-		return nil
-	}
-	return b
 }
 
 // temurinReleases lists Temurin GA JDKs, newest first, for linux x64 and

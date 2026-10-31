@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -48,7 +47,7 @@ func artifactSteps(root string, w *workflow, consumer *job, with map[string]any,
 			continue
 		}
 		if local, ok := strings.CutPrefix(pj.Uses, "./.github/workflows/"); ok && root != "" && !strings.Contains(local, "/") {
-			pj, penv = reusableJob(filepath.Join(root, ".github", "workflows", local))
+			pj, penv = reusableJob(root, ".github/workflows/"+local)
 			if pj == nil {
 				continue
 			}
@@ -149,8 +148,8 @@ fi
 }
 
 // reusableJob is the single job of a local reusable workflow, with its env.
-func reusableJob(path string) (*job, map[string]any) {
-	b, err := os.ReadFile(path)
+func reusableJob(root, rel string) (*job, map[string]any) {
+	b, err := readRepo(root, rel)
 	if err != nil {
 		return nil, nil
 	}

@@ -76,8 +76,9 @@ func cmdVerify(args []string) int {
 	only := fs.String("task", "", "with --execute: run just `ID` (one job of a parallel matrix)")
 	skipFor := fs.String("skip-outputs", "", "judge only tasks that cover jobs of workflow `FILE` (covers: FILE#job) and output skip_<job>=true for each job whose tasks are all reused")
 	glChild := fs.String("gitlab-child", "", "GitLab: judge the tasks covering .gitlab-ci.yml jobs and write the child pipeline of the covered jobs that still need to run to `FILE`")
-	if err := fs.Parse(args); err != nil || (*eventPath == "" && *glChild == "") || (*only != "" && !*execute) || ((*skipFor != "" || *glChild != "") && *execute) || (*skipFor != "" && *glChild != "") {
-		fmt.Fprintln(os.Stderr, "usage: cinema verify --event FILE [--execute [--task ID]] [--report FILE] | --gitlab-child FILE")
+	trustBranch := fs.String("trust-branch", "", "GitLab: read the trusted keys from "+GitLabTrustFile+" on `BRANCH` (setup writes it into the cinema job)")
+	if err := fs.Parse(args); err != nil || (*eventPath == "" && *glChild == "") || (*only != "" && !*execute) || ((*skipFor != "" || *glChild != "") && *execute) || (*skipFor != "" && *glChild != "") || (*trustBranch != "" && *glChild == "") {
+		fmt.Fprintln(os.Stderr, "usage: cinema verify --event FILE [--execute [--task ID]] [--report FILE] | --gitlab-child FILE --trust-branch BRANCH")
 		return exitBadArgs
 	}
 	fail := func(f string, a ...any) int {
@@ -138,7 +139,29 @@ func cmdVerify(args []string) int {
 	}
 
 	allRun := ""
-	keys, kerr := evidence.ParseTrustedKeys(os.Getenv("CINEMA_TRUSTED_KEYS"))
+	keyText, keySrc := os.Getenv("CINEMA_TRUSTED_KEYS"), "CINEMA_TRUSTED_KEYS"
+	var trustErr error
+	if *glChild != "" {
+		// GitLab: a pipeline variable outranks any CI/CD variable, so the keys
+		// come from a reviewed file instead (gitlabTrust); the variable is ignored.
+		if keyText != "" {
+			fmt.Fprintf(os.Stderr, "cinema verify: CINEMA_TRUSTED_KEYS is ignored on GitLab: the keys come from %s on %s\n", GitLabTrustFile, *trustBranch)
+		}
+		keySrc = GitLabTrustFile + " on " + cmp.Or(*trustBranch, "the trust branch")
+		var tip string
+		keyText, tip, trustErr = gitlabTrust(root, *remote, *trustBranch)
+		if trustErr == nil && e.change && e.allRun == "" {
+			// tasks.yaml comes from the base, which the pipeline's variables name:
+			// it counts only if it's on the branch that holds the keys.
+			if _, err := gitOut(root, "merge-base", "--is-ancestor", base, tip); err != nil {
+				e.allRun = "the merge request's target commit " + short(base) + " isn't on " + *trustBranch + ": every task runs"
+			}
+		}
+	}
+	keys, kerr := evidence.ParseTrustedKeys(keyText)
+	if trustErr != nil {
+		kerr = trustErr
+	}
 	switch {
 	case policyNote != "":
 		allRun = plan.PolicyUnavailable
@@ -151,7 +174,10 @@ func cmdVerify(args []string) int {
 		rep.Note = "checked out the base commit, not the pull request: every task runs"
 	case kerr != nil || len(keys) == 0:
 		allRun = plan.PolicyUnavailable
-		rep.Note = "CINEMA_TRUSTED_KEYS missing or invalid: every task runs"
+		rep.Note = keySrc + " missing or invalid: every task runs"
+		if kerr != nil {
+			rep.Note += " (" + kerr.Error() + ")"
+		}
 	case e.allRun != "":
 		allRun = plan.PolicyUnavailable
 		rep.Note = e.allRun

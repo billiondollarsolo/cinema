@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -12,7 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/billiondollarsolo/cinema/internal/task"
 )
@@ -169,16 +167,7 @@ func globalJSONSDK(root, file string) (spec, why string) {
 	if root == "" || !filepath.IsLocal(filepath.FromSlash(file)) {
 		return "", "it can't be read here"
 	}
-	// The workflow names the file: no symlinks, regular files only, capped.
-	f, err := os.OpenFile(filepath.Join(root, filepath.FromSlash(file)), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return "", "it can't be read here"
-	}
-	defer f.Close()
-	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
-		return "", "it can't be read here"
-	}
-	b, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	b, err := readRepo(root, file) // the workflow names it: untrusted
 	if err != nil {
 		return "", "it can't be read here"
 	}

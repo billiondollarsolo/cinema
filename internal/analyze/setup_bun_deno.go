@@ -72,7 +72,7 @@ func bunVersionFrom(root, file string) string {
 	if root == "" || !filepath.IsLocal(filepath.FromSlash(file)) {
 		return ""
 	}
-	b := versionFromFile(filepath.Join(root, filepath.FromSlash(file)))
+	b := versionFromFile(root, file)
 	switch filepath.Base(file) {
 	case "package.json":
 		var pkg struct {
@@ -139,7 +139,7 @@ func denoVersionFrom(root, file string) string {
 	if root == "" || !filepath.IsLocal(filepath.FromSlash(file)) {
 		return ""
 	}
-	b := versionFromFile(filepath.Join(root, filepath.FromSlash(file)))
+	b := versionFromFile(root, file)
 	if m := denoToolLine.FindStringSubmatch(b); m != nil {
 		return m[1]
 	}

@@ -252,11 +252,17 @@ func cmdSetup(args []string) int {
 		fmt.Printf("\nKept the graduation of %d task(s) whose job is unchanged.\n", len(keep))
 	}
 	formatLikeRepo(root, paths...)
+	keysAt := "the repo variable CINEMA_TRUSTED_KEYS (Settings → Variables)"
 	if onGitLab {
+		keysAt = GitLabTrustFile + ", committed to the default branch"
 		fmt.Print(`
-GitLab: add the keys as a CI/CD variable CINEMA_TRUSTED_KEYS (Settings → CI/CD → Variables):
-  visibility Visible (a key line can't be masked; it isn't secret), not protected
-  (merge request pipelines don't get protected variables). Only Maintainers can edit it.
+GitLab: the trusted keys are the file ` + GitLabTrustFile + ` on the default branch (the
+  cinema job names it: --trust-branch), one cinema keys export line per machine. Not a
+  CI/CD variable: pipeline variables (git push -o ci.variable=…) outrank those, and the
+  job ignores CINEMA_TRUSTED_KEYS. Protect the branch and require review of .cinema/
+  (CODEOWNERS), and set Settings → CI/CD → Variables → "Minimum role to use pipeline
+  variables" to no_one_allowed or Maintainer: whoever sets the cinema job's variables
+  controls it.
 `)
 	}
 	fmt.Print(`
@@ -264,7 +270,7 @@ Written (see git diff). Next:
   1. read .cinema/tasks.yaml, then:   cinema trust
   2. make evidence:                   cinema run --commit HEAD --all -j 4
   3. once per machine:                cinema keys init && cinema keys export
-     and add that line to the repo variable CINEMA_TRUSTED_KEYS (Settings → Variables)
+     and add that line to ` + keysAt + `
   4. commit, then push with:          cinema push
 The PR that adds this runs everything as before; jobs start skipping once it's merged.
 `)

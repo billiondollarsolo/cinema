@@ -18,7 +18,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"syscall"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -72,7 +71,7 @@ type gref []string
 // so an alias bomb can't exhaust memory.
 func conv(n *yaml.Node, budget *int) (any, error) {
 	if *budget--; *budget < 0 {
-		return nil, errors.New("too large (aliases expand past 1,000,000 nodes)")
+		return nil, errors.New("too large (with its includes, aliases expand past 2,000,000 nodes)")
 	}
 	switch n.Kind {
 	case yaml.DocumentNode:
@@ -147,25 +146,48 @@ func conv(n *yaml.Node, budget *int) (any, error) {
 }
 
 // deepMerge is GitLab's deep_merge: mappings merge key by key (b wins),
-// anything else in b replaces a.
-func deepMerge(a, b any) any {
+// anything else in b replaces a. Each key copied is work (c.spend).
+func (c *glConfig) deepMerge(a, b any) any {
 	am, aok := a.(*gmap)
 	bm, bok := b.(*gmap)
 	if !aok || !bok {
 		return b
 	}
+	c.spend(len(am.keys) + len(bm.keys))
 	out := newGmap()
 	for _, k := range am.keys {
 		out.set(k, am.m[k])
 	}
 	for _, k := range bm.keys {
 		if av, ok := out.m[k]; ok {
-			out.set(k, deepMerge(av, bm.m[k]))
+			out.set(k, c.deepMerge(av, bm.m[k]))
 		} else {
 			out.set(k, bm.m[k])
 		}
 	}
 	return out
+}
+
+// glWork is the work one analysis may do resolving the config: map keys
+// merged, !reference nodes copied, variable bytes expanded. Each of these
+// can fan out exponentially within their depth limits (a list of ten
+// !references to a list of ten, ten levels deep: a billion laughs), so they
+// share one budget, far above any real config; past it, every job goes to
+// review (glTooLarge), never a hang or a crash.
+const glWork = 1 << 25
+
+// glNodes caps the YAML nodes of the config and its includes together, with
+// aliases expanded.
+const glNodes = 2_000_000
+
+const glTooLarge = "the config is too large to resolve (!reference, extends or variables fan out past cinema's limit)"
+
+var errTooLarge = errors.New(glTooLarge)
+
+// spend takes n from the budget; false once it's gone.
+func (c *glConfig) spend(n int) bool {
+	c.work -= n
+	return c.work >= 0
 }
 
 // glReserved are top-level keys that aren't jobs.
@@ -188,11 +210,14 @@ type glConfig struct {
 	stages    []string
 	includes  []string         // local files merged in (repo-relative)
 	raw       map[string]*gmap // every job and template as written (after includes)
+	work      int              // what's left of glWork
+	nodes     int              // what's left of glNodes
+	extended  map[string]*gmap // extendJob's results, by job and depth
 }
 
 // loadGitLab reads root/.gitlab-ci.yml (or src, if given) and resolves it.
 func loadGitLab(root string, src []byte) (*glConfig, error) {
-	c := &glConfig{root: root, jobs: map[string]*gmap{}, jobErr: map[string]string{}}
+	c := &glConfig{root: root, jobs: map[string]*gmap{}, jobErr: map[string]string{}, work: glWork, nodes: glNodes, extended: map[string]*gmap{}}
 	top, err := c.load(src, GitLabFile, 0, map[string]bool{})
 	if err != nil {
 		return nil, err
@@ -234,7 +259,7 @@ func loadGitLab(root string, src []byte) (*glConfig, error) {
 	c.raw = raw
 	extended := map[string]*gmap{}
 	for k := range raw {
-		j, err := extendJob(raw, k, 0, nil)
+		j, err := c.extendJob(raw, k, 0, nil)
 		if err != nil {
 			c.jobErr[k] = err.Error()
 			continue
@@ -244,11 +269,15 @@ func loadGitLab(root string, src []byte) (*glConfig, error) {
 	def, _ := top.get("default")
 	defm, _ := def.(*gmap)
 	if defm != nil {
-		r, err := resolveRefs(defm, extended, 0)
-		if err != nil {
+		r, err := c.resolveRefs(defm, extended, 0)
+		switch {
+		case errors.Is(err, errTooLarge):
+			defm = nil // every job goes to review (below)
+		case err != nil:
 			return nil, fmt.Errorf("default: %v", err)
+		default:
+			defm = r.(*gmap)
 		}
-		defm = r.(*gmap)
 	}
 	for _, k := range visible {
 		name := strings.TrimPrefix(k, HiddenPrefix)
@@ -258,7 +287,7 @@ func loadGitLab(root string, src []byte) (*glConfig, error) {
 			c.order = append(c.order, name)
 			continue
 		}
-		j, err := resolveRefs(extended[k], extended, 0)
+		j, err := c.resolveRefs(extended[k], extended, 0)
 		if err != nil {
 			c.jobErr[name] = err.Error()
 			c.order = append(c.order, name)
@@ -269,7 +298,20 @@ func loadGitLab(root string, src []byte) (*glConfig, error) {
 		c.jobs[name] = jm
 		c.order = append(c.order, name)
 	}
+	c.overBudget()
 	return c, nil
+}
+
+// overBudget says whether resolving went past glWork, and if so makes every
+// job a review (reviewAll): what was resolved may be cut short.
+func (c *glConfig) overBudget() bool {
+	if c.work >= 0 {
+		return false
+	}
+	if !slices.Contains(c.reviewAll, glTooLarge) {
+		c.reviewAll = append(c.reviewAll, glTooLarge)
+	}
+	return true
 }
 
 // cinemaGitLabJob: setup's cinema job or the trigger of its child pipeline.
@@ -310,8 +352,7 @@ func (c *glConfig) load(src []byte, name string, depth int, seen map[string]bool
 		}
 		return nil, fmt.Errorf("%s: %v", name, err)
 	}
-	budget := 1_000_000
-	v, err := conv(&doc, &budget)
+	v, err := conv(&doc, &c.nodes) // one budget for the file and its includes
 	if err != nil {
 		return nil, fmt.Errorf("%s: %v", name, err)
 	}
@@ -327,8 +368,7 @@ func (c *glConfig) load(src []byte, name string, depth int, seen map[string]bool
 		_ = spec
 		var next yaml.Node
 		if err := dec.Decode(&next); err == nil {
-			budget := 1_000_000
-			v, err := conv(&next, &budget)
+			v, err := conv(&next, &c.nodes)
 			if err != nil {
 				return nil, fmt.Errorf("%s: %v", name, err)
 			}
@@ -399,7 +439,7 @@ func (c *glConfig) load(src []byte, name string, depth int, seen map[string]bool
 				return nil, fmt.Errorf("%s: include %s: included twice or in a cycle", name, f)
 			}
 			seen[f] = true
-			b, err := readRepoFile(c.root, f)
+			b, err := readRepoNoLinks(c.root, f)
 			if err != nil {
 				return nil, fmt.Errorf("%s: include %s: %v", name, f, err)
 			}
@@ -408,10 +448,10 @@ func (c *glConfig) load(src []byte, name string, depth int, seen map[string]bool
 			if err != nil {
 				return nil, err
 			}
-			merged = deepMerge(merged, sub)
+			merged = c.deepMerge(merged, sub)
 		}
 	}
-	return deepMerge(merged, top).(*gmap), nil
+	return c.deepMerge(merged, top).(*gmap), nil
 }
 
 // localFiles expands a local include (a path from the repo root; * matches
@@ -470,30 +510,11 @@ func globMatch(pat, name string) bool {
 	return ok
 }
 
-// readRepoFile reads a repo-relative file the config names: no symlinks, a
-// regular file, at most 1 MiB (the config is untrusted input).
-func readRepoFile(root, rel string) ([]byte, error) {
-	if !filepath.IsLocal(filepath.FromSlash(rel)) {
-		return nil, errors.New("outside the repository")
-	}
-	f, err := os.OpenFile(filepath.Join(root, filepath.FromSlash(rel)), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
-	b, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
-	if err == nil && len(b) > 1<<20 {
-		err = errors.New("larger than 1 MiB")
-	}
-	return b, err
-}
-
 // extendJob resolves a job's extends: each base (resolved itself) merged in
-// order, then the job's own keys on top. GitLab allows 11 levels.
-func extendJob(raw map[string]*gmap, k string, depth int, path []string) (*gmap, error) {
+// order, then the job's own keys on top. GitLab allows 11 levels. Results are
+// remembered: extends: [a, a, a…] at every level would otherwise resolve a
+// exponentially often.
+func (c *glConfig) extendJob(raw map[string]*gmap, k string, depth int, path []string) (*gmap, error) {
 	j := raw[k]
 	if j == nil {
 		return nil, fmt.Errorf("extends %s, which isn't defined", k)
@@ -508,13 +529,19 @@ func extendJob(raw map[string]*gmap, k string, depth int, path []string) (*gmap,
 	if !ok {
 		return j, nil
 	}
+	memo := fmt.Sprintf("%d\x00%s", depth, k)
+	if m := c.extended[memo]; m != nil {
+		return m, nil
+	}
 	var acc any = newGmap()
 	for _, b := range flatList(ext) {
-		base, err := extendJob(raw, str(b), depth+1, append(path, k))
+		base, err := c.extendJob(raw, str(b), depth+1, append(path, k))
 		if err != nil {
 			return nil, err
 		}
-		acc = deepMerge(acc, base)
+		if acc = c.deepMerge(acc, base); c.work < 0 {
+			return nil, errTooLarge
+		}
 	}
 	own := newGmap()
 	for _, key := range j.keys {
@@ -522,15 +549,23 @@ func extendJob(raw map[string]*gmap, k string, depth int, path []string) (*gmap,
 			own.set(key, j.m[key])
 		}
 	}
-	return deepMerge(acc, own).(*gmap), nil
+	m := c.deepMerge(acc, own).(*gmap)
+	c.extended[memo] = m
+	return m, nil
 }
 
 // resolveRefs replaces !reference tags in v with what they name in the
 // extended jobs (or the top-level sections they're looked up in), up to 10
 // levels deep. Script lists are flattened, as GitLab does with nested arrays.
-func resolveRefs(v any, jobs map[string]*gmap, depth int) (any, error) {
+// Every node (and string byte) it yields is work: a list of !references to
+// lists of !references multiplies at each level.
+func (c *glConfig) resolveRefs(v any, jobs map[string]*gmap, depth int) (any, error) {
 	if depth > 10 {
 		return nil, errors.New("!reference nests deeper than 10 levels")
+	}
+	s, _ := v.(string)
+	if !c.spend(1 + len(s)) {
+		return nil, errTooLarge
 	}
 	switch x := v.(type) {
 	case gref:
@@ -550,11 +585,11 @@ func resolveRefs(v any, jobs map[string]*gmap, depth int) (any, error) {
 				return nil, fmt.Errorf("!reference %v: %s isn't there", []string(x), k)
 			}
 		}
-		return resolveRefs(cur, jobs, depth+1)
+		return c.resolveRefs(cur, jobs, depth+1)
 	case *gmap:
 		out := newGmap()
 		for _, k := range x.keys {
-			r, err := resolveRefs(x.m[k], jobs, depth)
+			r, err := c.resolveRefs(x.m[k], jobs, depth)
 			if err != nil {
 				return nil, err
 			}
@@ -567,7 +602,7 @@ func resolveRefs(v any, jobs map[string]*gmap, depth int) (any, error) {
 	case []any:
 		out := make([]any, 0, len(x))
 		for _, e := range x {
-			r, err := resolveRefs(e, jobs, depth)
+			r, err := c.resolveRefs(e, jobs, depth)
 			if err != nil {
 				return nil, err
 			}

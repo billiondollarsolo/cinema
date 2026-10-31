@@ -454,6 +454,7 @@ An in-toto Statement wrapped in a DSSE envelope, signed with Ed25519. The predic
 - **Remote hosts never hold a key** (§9.3). The developer's machine sends the checkout, collects the result, and signs; the receipt names the host. A remote machine is trusted exactly as much as the developer who chose it.
 - `cinema keys export` prints only the public key.
 - **Trusted public keys live in a GitHub repository variable** (`vars.CINEMA_TRUSTED_KEYS`), **not in the repo tree.** A PR can edit files in the tree. It can't edit repo variables.
+- **GitLab is the exception: there the keys are in the tree**, `.cinema/trusted-keys` at the tip of the branch the cinema job names (§11.7.1). A pipeline variable outranks every CI/CD variable, and a Developer can set one with `git push -o ci.variable=…`, unseen in any diff, so a variable can't be the trust root. A file on a protected branch changes only through a reviewed merge.
 - Revocation: remove the key from the variable. The next gate run stops accepting its receipts. Offboarding a developer is removing their machines' keys.
 
 ---
@@ -771,6 +772,7 @@ candidate = from event: repo ID, event type, tested SHA
 tasks     = required tasks from .cinema/tasks.yaml at the BASE branch
             (a PR can't loosen its own requirements)
 keys      = CINEMA_TRUSTED_KEYS (repo variable; PR can't edit)
+            (GitLab: .cinema/trusted-keys on the trust branch, §11.7.1)
 
 if fork PR:            all tasks → RUN (FORK_PR)
 if keys missing/bad:   all tasks → RUN (POLICY_UNAVAILABLE)
@@ -877,7 +879,7 @@ The core (tasks, container runs, fingerprints, signed receipts in git notes, sha
 | Skipping | `rules:` are fixed at pipeline creation, so they can't read receipts. A `cinema` job writes a **dynamic child pipeline** with only the jobs that still need to run (`trigger: include: artifact`); proven jobs never get a runner. Fallback where child pipelines don't fit: a first script line that exits early on a receipt (saves the run, not the runner start). |
 | Merge requests | Merge request pipelines test the head (Free) or the merged result (Premium "merged results"); merge trains are merge queues (§5.5). `CI_PIPELINE_SOURCE` is the event. |
 | Receipts | Git notes as on GitHub: GitLab accepts `refs/notes/*` pushes (Developer role) and the job token fetches them (§11.7.1). |
-| Keys | A project CI/CD variable (`CINEMA_TRUSTED_KEYS`), Visible and not protected (§11.7.1): only Maintainers edit it; restrict pipeline variables. |
+| Keys | `.cinema/trusted-keys` at the tip of the branch setup writes into the cinema job (`--trust-branch`), reviewed like code; never a CI/CD variable, which a pipeline variable outranks (§11.7.1). Restricting pipeline variables is still required. |
 | CI API | `/projects/:id/pipelines`, `/jobs`, job traces (token or `glab`). |
 | Runner sizes | SaaS Linux runners by tag (small 2 vCPU/8 GB, medium, large…; cost factors), self-hosted by tag; size and arch from the tag, declared in the task. |
 
@@ -923,12 +925,12 @@ Sources: GitLab's docs and source (gitlab-org/gitlab, gitaly, gitlab-runner on m
 - **Required checks.** GitLab has no per-job required checks.
   - "Pipelines must succeed" (Free) looks at the latest pipeline's status ([docs](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)). A child counts only through its trigger job, and only with `strategy: depend`/`mirror`, so setup writes `depend`. A job that is never created doesn't matter.
   - Approval rules (Premium) and external status checks (Ultimate, an HTTP service: [docs](https://docs.gitlab.com/user/project/merge_requests/status_checks/)) don't look at jobs. Nothing like GitHub's "a required leg never reports" exists.
-- **`CINEMA_TRUSTED_KEYS`.**
-  - A project CI/CD variable, which only Maintainers can edit ([docs](https://docs.gitlab.com/ci/variables/)), so an MR author can't change it.
-  - **Not protected**: protected variables reach MR pipelines only under a project setting (since 18.1), with both branches protected and not from forks.
-  - **Not masked**: masking needs one line with no spaces, which a key line isn't, and the value isn't secret. Visibility defaults to Masked since 18.3, so set it to Visible.
-  - The real risk is **pipeline variables**. Run pipeline, the API, triggers and `git push -o ci.variable=` outrank project variables, so a Developer could pass their own keys. The project setting "Minimum role to use pipeline variables" closes it. gitlab.com's default for new projects is `no_one_allowed` (since 17.7); self-managed defaults to Maintainer. Non-push/MR sources already run everything. A push with `-o ci.variable` can't be detected, which the docs call out.
-  - As on GitHub (§11.2, Personal-mode honesty), a Developer's branch can edit `.gitlab-ci.yml` itself. Review of CI changes, or a pipeline execution policy (Ultimate), is the boundary.
+- **Trusted keys: a reviewed file, not `CINEMA_TRUSTED_KEYS`** (changed 2026-10-31 after a security review).
+  - A project CI/CD variable only Maintainers can edit ([docs](https://docs.gitlab.com/ci/variables/)) looked right, but **pipeline variables** outrank it: Run pipeline, the API, triggers and `git push -o ci.variable=`. A Developer could push with their own `CINEMA_TRUSTED_KEYS`, sign their own receipts and skip covered jobs, and nothing in the diff would show it. A push with `-o ci.variable` can't be detected, which GitLab's docs call out. Pipeline variables can override predefined variables too (`CI_DEFAULT_BRANCH`, `CI_MERGE_REQUEST_*`).
+  - So the gate reads **`.cinema/trusted-keys` at the tip of the trust branch**, fetched by name, and ignores the variable. The branch is written into the cinema job by setup (`--trust-branch <default branch>`), so moving it is an edit of `.gitlab-ci.yml`. Adding a key is a merge into that branch: protect it and review `.cinema/` (CODEOWNERS).
+  - The other env-derived inputs fail closed. tasks.yaml comes from the MR's target commit only if it's an ancestor of the trust branch's tip; MR project IDs must be set and equal `CI_PROJECT_ID`, else it's a fork; commit IDs must be hex. The event name and repo path only select which honest receipts can match.
+  - What no binary closes: whoever sets the cinema job's variables controls the job (`GOPROXY` + `GOSUMDB=off` installs another cinema; `GIT_CONFIG_*` redirects `origin`). So **"Minimum role to use pipeline variables" set to `no_one_allowed` or Maintainer is required**, not optional. gitlab.com's default for new projects is `no_one_allowed` (since 17.7); self-managed defaults to Maintainer. Non-push/MR sources already run everything.
+  - As on GitHub (§11.2, Personal-mode honesty), a Developer's branch can edit `.gitlab-ci.yml` itself, including `--trust-branch`. That's visible in review. Review of CI changes, or a pipeline execution policy (Ultimate), is the boundary.
 - **CI API.**
   - `GET /projects/:id/pipelines?sha=&source=push`. Child pipelines are excluded unless `source=parent_pipeline`.
   - `/pipelines/:id/jobs`.
@@ -954,7 +956,8 @@ Sources: GitLab's docs and source (gitlab-org/gitlab, gitaly, gitlab-runner on m
 - **Forge edges** (`cmd/cinema/forge.go`):
   - `ciEvent` (from `githubEvent` / `gitlabEvent`): repo ID, event, base, head, fork, the pipeline-source veto.
   - `forge.conclusion` (`gh api` / `glab api`, including the child pipeline through the trigger job) for graduation backtests.
-  - Keys: `CINEMA_TRUSTED_KEYS` from the job's environment on both forges.
+  - Keys: `CINEMA_TRUSTED_KEYS` from the job's environment on GitHub; `.cinema/trusted-keys` on the trust branch on GitLab (`gitlabTrust`, §11.7.1).
+  - Analyzer limits: files the config names are read through `os.Root` (no `..`, no symlinked directory out of the repo, regular files, 1 MiB); `!reference`, `extends` (memoized) and variable expansion share one work budget per analysis, past which every job is review; an include cinema can't read is named in every job's digest, and while there is one the child runs every covered job.
   - Without a Docker daemon (a GitLab job), the gate resolves image tags with the registry API (`internal/task/registry.go`, anonymous pulls). The result matches docker's `RepoDigests`.
 
 #### 11.7.3 TODO

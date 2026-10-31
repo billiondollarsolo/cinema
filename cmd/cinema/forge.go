@@ -7,8 +7,9 @@ package main
 //   - reading CI:      analyze.Repo (GitHub workflows) and analyze.GitLab
 //   - skipping:        skip-in-place outputs (skipinplace.go) / child pipeline (gitlab.go)
 //   - the run's facts: ciEvent from githubEvent / gitlabEvent (verify.go, gitlab.go)
-//   - trusted keys:    CINEMA_TRUSTED_KEYS in the job's environment, from a
-//     repository variable (GitHub) or a CI/CD variable (GitLab)
+//   - trusted keys:    CINEMA_TRUSTED_KEYS from a repository variable (GitHub);
+//     .cinema/trusted-keys on the branch the cinema job names (GitLab, where
+//     pipeline variables would outrank a CI/CD variable: gitlabTrust)
 //   - the CI API:      forge, below (graduate's backtest)
 //
 // Live pairs, job logs, minutes and required checks are GitHub-only so far

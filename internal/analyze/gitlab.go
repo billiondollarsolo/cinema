@@ -10,7 +10,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
@@ -88,7 +90,7 @@ const GitLabDefaultRunner = "saas-linux-small-amd64"
 // file order, one per parallel leg.
 func GitLab(root string, src []byte) ([]Job, error) {
 	if src == nil {
-		b, err := readRepoFile(root, GitLabFile)
+		b, err := readRepoNoLinks(root, GitLabFile)
 		if err != nil {
 			return nil, err
 		}
@@ -110,6 +112,18 @@ func GitLab(root string, src []byte) ([]Job, error) {
 	var out []Job
 	for _, name := range c.order {
 		out = append(out, a.job(name)...)
+	}
+	if c.overBudget() {
+		// Cut short somewhere: no job's draft or digest can be trusted.
+		for i := range out {
+			if out[i].Verdict == Task {
+				out[i].Verdict = Review
+			}
+			if !slices.Contains(out[i].Reasons, glTooLarge) {
+				out[i].Reasons = append(out[i].Reasons, glTooLarge)
+			}
+			out[i].Proposal = nil
+		}
 	}
 	return out, nil
 }
@@ -680,10 +694,14 @@ func (a *glAnalysis) leg(name string, j *gmap, l glLeg) Job {
 			review("timeout " + t + " isn't a duration cinema reads")
 		}
 	}
+	// What cinema can't read (a remote, project or template include…) can
+	// change the job without changing what's digested here: its description
+	// goes in too, and the gate skips nothing while there is any (Unreadable).
 	def, _ := json.Marshal(struct {
-		Job      any `json:"job"`
-		Workflow any `json:"workflow"`
-	}{plain(j), plain(a.c.top.m["workflow"])})
+		Job        any      `json:"job"`
+		Workflow   any      `json:"workflow"`
+		Unresolved []string `json:"unresolved,omitempty"`
+	}{plain(j), plain(a.c.top.m["workflow"]), a.c.reviewAll})
 	sum := sha256.Sum256(def)
 	p.DefDigest = "sha256:" + hex.EncodeToString(sum[:])
 	r.Proposal = p
@@ -810,6 +828,9 @@ func (a *glAnalysis) yamlVals(vars *gmap, sc glScenario, _ map[string]bool) map[
 		if !expands {
 			return knownVal(v)
 		}
+		if !a.c.spend(1 + len(v)) { // $A is $B$B, $B is $C$C…: a billion laughs
+			return glVal{state: vUnknown}
+		}
 		unknown := false
 		s := glVarRef.ReplaceAllStringFunc(v, func(ref string) string {
 			if ref == "$$" {
@@ -818,7 +839,7 @@ func (a *glAnalysis) yamlVals(vars *gmap, sc glScenario, _ map[string]bool) map[
 			n := strings.Trim(ref, "${}")
 			if _, own := vars.m[n]; own && n != k && depth < 10 {
 				x := expand(n, depth+1)
-				if x.state == vSet {
+				if x.state == vSet && a.c.spend(len(x.s)) {
 					return x.s
 				}
 				unknown = true
@@ -876,6 +897,9 @@ func (a *glAnalysis) shellValue(k string, vars *gmap, _ map[string]bool) string 
 	var walk func(k string, seen map[string]bool)
 	walk = func(k string, seen map[string]bool) {
 		v, expands := glVarValue(vars.m[k])
+		if !a.c.spend(1 + len(v)) { // fan-out: see yamlVals
+			return
+		}
 		if !expands {
 			segs = append(segs, seg{lit: v})
 			return
@@ -1043,8 +1067,12 @@ func GitLabExists(root string, pats []string) tri {
 		if strings.ContainsAny(p, "*?[{$") {
 			return triUnknown
 		}
-		if fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(p, "/")))); err == nil && !fi.IsDir() {
+		fi, err := lstatRepo(root, strings.TrimPrefix(p, "/"))
+		switch {
+		case err == nil && !fi.IsDir():
 			return triTrue
+		case err != nil && !errors.Is(err, fs.ErrNotExist):
+			return triUnknown // outside the repo (.., a symlink), or unreadable
 		}
 	}
 	return triFalse

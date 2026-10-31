@@ -15,6 +15,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -29,6 +30,11 @@ import (
 // Merge request pipelines are pull_request (merge trains merge_group), branch
 // pushes push; any other source (web, api, trigger, schedule…) can carry
 // pipeline variables cinema can't see, so every task runs.
+//
+// Pipeline variables can override predefined ones too, so none of these may
+// be what lets a job skip: the trusted keys come from a reviewed file
+// (gitlabTrust), a merge request's base must be on that file's branch
+// (cmdVerify), and project IDs that are missing or disagree mean a fork.
 func gitlabEvent(env func(string) (string, bool), root, candidate string) (ciEvent, error) {
 	get := func(k string) string { v, _ := env(k); return v }
 	if get("GITLAB_CI") != "true" {
@@ -46,10 +52,11 @@ func gitlabEvent(env func(string) (string, bool), root, candidate string) (ciEve
 		if get("CI_MERGE_REQUEST_EVENT_TYPE") == "merge_train" {
 			e.name = "merge_group"
 		}
-		e.fork = get("CI_MERGE_REQUEST_SOURCE_PROJECT_ID") != get("CI_MERGE_REQUEST_PROJECT_ID")
+		src, dst := get("CI_MERGE_REQUEST_SOURCE_PROJECT_ID"), get("CI_MERGE_REQUEST_PROJECT_ID")
+		e.fork = src == "" || src != dst || dst != get("CI_PROJECT_ID")       // a fork, or can't tell
 		e.head = cmp.Or(get("CI_MERGE_REQUEST_SOURCE_BRANCH_SHA"), candidate) // set in merged results pipelines
 		e.base = get("CI_MERGE_REQUEST_TARGET_BRANCH_SHA")
-		if t := get("CI_MERGE_REQUEST_TARGET_BRANCH_NAME"); e.base == "" && t != "" {
+		if t := get("CI_MERGE_REQUEST_TARGET_BRANCH_NAME"); e.base == "" && gitBranch.MatchString(t) {
 			// A plain (detached) merge request pipeline fetches only the MR's ref.
 			ref := "refs/remotes/origin/" + t
 			if _, err := gitOut(root, "rev-parse", "--verify", "--quiet", ref); err != nil {
@@ -61,11 +68,54 @@ func gitlabEvent(env func(string) (string, bool), root, candidate string) (ciEve
 		if e.base == "" {
 			return ciEvent{}, fmt.Errorf("merge request pipeline without a target branch commit")
 		}
+		for _, c := range []string{e.base, e.head} {
+			if !commitID.MatchString(c) { // they reach git's command line
+				return ciEvent{}, fmt.Errorf("merge request pipeline: %q isn't a commit ID", c)
+			}
+		}
 	default:
 		e.name = src
 		e.allRun = "pipeline source " + src + ": it can carry pipeline variables cinema can't see, so every task runs"
 	}
 	return e, nil
+}
+
+var commitID = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
+
+// GitLabTrustFile holds the trusted keys on GitLab: one `cinema keys export`
+// line per machine, on the branch setup wrote into the cinema job.
+const GitLabTrustFile = ".cinema/trusted-keys"
+
+// gitBranch is a branch name that goes into the cinema job's script and a
+// refspec: plain characters only.
+var gitBranch = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._/-]*$`)
+
+// gitlabTrust reads the trusted keys from GitLabTrustFile at the tip of
+// branch on remote, fetched now, and returns that tip. Not from the job's
+// environment: pipeline variables (git push -o ci.variable=…, Run pipeline,
+// the API) outrank project variables, so a Developer could pass their own
+// CINEMA_TRUSTED_KEYS, unseen in any diff, and sign their own receipts. The
+// branch is the one setup wrote into the cinema job, not $CI_DEFAULT_BRANCH
+// (a pipeline variable overrides that too): moving it is an edit of
+// .gitlab-ci.yml, and adding a key is a change merged into that branch, both
+// reviewed like code.
+func gitlabTrust(root, remote, branch string) (keys, tip string, err error) {
+	if branch == "" {
+		return "", "", fmt.Errorf("the cinema job doesn't name the branch that holds %s (--trust-branch): run cinema setup --undo, then cinema setup", GitLabTrustFile)
+	}
+	if !gitBranch.MatchString(branch) || strings.Contains(branch, "..") {
+		return "", "", fmt.Errorf("--trust-branch %q isn't a plain branch name", branch)
+	}
+	if _, err := gitOut(root, "fetch", "--quiet", "--no-tags", remote, "refs/heads/"+branch); err != nil {
+		return "", "", err
+	}
+	if tip, err = gitOut(root, "rev-parse", "--verify", "--quiet", "FETCH_HEAD^{commit}"); err != nil {
+		return "", "", err
+	}
+	if keys, err = gitOut(root, "show", tip+":"+GitLabTrustFile); err != nil {
+		return "", "", fmt.Errorf("no %s on %s", GitLabTrustFile, branch)
+	}
+	return keys, tip, nil
 }
 
 // writeGitLabChild decides which covered jobs still run and writes the child
@@ -97,6 +147,12 @@ func writeGitLabChild(cfg *task.Config, rep gateReport, root, path string) error
 		} else {
 			why[job] = append(why[job], fmt.Sprintf("%s: %s", tr.Task, cmp.Or(tr.Reason, tr.Decision)))
 		}
+	}
+	if why := gl.Unreadable(); why != "" {
+		// A remote, project or template include can change any job, and no job
+		// digest covers what cinema can't read: nothing skips.
+		fmt.Printf("  cinema can't see the whole pipeline (%s): every covered job runs\n", why)
+		clear(reused)
 	}
 	legs := candidateLegs(root, analyze.GitLabFile)
 	var want []analyze.GitLabChildJob
@@ -169,7 +225,9 @@ const (
 
 // gitlabCinemaJobs is what setup appends to .gitlab-ci.yml: %[1]s first
 // stage, %[2]s last stage, %[3]s tags line (or ""), %[4]s cinema's version,
-// %[5]s the rules line (or "": branch and tag pipelines, as jobs without rules).
+// %[5]s the rules line (or "": branch and tag pipelines, as jobs without rules),
+// %[6]s the branch that holds GitLabTrustFile (written here, so moving it
+// is a reviewed edit, never a pipeline variable).
 const gitlabCinemaJobs = glBegin + `
 cinema:
   stage: %[1]s
@@ -181,7 +239,7 @@ cinema:
   script:
     - go install github.com/billiondollarsolo/cinema/cmd/cinema@%[4]s
     - export PATH="$(go env GOPATH)/bin:$PATH"
-    - cinema verify --gitlab-child .cinema-child.yml
+    - cinema verify --gitlab-child .cinema-child.yml --trust-branch %[6]s
   artifacts:
     paths: [.cinema-child.yml]
     expire_in: 1 week
@@ -220,6 +278,10 @@ func planGitLab(root string, src []byte, all, ready []analyze.Job, version strin
 	}
 	if why := gl.Unreadable(); why != "" {
 		return p, fmt.Errorf("cinema can't see the whole pipeline (%s)", why)
+	}
+	trust := gl.DefaultBranch()
+	if !gitBranch.MatchString(trust) || strings.Contains(trust, "..") {
+		return p, fmt.Errorf("the default branch (%q), which holds %s, isn't known or isn't a plain name (run git remote set-head origin --auto)", trust, GitLabTrustFile)
 	}
 	deps := gl.Dependents()
 	byID := map[string][]analyze.Job{}
@@ -308,7 +370,7 @@ func planGitLab(root string, src []byte, all, ready []analyze.Job, version strin
 	if gl.MergeRequestPipelines() {
 		rules = "  rules: [{when: on_success}]\n" // in every pipeline the project has
 	}
-	out += "\n" + fmt.Sprintf(gitlabCinemaJobs, quoted(first), quoted(last), tagLine, version, rules)
+	out += "\n" + fmt.Sprintf(gitlabCinemaJobs, quoted(first), quoted(last), tagLine, version, rules, trust)
 	p.out = []byte(out)
 
 	// Safety net: read it back. Each covered job must be hidden, and analyze
