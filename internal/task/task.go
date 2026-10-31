@@ -41,7 +41,7 @@ type Config struct {
 // from the config (toolchain cmd entries). Those require a trusted config.
 func (t *Task) RunsCommands() bool {
 	unpinned := func(img string) bool { return img != "" && !strings.Contains(img, "@sha256:") } // resolving it runs docker pull
-	if t.Runtime.set() || unpinned(t.Container) {
+	if t.Runtime.Set() || unpinned(t.Container) {
 		return true
 	}
 	for _, svc := range t.Services {
@@ -287,7 +287,7 @@ func (t *Task) validate() error {
 		return fmt.Errorf("container: invalid image reference %q", t.Container)
 	}
 	if t.Container != "" {
-		if t.Runtime.set() {
+		if t.Runtime.Set() {
 			return errors.New("container: and runtime: can't be combined: the image provides the toolchain")
 		}
 		for _, tc := range t.Toolchain {
@@ -323,8 +323,8 @@ func (t *Task) validate() error {
 		return errors.New(`reuse.capture must be "clean" or "workspace"`)
 	}
 	for k := range t.Floating {
-		if k != "go" && k != "node" {
-			return fmt.Errorf("floating: only go and node, got %q", k)
+		if t.Runtime.Get(k) == "" {
+			return fmt.Errorf("floating: %q has no runtime: pin", k)
 		}
 	}
 	switch t.Event {
@@ -446,6 +446,11 @@ func (t *Task) ContractDigest(root string) (string, error) {
 	if t.Container != "" { // only when set: existing contracts keep their digests
 		e.str("container")
 		e.str(t.Container)
+	}
+	for _, n := range sortedKeys(t.Runtime.Other) { // likewise only when set
+		e.str("runtime")
+		e.str(n)
+		e.str(t.Runtime.Other[n])
 	}
 	for _, n := range sortedServices(t.Services) { // likewise only when set
 		svc := t.Services[n]

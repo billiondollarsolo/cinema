@@ -41,12 +41,14 @@ type SandboxSpec struct {
 	RepoID    string // identifies the repo, for cache volume names
 	DataDir   string // cinema's data dir: runtimes come from <data>/runtimes
 	Bins      []string
-	Artifacts string // host dir of shared rebuilt artifacts (analyze/artifact.go), or ""
-	CPUs      int    // default 4
-	MemoryMB  int    // default 16384
-	ShmMB     int    // default 2048
-	Network   string // services network, or ""
-	Objects   string // the real repo's .git/objects, which the clean checkout borrows (alternates)
+	Vars      []string          // the runtimes' variables (RuntimeSandbox): host paths under <data>/runtimes, mapped inside
+	Caches    map[string]string // the runtimes' download caches: volume suffix → path under /home/runner
+	Artifacts string            // host dir of shared rebuilt artifacts (analyze/artifact.go), or ""
+	CPUs      int               // default 4
+	MemoryMB  int               // default 16384
+	ShmMB     int               // default 2048
+	Network   string            // services network, or ""
+	Objects   string            // the real repo's .git/objects, which the clean checkout borrows (alternates)
 	Env       []string
 	ProbeOnly bool          // no checkout: toolchain probes are version commands (allowlisted), they don't read the source
 	Lifetime  time.Duration // the container removes itself after this even if cinema dies (default 24h)
@@ -80,6 +82,12 @@ func StartSandbox(ctx context.Context, sp SandboxSpec) (*Sandbox, error) {
 		"-v", vol + "-gomod:/home/runner/go/pkg/mod",
 		"-v", vol + "-cache-" + arch + ":/home/runner/.cache",
 		"-v", vol + "-npm:/home/runner/.npm",
+	}
+	var cacheDirs []string
+	for _, k := range sortedKeys(sp.Caches) {
+		p := path.Join("/home/runner", sp.Caches[k])
+		args = append(args, "-v", vol+"-"+k+"-"+arch+":"+p)
+		cacheDirs = append(cacheDirs, p)
 	}
 	if !sp.ProbeOnly {
 		args = append(args, "-v", sp.Root+":"+s.Workdir)
@@ -137,10 +145,11 @@ id runner >/dev/null
 [ "$(id -u runner)" = %[1]d ] || usermod -o -u %[1]d runner
 [ "$(id -g runner)" = %[2]d ] || groupmod -o -g %[2]d runner
 mkdir -p /home/runner/work/_temp /home/runner/go/bin %[4]s
-chown %[1]d:%[2]d /home/runner /home/runner/work /home/runner/work/%[3]s /home/runner/work/_temp /home/runner/go /home/runner/go/bin /home/runner/go/pkg /home/runner/go/pkg/mod /home/runner/.cache /home/runner/.npm 2>/dev/null || true
+chown %[1]d:%[2]d /home/runner /home/runner/work /home/runner/work/%[3]s /home/runner/work/_temp /home/runner/go /home/runner/go/bin /home/runner/go/pkg /home/runner/go/pkg/mod /home/runner/.cache /home/runner/.npm %[5]s 2>/dev/null || true
+for d in %[5]s; do p=$d; while [ "$p" != /home/runner ]; do chown %[1]d:%[2]d "$p"; p=$(dirname "$p"); done; done
 # As actions/checkout does: VM file sharing can show the checkout under another
 # owner, and git then refuses it ("dubious ownership").
-printf '[safe]\n\tdirectory = %[4]s\n' > /home/runner/.gitconfig && chown %[1]d:%[2]d /home/runner/.gitconfig`, uid, gid, sp.RepoName, s.Workdir)
+printf '[safe]\n\tdirectory = %[4]s\n' > /home/runner/.gitconfig && chown %[1]d:%[2]d /home/runner/.gitconfig`, uid, gid, sp.RepoName, s.Workdir, strings.Join(cacheDirs, " "))
 	if out, err := docker("exec", "-u", "0", s.Name, "sh", "-c", setup).CombinedOutput(); err != nil {
 		s.Stop()
 		return nil, fmt.Errorf("sandbox setup (does the image have a runner user?): %v: %s", err, firstLine(string(out)))
@@ -169,6 +178,14 @@ printf '[safe]\n\tdirectory = %[4]s\n' > /home/runner/.gitconfig && chown %[1]d:
 	}, sp.Env...)
 	if sp.Artifacts != "" {
 		s.env = append(s.env, "CINEMA_ARTIFACTS=/opt/cinema/artifacts")
+	}
+	host := filepath.Join(sp.DataDir, "runtimes")
+	for _, kv := range sp.Vars { // JAVA_HOME=<data>/runtimes/java/… → /opt/cinema/runtimes/java/…
+		k, v, _ := strings.Cut(kv, "=")
+		if rel, err := filepath.Rel(host, v); err == nil && !strings.HasPrefix(rel, "..") {
+			v = path.Join(runtimesInside, filepath.ToSlash(rel))
+		}
+		s.env = append(s.env, k+"="+v)
 	}
 	return s, nil
 }

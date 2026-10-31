@@ -14,6 +14,7 @@ import (
 
 	"github.com/billiondollarsolo/cinema/internal/analyze"
 	"github.com/billiondollarsolo/cinema/internal/snapshot"
+	"github.com/billiondollarsolo/cinema/internal/task"
 )
 
 // cmdAnalyze proposes tasks from the repo's GitHub Actions workflows. Advisory
@@ -143,7 +144,7 @@ func draftFor(jobs []analyze.Job, cpus, memGB int) ([]byte, error) {
 		argv := seq("bash", "-eo", "pipefail", "-c") // Actions' default shell on Linux
 		argv.Content = append(argv.Content, script)
 		t := m(s("argv"), argv, s("platform"), s("linux/amd64"))
-		if p.Go != "" || p.Node != "" {
+		if p.Go != "" || p.Node != "" || len(p.Runtimes) > 0 {
 			rt, probes := m(), &yaml.Node{Kind: yaml.SequenceNode}
 			if p.Go != "" {
 				rt.Content = append(rt.Content, s("go"), s(p.Go))
@@ -152,6 +153,17 @@ func draftFor(jobs []analyze.Job, cpus, memGB int) ([]byte, error) {
 			if p.Node != "" {
 				rt.Content = append(rt.Content, s("node"), s(p.Node))
 				probes.Content = append(probes.Content, m(s("cmd"), flow(seq("node", "--version"))))
+			}
+			names := make([]string, 0, len(p.Runtimes))
+			for n := range p.Runtimes {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			for _, n := range names {
+				rt.Content = append(rt.Content, s(n), s(p.Runtimes[n]))
+				if k := task.LookupRuntime(n); k != nil && len(k.Probe) > 0 {
+					probes.Content = append(probes.Content, m(s("cmd"), flow(seq(k.Probe...))))
+				}
 			}
 			t.Content = append(t.Content, s("runtime"), rt, s("toolchain"), probes)
 		}

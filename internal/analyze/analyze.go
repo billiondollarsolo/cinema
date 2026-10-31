@@ -54,6 +54,8 @@ type Proposal struct {
 	ID   string `json:"id"`
 	Go   string `json:"go,omitempty"`   // exact versions only (runtime:)
 	Node string `json:"node,omitempty"` // exact versions only (runtime:)
+	// Runtimes: other pinned runtimes (python, java, …), by task.RuntimeKind name.
+	Runtimes map[string]string `json:"runtimes,omitempty"`
 	Body string `json:"script"`         // bash script; each step in its own subshell
 	// Outputs: paths the job uploads as artifacts, so it writes them (outputs:).
 	Outputs []string `json:"outputs,omitempty"`
@@ -390,8 +392,19 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 				break
 			}
 			steps = slices.Insert(slices.Clone(steps), i+1, step{Run: run, Dir: str(s.With["working-directory"])})
-		case action == "oven-sh/setup-bun", action == "actions/setup-python", action == "actions/setup-java":
-			review("uses " + action + ": its tool version must be pinned and fingerprinted (toolchain:)")
+		case setupActions[action] != nil:
+			c := &SetupCtx{Root: root, With: func(k string) string { return sub(str(s.With[k])) }, Env: envVals, Review: review, Note: note,
+				pin: func(rt, ver string) {
+					if p.Runtimes == nil {
+						p.Runtimes = map[string]string{}
+					}
+					if v := onePin(p.Runtimes[rt], ver, rt, review); v != "" {
+						p.Runtimes[rt] = v
+					}
+				},
+				step: func(run, dir string) { steps = slices.Insert(slices.Clone(steps), i+1, step{Run: run, Dir: cmp.Or(dir, ".")}) },
+			}
+			setupActions[action](c)
 		case strings.HasPrefix(action, "github/codeql-action"):
 			skip("CodeQL analysis uploads results; not a pass/fail check")
 		default:
@@ -462,7 +475,7 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 	all := strings.Join(body, "\n")
 	if p.Container != "" {
 		// The image provides the toolchain (runtime: can't be combined with container:).
-		p.Go, p.Node, all = "", "", ""
+		p.Go, p.Node, p.Runtimes, all = "", "", nil, ""
 	}
 	if p.Go == "" && usesGo.MatchString(all) {
 		if f := firstFile(root, ".go-version", "go.mod"); f != "" {

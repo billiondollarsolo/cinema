@@ -247,7 +247,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 		// ponytail: services are reachable by name from the sandbox, not on
 		// localhost as on a runner host; tasks that use localhost ports fail
 		// (never pass) until the sandbox shares the services' network namespace.
-		bins, err := t.RuntimeBins(w.dataDir, "linux", strings.TrimPrefix(pl.platform, "linux/"))
+		bins, vars, caches, err := t.RuntimeSandbox(w.dataDir, "linux", strings.TrimPrefix(pl.platform, "linux/"))
 		if err != nil {
 			say("✗ %s  runtime: %v\n", t.ID, err)
 			return true, false
@@ -255,7 +255,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 		art, _ := artifactsRoot()
 		cpus, mem := t.RunnerSize()
 		sb, err := task.StartSandbox(ctx, task.SandboxSpec{Image: runnerImage(t.RunsOn), Platform: pl.platform, Emulated: pl.emulated,
-			Root: w.root, RepoName: filepath.Base(w.id), RepoID: w.id, DataDir: w.dataDir, Bins: bins, Artifacts: art,
+			Root: w.root, RepoName: filepath.Base(w.id), RepoID: w.id, DataDir: w.dataDir, Bins: bins, Vars: vars, Caches: caches, Artifacts: art,
 			Objects: filepath.Join(w.id, ".git", "objects"),
 			CPUs:    cpus, MemoryMB: mem * 1024, Network: network})
 		if err != nil {

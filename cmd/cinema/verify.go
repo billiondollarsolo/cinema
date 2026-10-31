@@ -642,8 +642,8 @@ func eventName(ev ghEvent) string {
 // means the job runs: the receipt describes yesterday's toolchain (plan §11.2).
 func floatingMoved(t *task.Task) string {
 	for tool, spec := range t.Floating {
-		pin := map[string]string{"go": t.Runtime.Go, "node": t.Runtime.Node}[tool]
-		got, err := floatingResolve(map[string]string{"go": "Go", "node": "Node"}[tool], spec)
+		pin := t.Runtime.Get(tool)
+		got, err := floatingResolve(cmp.Or(map[string]string{"go": "Go", "node": "Node"}[tool], tool), spec)
 		switch {
 		case err != nil:
 			return fmt.Sprintf("can't resolve %s %q today (%v): running it", tool, spec, err)

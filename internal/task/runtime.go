@@ -29,6 +29,8 @@ import (
 type Runtime struct {
 	Go   string `yaml:"go"`   // exact, e.g. 1.26.10: GOTOOLCHAIN=go1.26.10 (Go downloads it, sumdb-verified)
 	Node string `yaml:"node"` // exact, e.g. 22.23.3: official tarball, SHA-256 checked against nodejs.org's SHASUMS256.txt
+	// Other: the registered runtimes (python, java, …: runtimes.go), by key.
+	Other map[string]string `yaml:",inline"`
 }
 
 var (
@@ -43,16 +45,14 @@ func (r Runtime) validate() error {
 	if r.Node != "" && !nodeVersionRE.MatchString(r.Node) {
 		return fmt.Errorf("runtime.node must be an exact version like 22.23.3, got %q", r.Node)
 	}
-	return nil
+	return r.validateOther()
 }
-
-func (r Runtime) set() bool { return r.Go != "" || r.Node != "" }
 
 // RuntimeEnv returns the environment the task (and its probes) must run with:
 // the current environment plus the pinned runtimes, provisioning Node into
 // dataDir if needed. nil means "inherit unchanged" (no runtime pinned).
 func (t *Task) RuntimeEnv(dataDir string) ([]string, error) {
-	if !t.Runtime.set() {
+	if !t.Runtime.Set() {
 		return nil, nil
 	}
 	env := os.Environ()
@@ -73,8 +73,29 @@ func (t *Task) RuntimeEnv(dataDir string) ([]string, error) {
 		}
 		env = setEnv(env, "PATH", path)
 	}
+	if len(t.Runtime.Other) > 0 {
+		osName, arch := runtimeGOOS, runtimeGOARCH
+		bins, vars, _, err := t.otherInstalls(dataDir, osName, arch)
+		if err != nil {
+			return nil, err
+		}
+		path := strings.Join(bins, string(os.PathListSeparator))
+		for _, kv := range env {
+			if v, ok := strings.CutPrefix(kv, "PATH="); ok && v != "" {
+				path += string(os.PathListSeparator) + v
+			}
+		}
+		env = setEnv(env, "PATH", path)
+		for _, kv := range vars {
+			k, v, _ := strings.Cut(kv, "=")
+			env = setEnv(env, k, v)
+		}
+	}
 	return env, nil
 }
+
+// The host's OS and arch, for runtimes provisioned for host runs (vars for tests).
+var runtimeGOOS, runtimeGOARCH = runtime.GOOS, runtime.GOARCH
 
 // PrivateGlobals points global package installs (`npm i -g pnpm`, `pnpm add -g`,
 // common in CI scripts) at dir, a per-run scratch directory, and puts their bin

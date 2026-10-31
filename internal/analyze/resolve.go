@@ -24,11 +24,7 @@ var fetch = func(url string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 }
 
-type release struct {
-	Version string
-	LTS     bool
-	Stable  bool
-}
+type release = Release
 
 var releases = struct {
 	sync.Mutex
@@ -75,6 +71,16 @@ func list(tool string) ([]release, error) {
 		for _, r := range v {
 			out = append(out, release{Version: strings.TrimPrefix(r.Version, "go"), Stable: r.Stable})
 		}
+	default:
+		f := lister[tool]
+		if f == nil {
+			return nil, fmt.Errorf("no release list for %s", tool)
+		}
+		rs, err := f()
+		if err != nil {
+			return nil, err
+		}
+		out = rs
 	}
 	releases.m[tool] = out
 	return out, nil

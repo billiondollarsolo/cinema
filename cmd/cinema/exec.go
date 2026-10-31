@@ -99,7 +99,7 @@ func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr err
 		if src.Before, err = r.source(extra, outputs); err != nil {
 			warn("fingerprint: %v", err)
 		}
-		if t != nil && t.Runtime.Go+t.Runtime.Node != "" && opts.Env == nil {
+		if t != nil && t.Runtime.Set() && opts.Env == nil {
 			// The task pins a runtime that cinema provisions; a bare exec runs with
 			// whatever is installed, so its fingerprint wouldn't describe the run.
 			warn("task %s pins a runtime; run it with `cinema run %s` to make evidence (this run is history only)", t.ID, t.ID)

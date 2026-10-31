@@ -153,7 +153,7 @@ var (
 )
 
 func probeWhere(r *repo, t *task.Task, pl placement) (*task.Where, error) {
-	bins, err := t.RuntimeBins(r.dataDir, "linux", strings.TrimPrefix(pl.platform, "linux/"))
+	bins, vars, caches, err := t.RuntimeSandbox(r.dataDir, "linux", strings.TrimPrefix(pl.platform, "linux/"))
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +166,7 @@ func probeWhere(r *repo, t *task.Task, pl placement) (*task.Where, error) {
 		return sb.Where(), nil
 	}
 	sb, err := task.StartSandbox(context.Background(), task.SandboxSpec{Image: img, Platform: pl.platform,
-		Emulated: pl.emulated, Root: r.root, RepoName: filepath.Base(r.id), RepoID: r.id, DataDir: r.dataDir, Bins: bins,
+		Emulated: pl.emulated, Root: r.root, RepoName: filepath.Base(r.id), RepoID: r.id, DataDir: r.dataDir, Bins: bins, Vars: vars, Caches: caches,
 		CPUs: cpus, MemoryMB: mem * 1024,
 		ProbeOnly: true, Lifetime: 30 * time.Minute})
 	if err != nil {

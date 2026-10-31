@@ -45,7 +45,7 @@ func cmdDebug(args []string) int {
 		fmt.Fprintf(os.Stderr, "cinema debug: %v\n", err)
 		return exitInternal
 	}
-	bins, err := t.RuntimeBins(r.dataDir, "linux", strings.TrimPrefix(pl.platform, "linux/"))
+	bins, vars, caches, err := t.RuntimeSandbox(r.dataDir, "linux", strings.TrimPrefix(pl.platform, "linux/"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cinema debug: runtime: %v\n", err)
 		return exitInternal
@@ -53,7 +53,7 @@ func cmdDebug(args []string) int {
 	cpus, mem := t.RunnerSize()
 	art, _ := artifactsRoot()
 	sb, err := task.StartSandbox(context.Background(), task.SandboxSpec{Image: runnerImage(t.RunsOn), Platform: pl.platform, Emulated: pl.emulated,
-		Root: cr.root, RepoName: filepath.Base(cr.id), RepoID: cr.id, DataDir: r.dataDir, Bins: bins, Artifacts: art,
+		Root: cr.root, RepoName: filepath.Base(cr.id), RepoID: cr.id, DataDir: r.dataDir, Bins: bins, Vars: vars, Caches: caches, Artifacts: art,
 		Objects: filepath.Join(cr.id, ".git", "objects"), CPUs: cpus, MemoryMB: mem * 1024})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cinema debug: %v\n", err)
