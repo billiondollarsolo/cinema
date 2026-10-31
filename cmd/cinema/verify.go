@@ -81,6 +81,9 @@ func cmdVerify(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: cinema verify --event FILE [--execute [--task ID]] [--report FILE] | --gitlab-child FILE --trust-branch BRANCH")
 		return exitBadArgs
 	}
+	if *glChild != "" {
+		scrubGitEnv() // before any git call: the job's variables mustn't steer it
+	}
 	fail := func(f string, a ...any) int {
 		fmt.Fprintf(os.Stderr, "cinema verify: "+f+"\n", a...)
 		if *glChild != "" { // GitLab: a child that runs every covered job, or they'd never run

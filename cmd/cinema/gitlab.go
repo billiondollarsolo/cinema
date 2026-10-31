@@ -129,6 +129,23 @@ func gitlabTrust(root, remote, branch string) (keys, tip string, err error) {
 	return keys, tip, nil
 }
 
+// scrubGitEnv removes, for this whole process, what lets the job's variables
+// steer git (pipeline variables reach the environment): every GIT_* variable
+// (GIT_DIR, GIT_OBJECT_DIRECTORY, GIT_CONFIG_*, GIT_SSH_COMMAND, ...) and
+// global or system config (HOME's or XDG_CONFIG_HOME's .gitconfig). Every git
+// call the gate makes (the source fingerprint, receipts, tasks.yaml) then sees
+// the checkout's own config only, which the runner wrote before the job ran.
+func scrubGitEnv() {
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "GIT_") || k == "XDG_CONFIG_HOME" {
+			os.Unsetenv(k)
+		}
+	}
+	os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	os.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	os.Setenv("GIT_TERMINAL_PROMPT", "0")
+}
+
 // trustGit runs git for the trust root with an environment built from
 // nothing: the job's variables (pipeline variables included) could otherwise
 // redirect it (GIT_CONFIG_*, GIT_DIR, HOME or XDG_CONFIG_HOME to another

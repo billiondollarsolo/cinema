@@ -385,6 +385,12 @@ other:
 	if _, log = child("merge_request_event", "CI_MERGE_REQUEST_TARGET_BRANCH_SHA="+side); !regexp.MustCompile(`REUSE +unit`).MatchString(log) {
 		t.Errorf("tasks.yaml from the trust branch, whatever the variables say:\n%s", log)
 	}
+	// Variables that would steer the gate's git (another repository or object
+	// store, config from the environment) are scrubbed: the decision is the same.
+	if _, log = child("push", "GIT_DIR=/nonexistent", "GIT_OBJECT_DIRECTORY=/nonexistent", "GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=remote.origin.url", "GIT_CONFIG_VALUE_0=/nonexistent"); !regexp.MustCompile(`REUSE +unit`).MatchString(log) {
+		t.Errorf("the gate followed the job's git variables:\n%s", log)
+	}
 	// Variables that would redirect git (another global config through HOME or
 	// XDG_CONFIG_HOME, config from the environment) don't reach the trust
 	// root's git: the keys are still main's, from the real remote.
