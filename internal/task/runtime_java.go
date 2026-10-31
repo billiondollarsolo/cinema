@@ -35,13 +35,24 @@ func init() {
 		// Dependency downloads only. Not all of ~/.gradle/caches: its
 		// build-cache-1 holds task outputs (test results included) that a
 		// build with org.gradle.caching would replay instead of running.
-		Caches: map[string]string{"m2": ".m2/repository", "gradle": ".gradle/caches/modules-2", "gradle-wrapper": ".gradle/wrapper/dists"},
+		// Not all of ~/.m2/repository either: see mavenRC.
+		Caches: map[string]string{"m2": ".m2/repository/cached", "gradle": ".gradle/caches/modules-2", "gradle-wrapper": ".gradle/wrapper/dists"},
 		Probe:  []string{"java", "-version"}, // prints to stderr: probes capture both
 	})
 	// No probe: gradle --version prints the kernel release, which differs
 	// between any two machines. The exact pin is in the contract.
 	RegisterRuntime(&RuntimeKind{Name: "gradle", Example: "8.14.3", Version: gradleVersionRE, Provision: provisionGradle, Bins: []string{"bin"}})
 }
+
+// mavenRC goes in every sandbox's /etc/mavenrc, which mvn and mvnw source.
+// `mvn install` puts the project's own artifacts in the local repository, and
+// a later `mvn -pl module` (no -am) resolves them instead of building them: in
+// a shared one, a run would build against another commit's SNAPSHOTs. Maven
+// 3.9's split repository keeps downloads under cached/ (the cache volume) and
+// installs under installed/, in the container, gone with it: each run starts
+// with none, as on a fresh runner. Older Maven, or a job that drops the flag,
+// keeps the whole repository in the container: cold, never stale.
+const mavenRC = `MAVEN_OPTS="${MAVEN_OPTS:+$MAVEN_OPTS }-Daether.enhancedLocalRepository.split=true"`
 
 var (
 	javaVersionRE   = regexp.MustCompile(`^temurin-([0-9]+)\.[0-9]+\.[0-9]+\+[0-9]+$`)

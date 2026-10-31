@@ -84,12 +84,12 @@ func StartSandbox(ctx context.Context, sp SandboxSpec) (*Sandbox, error) {
 		"-v", vol + "-npm:/home/runner/.npm",
 	}
 	var cacheDirs []string
-	for _, k := range sortedKeys(sp.Caches) {
-		p := path.Join("/home/runner", sp.Caches[k])
-		args = append(args, "-v", vol+"-"+k+"-"+arch+":"+p)
-		cacheDirs = append(cacheDirs, p)
-	}
-	if !sp.ProbeOnly {
+	if !sp.ProbeOnly { // probes are version commands: no downloads
+		mounts, dirs, err := runtimeCacheMounts(vol, arch, sp.Root, sp.Caches)
+		if err != nil {
+			return nil, err
+		}
+		args, cacheDirs = append(args, mounts...), dirs
 		args = append(args, "-v", sp.Root+":"+s.Workdir)
 		// A clean checkout borrows the real repo's objects (git alternates, by
 		// host path): mount them read-only at that path, or git inside the
@@ -149,7 +149,10 @@ chown %[1]d:%[2]d /home/runner /home/runner/work /home/runner/work/%[3]s /home/r
 for d in %[5]s; do p=$d; while [ "$p" != /home/runner ]; do chown %[1]d:%[2]d "$p"; p=$(dirname "$p"); done; done
 # As actions/checkout does: VM file sharing can show the checkout under another
 # owner, and git then refuses it ("dubious ownership").
-printf '[safe]\n\tdirectory = %[4]s\n' > /home/runner/.gitconfig && chown %[1]d:%[2]d /home/runner/.gitconfig`, uid, gid, sp.RepoName, s.Workdir, strings.Join(cacheDirs, " "))
+printf '[safe]\n\tdirectory = %[4]s\n' > /home/runner/.gitconfig && chown %[1]d:%[2]d /home/runner/.gitconfig
+cat >> /etc/mavenrc <<'EOF'
+%[6]s
+EOF`, uid, gid, sp.RepoName, s.Workdir, strings.Join(cacheDirs, " "), mavenRC)
 	if out, err := docker("exec", "-u", "0", s.Name, "sh", "-c", setup).CombinedOutput(); err != nil {
 		s.Stop()
 		return nil, fmt.Errorf("sandbox setup (does the image have a runner user?): %v: %s", err, firstLine(string(out)))
@@ -233,6 +236,31 @@ func (s *Sandbox) Where() *Where {
 
 // Stop removes the container (and whatever still runs in it).
 func (s *Sandbox) Stop() { _ = docker("rm", "-f", s.Name).Run() }
+
+// runtimeCacheMounts are the -v args and paths of the runtimes' download
+// caches. Each is a volume per checkout slot (root is
+// <data>/checkouts/<repo>/<n>, which cleanCheckout holds locked), so only one
+// container at a time uses it, as a runner has its own ~/.gradle. These tools
+// coordinate writers with locks another container never sees: Gradle asks
+// the holder to release over UDP (a second build failed with "Timeout
+// waiting to lock artifact cache"), cargo locks $CARGO_HOME/.package-cache
+// and NuGet /tmp/NuGetScratch, outside the volume, and Maven's resolver
+// locks within one JVM.
+func runtimeCacheMounts(vol, arch, root string, caches map[string]string) (args, dirs []string, err error) {
+	if len(caches) == 0 {
+		return nil, nil, nil
+	}
+	slot := filepath.Base(root)
+	if strings.Trim(slot, "0123456789") != "" {
+		return nil, nil, fmt.Errorf("runtime caches need a clean checkout slot, not %s", root)
+	}
+	for _, k := range sortedKeys(caches) {
+		p := path.Join("/home/runner", caches[k])
+		args = append(args, "-v", vol+"-"+k+"-"+arch+"-"+slot+":"+p)
+		dirs = append(dirs, p)
+	}
+	return args, dirs, nil
+}
 
 func cmpInt(v, d int) int {
 	if v > 0 {
