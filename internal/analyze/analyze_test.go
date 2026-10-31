@@ -569,13 +569,16 @@ func TestARMAndSelfHostedStayInCI(t *testing.T) {
 
 // Publishing with JVM, .NET and Deno tools is publishing: those jobs stay in CI.
 func TestPublishesJVMDotnet(t *testing.T) {
-	for _, run := range []string{"./mvnw -B deploy", "mvn -s s.xml clean deploy -DskipTests", "./gradlew publish", "gradle publishToMavenCentral", "dotnet nuget push out/*.nupkg", "deno publish"} {
-		if !publishes.MatchString(run) {
+	for _, run := range []string{"./mvnw -B deploy", "mvn -s s.xml clean deploy -DskipTests", "./gradlew publish", "gradle publishToMavenCentral", "dotnet nuget push out/*.nupkg", "deno publish",
+		"./gradlew publishToMavenLocal publish", "./gradlew publish publishToMavenLocal", "./gradlew -x test :lib:publishAllPublicationsToSonatypeRepository"} {
+		if publishing(run) == "" {
 			t.Errorf("%q isn't seen as publishing", run)
 		}
 	}
-	for _, run := range []string{"./mvnw -B verify", "./gradlew build", "dotnet test"} {
-		if publishes.MatchString(run) {
+	// Lab (gradle-versions-plugin): publishToMavenLocal installs into ~/.m2, as mvn install does.
+	for _, run := range []string{"./mvnw -B verify", "./gradlew build", "dotnet test", "./gradlew publishToMavenLocal -x test -s",
+		"./gradlew :plugin:publishAllPublicationsToMavenLocal", "mvn install -Dmaven.deploy.skip=true", "./gradlew build -PdeployTarget=x"} {
+		if publishing(run) != "" {
 			t.Errorf("%q seen as publishing", run)
 		}
 	}

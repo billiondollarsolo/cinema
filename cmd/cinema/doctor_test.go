@@ -4,9 +4,17 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
+
+// Lab (hono on macOS 14): bun exited 132 under Rosetta with no explanation.
+func TestMissingNoteIllegalInstruction(t *testing.T) {
+	if n := missingNote([]byte("bash: line 3:    41 Illegal instruction     bun test\n")); !strings.Contains(n, "CPU features") {
+		t.Errorf("note %q", n)
+	}
+}
 
 // Lines from the lab's failed drafts (traefik, vite, eslint).
 func TestMissingTools(t *testing.T) {

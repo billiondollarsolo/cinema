@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
@@ -47,6 +48,10 @@ func missingTools(out []byte) []string {
 func missingNote(out []byte) string {
 	if m := missingTools(out); len(m) > 0 {
 		return "\n    not on this machine: " + strings.Join(m, ", ") + " (install on the evidence machine to run this task here)"
+	}
+	if bytes.Contains(out, []byte("Illegal instruction")) {
+		// Lab: bun's AVX2 build under Rosetta on macOS 14.
+		return "\n    illegal instruction: a binary needs CPU features this machine or its emulator lacks (Rosetta emulates AVX2 from macOS 15 on)"
 	}
 	return ""
 }

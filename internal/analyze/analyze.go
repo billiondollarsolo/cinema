@@ -463,8 +463,8 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 		if strings.Contains(run, "secrets.") || anyEnvMentions(s.Env, "secrets.") {
 			skip("a step uses secrets")
 		}
-		if publishes.MatchString(run) && !strings.Contains(run, "--dry-run") {
-			skip("a step publishes or releases (" + publishes.FindString(run) + "): not a check")
+		if what := publishing(run); what != "" && !strings.Contains(run, "--dry-run") {
+			skip("a step publishes or releases (" + what + "): not a check")
 		}
 		if strings.Contains(run, "github.event.") || anyEnvMentions(s.Env, "github.event.") {
 			skip("a step reads the triggering event (github.event.*, e.g. the PR description): depends on the PR, not the commit")
@@ -547,7 +547,10 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 		for _, n := range r.Notes {
 			if kv, ok := strings.CutPrefix(n, floatingNote); ok {
 				tool, spec, _ := strings.Cut(kv, "=")
-				if (tool == "Go" && p.Go != "") || (tool == "Node" && p.Node != "") || p.Runtimes[tool] != "" {
+				spec, got, _ := strings.Cut(spec, "\x00")
+				// Only the spec the pin came from: with several (setup-dotnet's
+				// 10.0.x, 9.0.x, 8.0.x; setup-node twice) the first pin is kept.
+				if pinned := map[string]string{"Go": p.Go, "Node": p.Node}[tool]; cmp.Or(pinned, p.Runtimes[tool]) == got {
 					if p.Floating == nil {
 						p.Floating = map[string]string{}
 					}
@@ -779,7 +782,7 @@ var (
 	ghFiles  = regexp.MustCompile(`\$\{?GITHUB_(ENV|PATH|OUTPUT)\b`)
 	sudo     = regexp.MustCompile(`(^|[\s;&|(])sudo\s`)
 	// Lab: vite's preview job ran `pkg-pr-new publish` (it refused outside Actions).
-	publishes   = regexp.MustCompile(`\b(npm|pnpm|yarn|bun|pkg-pr-new|changeset|cargo|gem)(@[\w.^~-]+)? publish\b|\bgoreleaser release\b|\bdocker push\b|\btwine upload\b|\bgh release (create|upload)\b|\bmvn(w)?\b[^\n;&|]*\bdeploy\b|\bgradle(w)?\b[^\n;&|]*\bpublish\w*|\bdotnet nuget push\b|\bdeno publish\b`)
+	publishes   = regexp.MustCompile(`\b(npm|pnpm|yarn|bun|pkg-pr-new|changeset|cargo|gem)(@[\w.^~-]+)? publish\b|\bgoreleaser release\b|\bdocker push\b|\btwine upload\b|\bgh release (create|upload)\b|\bmvn(w)?\b[^\n;&|]*\sdeploy(:deploy)?(\s|$)|\bgradle(w)?\b[^\n;&|]*\s:?([\w-]+:)*publish\w*|\bdotnet nuget push\b|\bdeno publish\b`)
 	usesGo      = regexp.MustCompile(`(^|[\s;&|(])(go (build|test|vet|run|install|generate|mod|tool|list)|make)\b`)
 	usesNode    = regexp.MustCompile(`(^|[\s;&|(])(node|npm|npx|pnpm|yarn|corepack)\b`)
 	pipeToShell = regexp.MustCompile(`(curl|wget)\b[^|\n]*\|\s*(sudo\s+)?(ba)?sh\b`)
@@ -803,6 +806,24 @@ func versionFilePin(c *SetupCtx, rt, name, exact string, files ...string) {
 			c.Note(name + " isn't set up by the job (container or preinstalled); pinned from " + f)
 		}
 	}
+}
+
+// publishing is the first command in run that publishes, or "". Gradle's
+// publish*ToMavenLocal only installs into ~/.m2 (lab: gradle-versions-plugin's
+// build job runs its examples against it): a build step, not a release.
+func publishing(run string) string {
+	for _, m := range publishes.FindAllString(run, -1) {
+		if !strings.Contains(m, "gradle") {
+			return m
+		}
+		for _, f := range strings.Fields(m) {
+			t := f[strings.LastIndex(f, ":")+1:]
+			if strings.HasPrefix(t, "publish") && !strings.HasSuffix(t, "ToMavenLocal") {
+				return m
+			}
+		}
+	}
+	return ""
 }
 
 var cinemaGate = regexp.MustCompile(`(^|[\s/])cinema verify\b`)
@@ -840,6 +861,13 @@ func evalValue(src string, combo map[string]string) (string, bool) {
 	if strings.Join(toks, "") != strings.Join(strings.Fields(s), "") {
 		return "", false
 	}
+	for _, t := range toks {
+		// YAML false and 0 reach the combo as "false" and "0": falsy in Actions,
+		// truthy as strings. Ambiguous here, so not evaluated (lab: gson).
+		if k, ok := strings.CutPrefix(t, "matrix."); ok && (combo[k] == "false" || combo[k] == "0") {
+			return "", false
+		}
+	}
 	p := &ifParser{toks: toks, combo: combo, ok: true, valueOnly: true}
 	val := p.or()
 	if !p.ok || p.i != len(toks) {
@@ -851,6 +879,9 @@ func evalValue(src string, combo map[string]string) (string, bool) {
 func exactVersion(root, v, pattern, tool, file string, review, note func(string)) string {
 	if v == "" && file != "" && root != "" && filepath.IsLocal(filepath.FromSlash(file)) {
 		v = versionFromFile(filepath.Join(root, filepath.FromSlash(file)))
+		if filepath.Base(file) == ".tool-versions" {
+			v = toolVersionsEntry(v, tool)
+		}
 	}
 	exact := regexp.MustCompile(pattern)
 	if exact.MatchString(v) {
@@ -860,7 +891,7 @@ func exactVersion(root, v, pattern, tool, file string, review, note func(string)
 		// What setup-go/setup-node would pick today, pinned so evidence and gate agree.
 		if got, err := resolve(tool, v); err == nil && exact.MatchString(got) {
 			note(fmt.Sprintf("%s %q resolved to %s, the newest matching release today; CI checks it again on every run (floating:)", tool, v, got))
-			note(floatingNote + tool + "=" + v)
+			note(floatingNote + tool + "=" + v + "\x00" + got)
 			return got
 		}
 	}
@@ -1371,7 +1402,7 @@ func (j Job) LegDigest() string {
 // runtime.
 func onePin(had, v, tool string, review func(string)) string {
 	if had != "" && v != "" && v != had {
-		review(tool + " " + had + " and " + v + " in one task (a rebuilt artifact's producer uses another version): cinema provisions one")
+		review(tool + " " + had + " and " + v + " in one task (the job sets " + tool + " up twice, or a rebuilt artifact's producer uses another version): cinema provisions one")
 		return had
 	}
 	return cmp.Or(v, had)

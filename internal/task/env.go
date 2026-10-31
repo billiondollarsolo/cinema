@@ -128,7 +128,7 @@ func (t *Task) EnvFingerprintIn(root string, env []string, w *Where) (Env, error
 				out, err = toolOutput(dir, tc.Cmd, env)
 			}
 			if err != nil {
-				return Env{}, fmt.Errorf("toolchain %q: %w", strings.Join(tc.Cmd, " "), err)
+				return Env{}, fmt.Errorf("toolchain %q: %w%s", strings.Join(tc.Cmd, " "), err, sigillHint(err))
 			}
 			e.str("cmd")
 			e.list(tc.Cmd)
@@ -314,4 +314,14 @@ func OSRelease(content string) string {
 		return ""
 	}
 	return id + "-" + ver
+}
+
+// sigillHint explains a probe killed by SIGILL (exit 132): the binary uses CPU
+// instructions this machine lacks. Lab: bun's AVX2 build (the one hosted
+// runners get) under Rosetta on macOS 14, which emulates AVX2 only from macOS 15.
+func sigillHint(err error) string {
+	if !strings.Contains(err.Error(), "exit status 132") && !strings.Contains(err.Error(), "illegal instruction") {
+		return ""
+	}
+	return " (illegal instruction: the binary needs CPU features this machine or its emulator lacks; Rosetta emulates AVX2 from macOS 15 on)"
 }

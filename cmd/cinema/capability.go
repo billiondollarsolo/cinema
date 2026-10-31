@@ -56,19 +56,16 @@ func readiness(j analyze.Job, m machine) (category, detail string) {
 		return "review", firstReason(j)
 	}
 	plat := "linux/amd64" // drafts are (ARM runners stay in CI)
-	if _, ok := place(&task.Task{Platform: plat, Container: j.Proposal.Container}); !ok && m.Platform != plat {
+	pl, ok := place(&task.Task{Platform: plat, Container: j.Proposal.Container})
+	if !ok && m.Platform != plat {
 		return "stays in CI", "the job is " + plat + "; this machine is " + m.Platform + ": " + placeHint(&task.Task{Platform: plat, Container: j.Proposal.Container})
 	}
 	var need []string
 	if j.Proposal.Container != "" && !m.Docker {
 		need = append(need, "docker")
 	}
-	for _, t := range runnerTools {
-		if usesTool(j.Proposal.Body, t) {
-			if _, err := lookPath(t); err != nil && (j.Proposal.Container == "" || t == "docker") {
-				need = append(need, t)
-			}
-		}
+	if j.Proposal.Container == "" { // a job container's image has its own tools
+		need = append(need, missingRunnerTools(j.Proposal.Body, j.Proposal.Runtimes, ok && pl.sandbox)...)
 	}
 	if len(need) > 0 {
 		return "needs " + strings.Join(need, ", "), ""
@@ -77,6 +74,33 @@ func readiness(j analyze.Job, m machine) (category, detail string) {
 		return "review", firstReason(j)
 	}
 	return "ready", ""
+}
+
+// runnerImageTools are the runnerTools cinema's runner image has (runner/Dockerfile).
+var runnerImageTools = []string{"jq", "unzip", "zip", "make", "gcc", "g++", "python3"}
+
+// runtimeTools are runnerTools a pinned runtime puts on the task's PATH.
+var runtimeTools = map[string]string{"java": "java", "gradle": "gradle", "cargo": "rust", "python3": "python", "pip3": "python"}
+
+// missingRunnerTools: the runner tools script calls that the task won't find.
+// A task in a sandbox finds what the runner image has, not this machine's
+// tools; a pinned runtime brings its own (lab: gradle-versions-plugin showed
+// "needs gradle" with Gradle pinned; gson "needs mvn" whatever the host has).
+func missingRunnerTools(script string, runtimes map[string]string, sandbox bool) []string {
+	var need []string
+	for _, t := range runnerTools {
+		if !usesTool(script, t) || runtimes[runtimeTools[t]] != "" {
+			continue
+		}
+		if sandbox {
+			if !slices.Contains(runnerImageTools, t) {
+				need = append(need, t)
+			}
+		} else if _, err := lookPath(t); err != nil {
+			need = append(need, t)
+		}
+	}
+	return need
 }
 
 func usesTool(script, tool string) bool {

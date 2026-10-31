@@ -168,7 +168,9 @@ EOF`, uid, gid, sp.RepoName, s.Workdir, strings.Join(cacheDirs, " "), mavenRC)
 	}
 	runnerArch := map[string]string{"amd64": "X64", "arm64": "ARM64"}[arch]
 	s.env = append([]string{
-		"PATH=" + strings.Join(append(bins, "/home/runner/go/bin", "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"), ":"),
+		"PATH=" + sandboxPath(bins),
+		"NPM_CONFIG_PREFIX=" + sandboxNpmPrefix, "PNPM_HOME=" + sandboxPnpmHome,
+		"pnpm_config_store_dir=" + sandboxPnpmStore, "npm_config_store_dir=" + sandboxPnpmStore, // pnpm 11+, pnpm ≤10
 		"HOME=/home/runner", "USER=runner", "CI=true", "TZ=UTC", "LANG=C.UTF-8",
 		"GITHUB_ACTIONS=true", "RUNNER_OS=Linux", "RUNNER_ARCH=" + runnerArch,
 		"RUNNER_TEMP=/home/runner/work/_temp", "GITHUB_WORKSPACE=" + s.Workdir,
@@ -191,6 +193,27 @@ EOF`, uid, gid, sp.RepoName, s.Workdir, strings.Join(cacheDirs, " "), mavenRC)
 		s.env = append(s.env, k+"="+v)
 	}
 	return s, nil
+}
+
+// Global npm/pnpm installs (`npm i -g pnpm`, the pnpm/action-setup draft) go
+// to the container's own home: the pinned runtimes are mounted read-only, and
+// the container is the task's alone (lab: hono, every pnpm job failed with
+// ENOENT under /opt/cinema/runtimes/node). As PrivateGlobals does on the host.
+//
+// pnpm's store goes to the download cache volume. pnpm puts it on the
+// project's filesystem otherwise (node_modules/.pnpm-store in the bind-mounted
+// checkout), and pnpm 12 failed to import from there on Colima's virtiofs
+// ("failed to import … No such file or directory", lab: hono). The store is
+// content-addressed and verified, a download cache like ~/.npm.
+const (
+	sandboxNpmPrefix = "/home/runner/.npm-global"
+	sandboxPnpmHome  = "/home/runner/.local/share/pnpm"
+	sandboxPnpmStore = "/home/runner/.cache/pnpm-store"
+)
+
+func sandboxPath(bins []string) string {
+	dirs := append([]string{sandboxNpmPrefix + "/bin", sandboxPnpmHome, sandboxPnpmHome + "/bin"}, bins...)
+	return strings.Join(append(dirs, "/home/runner/go/bin", "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"), ":")
 }
 
 // Exec is the argv that runs argv inside the sandbox in cwd (repo-relative),
