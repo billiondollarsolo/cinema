@@ -71,3 +71,23 @@ Containers are **planned**; these are from the spike, for when they land.
 | **`ubuntu-latest` moves.** On the first real PR from a Mac, CI's runner was Ubuntu 26.04 and the receipts came from a 24.04 image: every job ran (`ENVIRONMENT_MISMATCH`). Correct, and no saving. | The runner image follows each job's `runs-on`, and the OS release is in the environment, so a move is a miss, never a false skip. |
 | **Tests exec tools no workflow mentions** (cli's tests run `ssh-keygen`) | The runner image keeps GitHub's base tools, not just what workflows name. |
 | **x86 CPU flags aren't visible under Rosetta** (`/proc/cpuinfo` comes from the arm64 kernel) | Receipts record emulation; `emulation: forbid` for tasks whose results depend on CPU features. |
+
+## Language runtimes
+
+| Gotcha | What CInema does |
+|---|---|
+| **pip installs into the interpreter**, and pinned runtimes are mounted read-only | The setup-python draft copies the runtime to `$RUNNER_TEMP` and points PATH and `pythonLocation` at the copy, as setup-python's install is writable in CI (about 2 s a task). |
+| **Same Python version, another build**: python-build-standalone ships 3.12.7 in several releases | The oldest build of the pinned version, so every machine gets the same files. |
+| **Same Java version, another vendor**: Temurin, Zulu and Corretto 21.0.5 are different builds | The pin names the vendor (`temurin-21.0.5+11`); only Temurin is provisioned, other distributions go to review. |
+| **setup-java without `check-latest` uses the runner's preinstalled JDK**, which lags the newest after a release | A floating `java-version` without `check-latest: true` goes to review. |
+| **Gradle's build cache replays test results** | Only dependency downloads and wrapper distributions are shared between runs; Develocity remote caches go to review. |
+| **`components: clippy` or `targets: wasm32-…` change what a Rust job can do** | They're part of the pin (`1.83.0+clippy+wasm32-unknown-unknown`): a toolchain without clippy never stands in for one with it. |
+| **setup-rust-toolchain v1 sets `RUSTFLAGS="-D warnings"`, v2 `CARGO_BUILD_WARNINGS=deny`** | Mirrored per major version (from the action's ref), unless the job sets them. |
+| **The runner image has no rustup** | Steps that run `rustup component add` or `cargo +nightly` fail locally (no receipt); put components in the action's inputs or `rust-toolchain.toml`. |
+| **setup-dotnet installs next to the runner's 11 preinstalled SDKs**: without global.json the newest wins, and tests roll forward to the newest runtime | Review unless the job sets `DOTNET_INSTALL_DIR` to a directory of its own and `skip-lts-prepass: true`; then CI's `dotnet` is exactly the pinned SDK. |
+| **The .NET SDK aborts without ICU** | The runner image has the release's `libicu` like GitHub's; never `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT`, which changes culture-dependent results. |
+| **Headless Java AWT fails without fonts** ("Fontconfig head is null") | The runner image has fontconfig and DejaVu fonts. |
+| **setup-bun picks `-baseline` on x64 CPUs without AVX2; emulated containers show no CPU flags** | Always the AVX2 build hosted runners get (it runs under Rosetta). |
+| **Deno's zip on dl.deno.land isn't the same file as GitHub's** | Downloads from GitHub, as setup-deno does. Deno 1.x and 2.0.0 publish no checksum and aren't provisioned. |
+| **GitHub's API allows 60 unauthenticated requests an hour** | Release lists come from sources without that limit: git's own protocol (bun tags), dl.deno.land, Astral's and Adoptium's indexes, Rust's manifests list. |
+| **ruby/setup-ruby's rubies only work at `/opt/hostedtoolcache/Ruby/<ver>/<arch>`** and publish no checksums | Ruby isn't provisioned; Ruby jobs stay in CI. |

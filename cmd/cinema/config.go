@@ -35,9 +35,9 @@ type userConfig struct {
 // runnerImages is cinema's runner image for each GitHub Ubuntu runner
 // release, pinned: a new image is a new environment, by choice.
 var runnerImages = map[string]string{
-	"ubuntu-22.04": "ghcr.io/billiondollarsolo/cinema-runner:ubuntu-22.04@sha256:9de688091fb6c8542ea0234af80f2b12d4dac34a210da24234d4572fca07e341",
-	"ubuntu-24.04": "ghcr.io/billiondollarsolo/cinema-runner:ubuntu-24.04@sha256:cd35a8fa5327bcd7ddc2f968a27a070aa1c8538c57d1632d648b326b607772f5",
-	"ubuntu-26.04": "ghcr.io/billiondollarsolo/cinema-runner:ubuntu-26.04@sha256:facc9d984cee46a9e70042b2f186fb39fc83e1834cc65fdd922e8d1b580f0226",
+	"ubuntu-22.04": "ghcr.io/billiondollarsolo/cinema-runner:ubuntu-22.04@sha256:2a424754bcc36d37d1bfb8928ca180d4921a41ab4bd8a8e3a5883b03e30c9da3",
+	"ubuntu-24.04": "ghcr.io/billiondollarsolo/cinema-runner:ubuntu-24.04@sha256:a7d04b7825583924b60c6775c2365a06272bfaa08620ed23a89693aa28bf5f2b",
+	"ubuntu-26.04": "ghcr.io/billiondollarsolo/cinema-runner:ubuntu-26.04@sha256:43500d053e7c905575323931d3bdb6e36946c7a87609e82251562939207933ac",
 }
 
 // ubuntuLatest is the release GitHub's ubuntu-latest runs (seen 2026-10-31).
