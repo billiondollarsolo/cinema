@@ -201,6 +201,7 @@ Runs a task defined in `.cinema/tasks.yaml` with its exact argv. This is the pre
 - output blob digests; truncation flags
 - `result_origin: fresh | tool_cache | unknown` (§4.5)
 - matched task ID, if any
+- per-test results parsed from the output and JUnit files the run wrote (§9.7): counts and failed tests with the run, the full list as a blob with the logs. Advisory, never evidence
 
 Secrets: record only an allowlist of environment variable names and values declared in the task contract. Never dump the full environment. Never hash low-entropy secrets.
 
@@ -617,14 +618,14 @@ Dagger (dagger.io) runs pipelines as sandboxed, cached container operations, the
 | Test splitting (coming) | Fan-out across hosts (§9.4); shard-aware drafts for jobs that already split |
 | Cloud cache shares results across machines | **Signed receipts are that, verifiable:** CI skips work any trusted machine already proved, without a hosted service and without trusting a cache it can't check |
 | **Re-checked 2026-10-30 against Dagger 1.0 beta (2026-10-22) and its changelog:** | |
-| Test-native CI: each test reported on its own, rerun only the failed one | **Gap → P4 (run 2):** parse per-test results from task output (go test, pytest, jest/vitest, cargo test, JUnit XML) into the run record; `cinema run --failed-only` reruns the task (a task is the unit of evidence, so a rerun of one test is never a receipt); the same parse lets `graduate` compare *which* tests failed in a failure pair (closes §11.5.6) |
+| Test-native CI: each test reported on its own, rerun only the failed one | **Built (run 2), except `--failed-only`:** parse per-test results from task output (go test, pytest, jest/vitest, cargo test, JUnit XML) into the run record; `cinema run --failed-only` reruns the task (a task is the unit of evidence, so a rerun of one test is never a receipt); the same parse lets `graduate` compare *which* tests failed in a failure pair (closes §11.5.6) |
 | Smart checks (upcoming): run only checks a change affects, by tracking the files each artifact reads | **Deliberately not for skipping:** narrower inputs skip more and risk false greens (§5). P5: traced reads as an *advisory* ("this change can't affect task X") shown in `cinema status`, never as evidence |
 | `.dagger/lock` pins image tags, branches and HTTP fetches | Runtimes, actions' tools (golangci-lint, pnpm) and images are pinned with checksums in tasks.yaml; floating specs are re-checked in CI. Gap: `curl … \| sh` and `@latest` inside a job's own script stay unpinned (they're in the source, so a change is seen, but the remote content isn't): P5 `cinema lock` records digests of fetched URLs during a run and flags drift |
 | Test splitting across engines, balanced by per-test telemetry (upcoming) | P5 with fan-out (§9.4): per-test durations from the parsed results above drive the split |
 | Remote filesystems over SSH (live two-way volume) | For remote hosts (§9.3) the checkout is copied in (git bundle + digest check), never live-mounted: evidence needs a fixed tree |
 | Engines: Docker, Podman, nerdctl, Finch, Apple `container` | Docker (any context: Docker Desktop, Colima, OrbStack) built; Apple `container` P4 (macOS 26); P5: Podman and nerdctl through their Docker-compatible sockets, tested before claimed |
 | `dagger mcp`: functions as tools for agents | JSON envelopes on every reporting command (§10.3); P5: `cinema mcp` exposing status, explain, run and push as MCP tools |
-| `dagger check --failfast` | **P4 (run 2):** `cinema run --failfast` |
+| `dagger check --failfast` | **Built (run 2):** `cinema run --failfast` starts nothing after a failure; running tasks finish and are recorded (cancelling them would discard work as `interrupted` to save only their remaining time) |
 | Cloud Checks: Dagger Cloud runs checks on every push, replacing Actions workflows; usage-based pricing | **Different by design:** CInema keeps your CI and makes it skip proven work; no hosted service, nothing to buy. Bring-your-own compute = remote hosts (§9.3) |
 | Typed artifacts, branch filtering, self-orchestrating tests | Tasks are what CI's jobs do; `event:` covers branch- and event-dependent jobs; `services:` start a task's dependencies |
 | SDKs (Go, TypeScript, Python, Java, PHP, Elixir, Rust, Dang) | Not needed: CInema reads the workflows you have. Language parity is about **runtimes jobs use**: Go, Node, Python, uv, Java, Gradle, Rust, Bun, Deno, .NET built (§6.5); Ruby blocked (setup-ruby builds aren't relocatable or checksummed); PHP and Erlang/Elixir P5 |
@@ -856,7 +857,7 @@ A drafted or hand-written task is a claim that it tests what its CI job tests. B
 4. **Disagreement.** A pass locally and a failure in CI on the same tree is a false green: `cinema` removes the graduation in a commit it proposes, flags it in `cinema status` and the PR summary, and the job runs in CI until it re-graduates. The opposite (local fails, CI passes) is flagged too. A disagreement that a CI rerun reverses is recorded as flaky; a flaky job graduates only with `allow_flaky: true` in its entry, an explicit claim.
 5. **Spot checks.** A graduated job still runs in CI on a sample of runs (default 1 in 20), picked from `GITHUB_RUN_ID` by the `cinema` job, and its result is compared like a shadow pair. That makes drift visible; it doesn't make it impossible.
 
-6. **Known gap: failures agree by exit status only.** A stand-in that fails for another reason than CI (a missing file in a lab snapshot fails the build in 57 s where CI's failed in its tests) counts as agreement. Failures are the rarest and most valuable comparisons, so a later pass should compare which step or test failed (CI job logs through the API, local output), and not count a failure pair without that.
+6. **Failure pairs compare failed tests (closed run 2; was: failures agreed by exit status only).** A stand-in that fails for another reason than CI (a missing file in a lab snapshot fails the build in 57 s where CI's failed in its tests) used to count as agreement. Now, when both sides failed, `graduate` compares the sets of failed tests: the stand-in's parsed from its recorded output (go test, pytest, jest, vitest, cargo; JUnit files are left out since CI's side has only its log), CI's parsed the same way from the job's log (`gh api …/actions/jobs/<id>/logs`). Identical sets count as agreement. Different sets, no parseable failed test on either side (a build error, a tool that isn't parsed), or a list that may be incomplete (output cut, a go package failed without a failing test, the runner's counts name more failures than its output) don't count, and graduate says which. Not counted isn't a disagreement: it neither graduates nor blocks. Still open: comparing the failed *step* for jobs whose failures aren't tests.
 
 Shadow pairs also measure the local-to-CI speed ratio (§11.2, Duration). Shadow results are evidence about a stand-in, never about a commit: they don't make a receipt valid or invalid.
 
@@ -941,6 +942,7 @@ CInema leaves nothing behind that it no longer needs. No daemon, so every rule r
 | Partial blob/DB writes | Temp file + rename. On startup, sweep `*.tmp` older than 1 h in the data dir. |
 | Provisioned runtimes (`runtimes/<lang>/<version>`) | Installed atomically (temp dir + rename). The daily pass removes versions unused for 90 days and interrupted installs older than 1 h. |
 | Fingerprint caches (`fscache/<repo>.gob`) | One file per repo, rewritten on use. The daily pass deletes caches unused for 90 days, and temp files older than 1 h. |
+| Per-test results | Counts and failed tests are a column of the run row, deleted with it. The full per-test list is a blob referenced by the row, expired and size-capped with the run's logs, and unlinked by the same unreferenced-blob pass. |
 | Old runs and logs | §13 retention. Applied by any command, at most once per 24 h (timestamp in `state.db`); one indexed `DELETE` plus blob unlink, under 50 ms. Blobs no longer referenced by any row are deleted in the same pass. `cinema gc` forces it. |
 | Data dir size | Hard cap (default 2 GiB). Past it, delete oldest passing logs first, then failing logs. Run metadata goes last. |
 | Notes, local | `git notes prune` on our refs during the daily pass (notes for commits that no longer exist). |
@@ -1112,7 +1114,7 @@ Report hashing and wrapper overhead separately, always.
 - [ ] `credentials:` from `env:` and `file:` providers, redacted from logs (§9.7)
 - [ ] Per-step timing in run records; `cinema check` alias; disk-pressure pruning (§9.7)
 - [ ] Repos that use Dagger: `dagger` steps translate as tasks (§9.7)
-- [ ] Per-test results parsed from task output (go test, pytest, jest/vitest, cargo, JUnit XML); failure pairs compare failed tests (§11.5.6); `cinema run --failfast` (§9.7, run 2)
+- [x] Per-test results parsed from task output (go test, pytest, jest/vitest, cargo, JUnit XML); failure pairs compare failed tests (§11.5.6); `cinema run --failfast` (§9.7, run 2). Not yet: `cinema run --failed-only`
 - [ ] Real projects per language, locally against upstream CI's results (run 2)
 - [ ] GitLab CI (§11.7): analyzer, child-pipeline skipping, forge interfaces (run 2); live spike once there's a GitLab account
 - [ ] Tests: ACC-101…122, CLEAN-009…011

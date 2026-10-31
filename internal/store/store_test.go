@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/billiondollarsolo/cinema/internal/record"
+	"github.com/billiondollarsolo/cinema/internal/testreport"
 )
 
 func open(t *testing.T, dir string) *Store {
@@ -33,7 +34,7 @@ func addRun(t *testing.T, s *Store, code int, out string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.FinishRun(id, result(code, out), Source{}, Match{}); err != nil {
+	if _, err := s.FinishRun(id, result(code, out), Source{}, Match{}, testreport.Report{}); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -62,7 +63,7 @@ func TestLifecycle(t *testing.T) {
 	if s.col(t, pass, "stderr_blob") != nil {
 		t.Fatal("empty stream stored a blob")
 	}
-	if _, err := s.FinishRun(pass, result(0, ""), Source{}, Match{}); err == nil {
+	if _, err := s.FinishRun(pass, result(0, ""), Source{}, Match{}, testreport.Report{}); err == nil {
 		t.Fatal("finished a run twice")
 	}
 }
@@ -84,7 +85,7 @@ func TestCrashLeavesIncomplete(t *testing.T) { // ACC-066
 	if got := s.col(t, alive, "state"); got != StateRecording {
 		t.Fatalf("live recorder: %v", got)
 	}
-	if _, err := s.FinishRun(id, result(0, ""), Source{}, Match{}); err == nil {
+	if _, err := s.FinishRun(id, result(0, ""), Source{}, Match{}, testreport.Report{}); err == nil {
 		t.Fatal("incomplete run became finishable")
 	}
 }
@@ -104,7 +105,7 @@ func TestConcurrentWriters(t *testing.T) { // ACC-051
 			for range 15 {
 				id, err := s.BeginRun([]string{"x"}, "/r")
 				if err == nil {
-					_, err = s.FinishRun(id, result(0, "same output"), Source{}, Match{})
+					_, err = s.FinishRun(id, result(0, "same output"), Source{}, Match{}, testreport.Report{})
 				}
 				if err != nil {
 					t.Error(err)
@@ -242,7 +243,7 @@ func TestMigrateFromV1(t *testing.T) {
 	dir := t.TempDir()
 	s := open(t, dir)
 	// Rewind to a v1 database: drop the v2 columns' index and version.
-	if _, err := s.db.Exec(`ALTER TABLE runs DROP COLUMN result_origin; ALTER TABLE runs DROP COLUMN capture; DROP TABLE trusted_configs; ALTER TABLE runs DROP COLUMN env_inputs;
+	if _, err := s.db.Exec(`ALTER TABLE runs DROP COLUMN tests; ALTER TABLE runs DROP COLUMN tests_blob; ALTER TABLE runs DROP COLUMN result_origin; ALTER TABLE runs DROP COLUMN capture; DROP TABLE trusted_configs; ALTER TABLE runs DROP COLUMN env_inputs;
 		DROP INDEX runs_task; ALTER TABLE runs DROP COLUMN task_id;
 		ALTER TABLE runs DROP COLUMN contract_digest; ALTER TABLE runs DROP COLUMN env_digest;
 		ALTER TABLE runs DROP COLUMN vcs; PRAGMA user_version = 1;`); err != nil {
@@ -256,7 +257,7 @@ func TestMigrateFromV1(t *testing.T) {
 	}
 	var v int
 	s.db.QueryRow(`PRAGMA user_version`).Scan(&v)
-	if v != 5 {
+	if v != 6 {
 		t.Fatalf("user_version = %d", v)
 	}
 }
@@ -302,5 +303,44 @@ func TestSweepRuntimes(t *testing.T) {
 	}
 	if _, err := os.Stat(used); err != nil {
 		t.Fatal("recently used runtime removed")
+	}
+}
+
+// Per-test results: the summary lives as long as the run, the full list
+// expires with the logs, and both go with the run (plan §13.1).
+func TestTestResults(t *testing.T) {
+	s := open(t, t.TempDir())
+	id, err := s.BeginRun([]string{"go", "test"}, "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := result(1, "--- FAIL: TestB (0.02s)\nFAIL\tp\t0.1s\n")
+	tr := testreport.Read(res.Stdout.Bytes(), false, nil)
+	if _, err := s.FinishRun(id, res, Source{RepoRoot: "/repo"}, Match{TaskID: "test"}, tr); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := s.TaskRuns("/repo", "test", 1)
+	if err != nil || len(runs) != 1 || runs[0].Tests == nil || runs[0].Tests.Failures[0].Name != "p.TestB" {
+		t.Fatalf("%v %+v", err, runs)
+	}
+	row, _, _, err := s.Run("/repo", id)
+	if err != nil || row.Tests.Failed != 1 || len(s.Tests(row)) != 1 {
+		t.Fatalf("%v %+v", err, row)
+	}
+	blob := s.col(t, id, "tests_blob").(string)
+
+	s.now = func() time.Time { return time.Now().Add(31 * 24 * time.Hour) }
+	if _, err := s.Maintain(true); err != nil {
+		t.Fatal(err)
+	}
+	if s.col(t, id, "tests_blob") != nil || s.col(t, id, "tests") == nil {
+		t.Fatal("the list must expire with the logs, the summary stay with the run")
+	}
+	if _, err := s.Blob(blob); !os.IsNotExist(err) {
+		t.Fatalf("expired list's blob kept: %v", err)
+	}
+	s.now = func() time.Time { return time.Now().Add(91 * 24 * time.Hour) }
+	if st, _ := s.Maintain(true); st.RunsDeleted != 1 {
+		t.Fatalf("deleted %d", st.RunsDeleted)
 	}
 }

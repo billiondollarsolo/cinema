@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/billiondollarsolo/cinema/internal/testreport"
 )
 
 // cmdLog prints a recorded run's captured output: the latest run of a task, or
@@ -49,6 +51,10 @@ func cmdLog(args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "%s  %s  %s, exit %d, %s ago\n", run.ID, strings.Join(run.Argv, " "), run.State,
 		run.ExitCode, time.Since(run.Started).Round(time.Second))
+	if s := run.Tests; s != nil { // first: in a long log it's what you're looking for
+		fmt.Fprintf(os.Stderr, "tests: %d passed, %d failed, %d skipped%s\n", s.Passed, s.Failed, s.Skipped,
+			failedTests(s, "\n", len(s.Failures)))
+	}
 	os.Stdout.Write(stdout)
 	if len(stderr) > 0 {
 		fmt.Fprintln(os.Stderr, "--- stderr")
@@ -61,6 +67,31 @@ func cmdLog(args []string) int {
 		fmt.Fprintln(os.Stderr, "(output expired: logs of passing runs are kept 7 days, failing 30)")
 	}
 	return 0
+}
+
+// failedTests lists s's failures, at most n, each line starting with sep
+// ("" when none). Parsed from the output: advisory, never evidence.
+func failedTests(s *testreport.Summary, sep string, n int) string {
+	if s == nil || s.Failed == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%sfailed tests:", sep)
+	for i, f := range s.Failures {
+		if i == n {
+			fmt.Fprintf(&b, "%s  … %d more (cinema log)", sep, s.Failed-n)
+			break
+		}
+		d := ""
+		if f.DurationMS > 0 {
+			d = fmt.Sprintf(" (%s)", time.Duration(f.DurationMS)*time.Millisecond)
+		}
+		fmt.Fprintf(&b, "%s  %s%s", sep, f.Name, d)
+	}
+	if s.Partial != "" {
+		fmt.Fprintf(&b, "%s  (maybe not all: %s)", sep, s.Partial)
+	}
+	return b.String()
 }
 
 func firstErr(errs ...error) error {

@@ -128,6 +128,11 @@ async function showRun(id) {
   fact("Result", r.signal ? `killed by ${r.signal}` : `exit ${r.exit_code}`, r.state === "passed" ? null : "warn");
   fact("Checkout", r.capture === "clean" ? "clean checkout of a commit" : r.capture === "workspace" ? "your working tree" : "outside a repo");
   if (r.changed_source) fact("Note", "the command changed files while running, so this run can't vouch for the tree", "warn");
+  const t = r.tests; // parsed from the output: advisory
+  if (t) {
+    fact("Tests", `${t.passed} passed, ${t.failed} failed, ${t.skipped} skipped`, t.failed ? "warn" : null);
+    if (t.failures) fact("Failed tests", t.failures.map((f) => f.name).join("\n") + (t.partial ? `\n(maybe not all: ${t.partial})` : ""), "warn");
+  }
 
   const logs = [];
   for (const [name, text, clipped, total, truncated] of [

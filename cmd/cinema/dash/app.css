@@ -230,7 +230,7 @@ button.run:disabled { color: var(--ink-2); cursor: default; }
 .detail h3 { margin: 0 0 12px; font: 13.5px/1.5 var(--code); word-break: break-all; }
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0 0 16px; font-size: 14px; }
 .facts dt { color: var(--ink-2); }
-.facts dd { margin: 0; }
+.facts dd { margin: 0; white-space: pre-line; }
 .warn { color: var(--stale); font-weight: 600; }
 
 .log-label { margin: 18px 0 6px; font-size: 13px; font-weight: 600; color: var(--ink-2); }

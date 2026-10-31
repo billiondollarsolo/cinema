@@ -63,8 +63,8 @@ func (s *Store) Maintain(force bool) (MaintainStats, error) {
 			return err
 		}
 		st.RunsDeleted, _ = r.RowsAffected()
-		r, err = tx.Exec(`UPDATE runs SET stdout_blob=NULL, stderr_blob=NULL
-			WHERE (stdout_blob IS NOT NULL OR stderr_blob IS NOT NULL) AND (
+		r, err = tx.Exec(`UPDATE runs SET stdout_blob=NULL, stderr_blob=NULL, tests_blob=NULL
+			WHERE (stdout_blob IS NOT NULL OR stderr_blob IS NOT NULL OR tests_blob IS NOT NULL) AND (
 				(state = ? AND started_at < ?) OR (state IN (?, ?) AND started_at < ?))`,
 			StatePassed, ago(p.PassLogMaxAge), StateFailed, StateIncomplete, ago(p.FailLogMaxAge))
 		if err != nil {
@@ -104,24 +104,24 @@ func (s *Store) Maintain(force bool) (MaintainStats, error) {
 // enforceCap drops logs, oldest passing runs first, then failing, until the
 // referenced blobs fit in MaxBlobBytes. Run metadata is kept.
 func (s *Store) enforceCap(files map[string]blobFile) (int64, error) {
-	rows, err := s.db.Query(`SELECT id, coalesce(stdout_blob,''), coalesce(stderr_blob,'') FROM runs
-		WHERE stdout_blob IS NOT NULL OR stderr_blob IS NOT NULL
+	rows, err := s.db.Query(`SELECT id, coalesce(stdout_blob,''), coalesce(stderr_blob,''), coalesce(tests_blob,'') FROM runs
+		WHERE stdout_blob IS NOT NULL OR stderr_blob IS NOT NULL OR tests_blob IS NOT NULL
 		ORDER BY CASE state WHEN ? THEN 0 ELSE 1 END, started_at`, StatePassed)
 	if err != nil {
 		return 0, err
 	}
-	type run struct{ id, out, err string }
+	type run struct{ id, out, err, tests string }
 	var runs []run
 	refcount := map[string]int{}
 	var total int64
 	for rows.Next() {
 		var r run
-		if err := rows.Scan(&r.id, &r.out, &r.err); err != nil {
+		if err := rows.Scan(&r.id, &r.out, &r.err, &r.tests); err != nil {
 			rows.Close()
 			return 0, err
 		}
 		runs = append(runs, r)
-		for _, d := range []string{r.out, r.err} {
+		for _, d := range []string{r.out, r.err, r.tests} {
 			if d != "" {
 				if refcount[d] == 0 {
 					total += files[d].size
@@ -140,11 +140,11 @@ func (s *Store) enforceCap(files map[string]blobFile) (int64, error) {
 			if total <= s.Policy.MaxBlobBytes {
 				return nil
 			}
-			if _, err := tx.Exec(`UPDATE runs SET stdout_blob=NULL, stderr_blob=NULL WHERE id=?`, r.id); err != nil {
+			if _, err := tx.Exec(`UPDATE runs SET stdout_blob=NULL, stderr_blob=NULL, tests_blob=NULL WHERE id=?`, r.id); err != nil {
 				return err
 			}
 			evicted++
-			for _, d := range []string{r.out, r.err} {
+			for _, d := range []string{r.out, r.err, r.tests} {
 				if d != "" {
 					if refcount[d]--; refcount[d] == 0 {
 						total -= files[d].size
@@ -204,7 +204,8 @@ func (s *Store) sweepRuntimes() int {
 
 func (s *Store) referenced() (map[string]bool, error) {
 	rows, err := s.db.Query(`SELECT stdout_blob FROM runs WHERE stdout_blob IS NOT NULL
-		UNION SELECT stderr_blob FROM runs WHERE stderr_blob IS NOT NULL`)
+		UNION SELECT stderr_blob FROM runs WHERE stderr_blob IS NOT NULL
+		UNION SELECT tests_blob FROM runs WHERE tests_blob IS NOT NULL`)
 	if err != nil {
 		return nil, err
 	}

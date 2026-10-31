@@ -18,6 +18,7 @@ import (
 	"github.com/billiondollarsolo/cinema/internal/snapshot"
 	"github.com/billiondollarsolo/cinema/internal/store"
 	"github.com/billiondollarsolo/cinema/internal/task"
+	"github.com/billiondollarsolo/cinema/internal/testreport"
 )
 
 func cmdExec(args []string) int {
@@ -44,7 +45,7 @@ func cmdExec(args []string) int {
 	}
 	r, repoErr := openRepo()
 	defer r.close()
-	res, runID, state, src, match := execRecorded(ctx, opts, r, repoErr, nil)
+	res, runID, state, src, match, _ := execRecorded(ctx, opts, r, repoErr, nil)
 	if res.Start.IsZero() {
 		return 127 // shell convention for "command not found / not executable"
 	}
@@ -61,7 +62,10 @@ func cmdExec(args []string) int {
 // (plan §4.1, ACC-006). A zero res.Start means the child never started.
 //
 // want is the task being run (`cinema run`); nil means find it by argv (`cinema exec`).
-func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr error, want *task.Task) (res record.Result, runID, state string, src store.Source, match store.Match) {
+//
+// tr is the per-test results parsed from the output and the JUnit reports the
+// command wrote: advisory metadata, never evidence.
+func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr error, want *task.Task) (res record.Result, runID, state string, src store.Source, match store.Match, tr testreport.Report) {
 	warn := func(format string, a ...any) { fmt.Fprintf(os.Stderr, "cinema: "+format+"\n", a...) }
 	recErr := r.stErr
 	if recErr == nil {
@@ -138,12 +142,12 @@ func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr err
 			_ = r.st.AbortRun(runID)
 		}
 		warn("%v", err)
-		return res, "", "", src, match
+		return res, "", "", src, match, tr
 	}
 	if err != nil {
 		// The row stays "recording" and becomes "incomplete": never signable.
 		warn("supervision error, run not recorded: %v", err)
-		return res, runID, "", src, match
+		return res, runID, "", src, match, tr
 	}
 	if res.Leftovers {
 		warn("stopped processes the command left running")
@@ -172,8 +176,13 @@ func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr err
 			warn("the command changed source files; this run can't certify the tree")
 		}
 	}
+	var junit [][]byte
+	if r.root != "" {
+		junit = testreport.JUnitFiles(r.root, res.Start) // before a clean checkout is reset
+	}
+	tr = testreport.Read(append(res.Stdout.Bytes(), res.Stderr.Bytes()...), res.Stdout.Truncated || res.Stderr.Truncated, junit)
 	if recErr == nil {
-		state, recErr = r.st.FinishRun(runID, res, src, match)
+		state, recErr = r.st.FinishRun(runID, res, src, match, tr)
 	}
 	if recErr != nil {
 		warn("run not recorded: %v", recErr)
@@ -183,7 +192,7 @@ func execRecorded(ctx context.Context, opts record.Options, r *repo, repoErr err
 			warn("cleanup: %v", err)
 		}
 	}
-	return res, runID, state, src, match
+	return res, runID, state, src, match, tr
 }
 
 func writeJSON(path, runID, state string, src store.Source, m store.Match, res record.Result) error {

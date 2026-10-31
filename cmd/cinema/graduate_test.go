@@ -12,17 +12,22 @@ import (
 	"github.com/billiondollarsolo/cinema/internal/task"
 )
 
+// check.sh fails in a go test when ./broken exists, the way a test suite does.
+const failingCheck = "if [ -f broken ]; then printf -- '--- FAIL: TestX (0.00s)\\nFAIL\\texample.com/p\\t0.1s\\n'; exit 1; fi\n"
+
 // The backtest graduates a stand-in that reproduces CI's results, failures
-// included, and refuses one that passes where CI failed (plan §11.5).
+// included, and refuses one that passes where CI failed (plan §11.5). A
+// failure pair counts only when the same tests failed (§11.5 item 6).
 func TestBacktest(t *testing.T) {
 	e := newEnv(t)
 	t.Setenv("CINEMA_DATA_DIR", e.data)
+	e.write("check.sh", failingCheck)
 	e.write(".github/workflows/ci.yml", `on: [push, pull_request]
 jobs:
   check:
     name: Check
     runs-on: ubuntu-latest
-    steps: [{run: test ! -f broken}]
+    steps: [{run: sh check.sh}]
 `)
 	e.git("add", "-A")
 	e.git("commit", "-qm", "ci")
@@ -37,6 +42,7 @@ jobs:
 	shas := strings.Fields(mustRun(t, e.repo, "git", "rev-list", "--first-parent", "HEAD"))[:2] // c2, c1
 
 	ci := map[string]string{shas[0]: "failure", shas[1]: "success"}
+	ciLog := "2026-10-30T10:00:00.0000000Z --- FAIL: TestX (0.01s)\n2026-10-30T10:00:00.0000000Z FAIL\texample.com/p\t0.1s\n"
 	old := ghAPI
 	defer func() { ghAPI = old }()
 	ghAPI = func(p string) ([]byte, error) {
@@ -46,7 +52,10 @@ jobs:
 					{"id": 100 + i, "path": ".github/workflows/other.yml"}, {"id": i + 1, "path": ".github/workflows/ci.yml"}}})
 			}
 			if strings.Contains(p, fmt.Sprintf("runs/%d/jobs", i+1)) {
-				return json.Marshal(map[string]any{"jobs": []map[string]string{{"name": "Check", "conclusion": ci[sha]}}})
+				return json.Marshal(map[string]any{"jobs": []map[string]any{{"id": 900 + i, "name": "Check", "conclusion": ci[sha]}}})
+			}
+			if strings.HasSuffix(p, fmt.Sprintf("actions/jobs/%d/logs", 900+i)) {
+				return []byte(ciLog), nil
 			}
 			if strings.Contains(p, fmt.Sprintf("runs/%d/jobs", 100+i)) {
 				return json.Marshal(map[string]any{"jobs": []map[string]string{{"name": "Check", "conclusion": "cancelled"}}})
@@ -63,6 +72,15 @@ jobs:
 	g, why := backtest(context.Background(), r, tk, shas)
 	if why != "" || g.Backtested != 2 || g.CIFailures != 1 || g.JobDigest != tk.JobDigest {
 		t.Fatalf("agreeing history: %+v %q", g, why)
+	}
+	for _, l := range []string{
+		"--- FAIL: TestY (0.01s)\nFAIL\texample.com/p\t0.1s\n",                        // another test failed in CI
+		"go: downloading example.com/x\nError: Process completed with exit code 1.\n", // CI failed outside its tests
+	} {
+		ciLog = l
+		if g, why := backtest(context.Background(), r, tk, shas); why != "" || g.Backtested != 1 || g.CIFailures != 0 {
+			t.Fatalf("a failure pair without the same failed tests counted: %+v %q", g, why)
+		}
 	}
 	ci[shas[0]] = "success" // CI passed where the stand-in fails: stricter or broken
 	if _, why := backtest(context.Background(), r, tk, shas); !strings.Contains(why, "CI passed and the stand-in failed") {
@@ -101,7 +119,8 @@ jobs:
 func TestLivePairs(t *testing.T) {
 	e := newEnv(t)
 	t.Setenv("CINEMA_DATA_DIR", e.data)
-	e.write(".github/workflows/ci.yml", "on: [pull_request]\njobs:\n  check:\n    name: Check\n    runs-on: ubuntu-latest\n    steps: [{run: test ! -f broken}]\n")
+	e.write("check.sh", failingCheck)
+	e.write(".github/workflows/ci.yml", "on: [pull_request]\njobs:\n  check:\n    name: Check\n    runs-on: ubuntu-latest\n    steps: [{run: sh check.sh}]\n")
 	e.git("add", "-A")
 	e.git("commit", "-qm", "ci")
 	draft, _ := e.cinema("analyze", "--yaml")
@@ -115,8 +134,13 @@ func TestLivePairs(t *testing.T) {
 	head := strings.TrimSpace(mustRun(t, e.repo, "git", "rev-parse", "HEAD"))
 	e.cinema("trust")
 	e.cinema("run", "--commit", head, "check") // passes
+	e.write("broken", "x")
+	e.git("add", "-A")
+	e.git("commit", "-qm", "a broken PR")
+	head2 := strings.TrimSpace(mustRun(t, e.repo, "git", "rev-parse", "HEAD"))
+	e.cinema("run", "--commit", head2, "check") // fails in TestX
 
-	ci := "success"
+	ci, ciLog := "success", "--- FAIL: TestX (0.01s)\nFAIL\texample.com/p\t0.1s\n"
 	old := ghAPI
 	defer func() { ghAPI = old }()
 	ghAPI = func(p string) ([]byte, error) {
@@ -124,9 +148,14 @@ func TestLivePairs(t *testing.T) {
 		case strings.Contains(p, "workflows/ci.yml/runs"):
 			return json.Marshal(map[string]any{"workflow_runs": []map[string]any{
 				{"id": 7, "head_sha": head, "pull_requests": []map[string]any{{"base": map[string]string{"sha": base}}}},
-				{"id": 8, "head_sha": base, "pull_requests": []map[string]any{}}}}) // a fork's: no base, ignored
+				{"id": 8, "head_sha": base, "pull_requests": []map[string]any{}}, // a fork's: no base, ignored
+				{"id": 9, "head_sha": head2, "pull_requests": []map[string]any{{"base": map[string]string{"sha": base}}}}}})
 		case strings.Contains(p, "runs/7/jobs"):
-			return json.Marshal(map[string]any{"jobs": []map[string]string{{"name": "Check", "conclusion": ci}}})
+			return json.Marshal(map[string]any{"jobs": []map[string]any{{"id": 70, "name": "Check", "conclusion": ci}}})
+		case strings.Contains(p, "runs/9/jobs"):
+			return json.Marshal(map[string]any{"jobs": []map[string]any{{"id": 90, "name": "Check", "conclusion": "failure"}}})
+		case strings.HasSuffix(p, "actions/jobs/90/logs"):
+			return []byte(ciLog), nil
 		}
 		return []byte(`{}`), nil
 	}
@@ -136,8 +165,12 @@ func TestLivePairs(t *testing.T) {
 	}
 	defer r.close()
 	tk := r.cfg.Tasks["check"]
+	if n, why := livePairs(r, tk, 10); n != 2 || why != "" {
+		t.Fatalf("agreeing pairs (one failure, the same test): %d %q", n, why)
+	}
+	ciLog = "--- FAIL: TestY (0.01s)\nFAIL\texample.com/p\t0.1s\n"
 	if n, why := livePairs(r, tk, 10); n != 1 || why != "" {
-		t.Fatalf("agreeing pair: %d %q", n, why)
+		t.Fatalf("a failure pair with different failed tests counted: %d %q", n, why)
 	}
 	ci = "failure" // CI failed on the tree the stand-in passed: a false green
 	if _, why := livePairs(r, tk, 10); !strings.Contains(why, "would have skipped a failing job") {

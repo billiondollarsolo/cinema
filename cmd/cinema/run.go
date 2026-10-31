@@ -23,6 +23,7 @@ import (
 	"github.com/billiondollarsolo/cinema/internal/record"
 	"github.com/billiondollarsolo/cinema/internal/store"
 	"github.com/billiondollarsolo/cinema/internal/task"
+	"github.com/billiondollarsolo/cinema/internal/testreport"
 )
 
 const tmpPrefix = "cinema-run-"
@@ -35,12 +36,13 @@ func cmdRun(args []string) int {
 	commit := fs.String("commit", "", "run in a clean checkout of `REV` instead of the working tree")
 	cfgPath := configFlag(fs)
 	jobs := fs.Int("j", 1, "with --commit: run up to `N` tasks at once, each in its own clean checkout")
+	failfast := fs.Bool("failfast", false, "start no more tasks after one fails (running ones finish)")
 	if err := fs.Parse(args); err != nil {
 		return exitBadArgs
 	}
 	useConfig(*cfgPath)
 	if *all == (fs.NArg() > 0) || *jobs < 1 {
-		fmt.Fprintln(os.Stderr, "usage: cinema run [--config FILE] [--commit REV [-j N]] <task>... | --all [--force]")
+		fmt.Fprintln(os.Stderr, "usage: cinema run [--config FILE] [--failfast] [--commit REV [-j N]] <task>... | --all [--force]")
 		return exitBadArgs
 	}
 	if *jobs > 1 && *commit == "" {
@@ -116,9 +118,9 @@ func cmdRun(args []string) int {
 
 	var failed int
 	if *jobs > 1 {
-		failed = runParallel(ctx, r, *commit, todo, *jobs)
+		failed = runParallel(ctx, r, *commit, todo, *jobs, *failfast)
 	} else {
-		failed = runTasks(ctx, w, todo)
+		failed = runTasks(ctx, w, todo, *failfast)
 	}
 	if ctx.Err() != nil {
 		fmt.Fprintln(os.Stderr, "cinema run: interrupted")
@@ -135,13 +137,17 @@ func cmdRun(args []string) int {
 
 // runTasks runs each task's exact argv from its cwd in w, recording every run,
 // and prints one result line per task. Returns how many failed.
-func runTasks(ctx context.Context, w *repo, todo []*task.Task) int {
+func runTasks(ctx context.Context, w *repo, todo []*task.Task, failfast bool) int {
 	failed := 0
-	for _, t := range todo {
+	for i, t := range todo {
 		if ctx.Err() != nil {
 			break
 		}
-		bad, fatal := runOne(ctx, w, t, nil, 0)
+		if failfast && failed > 0 {
+			notStarted(todo[i:])
+			break
+		}
+		bad, fatal, _ := runOne(ctx, w, t, nil, 0)
 		if bad {
 			failed++
 		}
@@ -152,10 +158,21 @@ func runTasks(ctx context.Context, w *repo, todo []*task.Task) int {
 	return failed
 }
 
+// notStarted reports the tasks --failfast didn't start.
+func notStarted(ts []*task.Task) {
+	for _, t := range ts {
+		fmt.Printf("- %s  not started: --failfast after a failure\n", t.ID)
+	}
+}
+
 // runParallel runs todo with up to j workers, each in its own clean checkout of
 // rev, so parallel tasks never see each other's tree writes. Task output goes to
 // the run record (dashboard, explain), not the terminal; failures print a tail.
-func runParallel(ctx context.Context, r *repo, rev string, todo []*task.Task, j int) int {
+//
+// failfast: after a failure no task starts, and those running finish: their
+// results are recorded (a pass is reusable evidence), where cancelling them
+// would throw the work away as "interrupted" to save only their remaining time.
+func runParallel(ctx context.Context, r *repo, rev string, todo []*task.Task, j int, failfast bool) int {
 	// Exclusive tasks (fixed ports, a fixed docker network) run alone, after the
 	// parallel-safe ones, one at a time.
 	var shared, alone []*task.Task
@@ -166,14 +183,17 @@ func runParallel(ctx context.Context, r *repo, rev string, todo []*task.Task, j 
 			shared = append(shared, t)
 		}
 	}
-	failed := runPool(ctx, r, rev, shared, j)
-	if len(alone) > 0 && ctx.Err() == nil {
-		failed += runPool(ctx, r, rev, alone, 1)
+	failed := runPool(ctx, r, rev, shared, j, failfast)
+	switch {
+	case failfast && failed > 0:
+		notStarted(alone)
+	case len(alone) > 0 && ctx.Err() == nil:
+		failed += runPool(ctx, r, rev, alone, 1, failfast)
 	}
 	return failed
 }
 
-func runPool(ctx context.Context, r *repo, rev string, todo []*task.Task, j int) int {
+func runPool(ctx context.Context, r *repo, rev string, todo []*task.Task, j int, failfast bool) int {
 	if len(todo) == 0 {
 		return 0
 	}
@@ -187,6 +207,15 @@ func runPool(ctx context.Context, r *repo, rev string, todo []*task.Task, j int)
 			cr, cleanup, err := cleanCheckout(r, rev)
 			defer cleanup()
 			for t := range queue {
+				mu.Lock()
+				stop := failfast && failed > 0 // handed out just as another task failed
+				if stop {
+					notStarted([]*task.Task{t})
+				}
+				mu.Unlock()
+				if stop {
+					continue
+				}
 				if err != nil {
 					mu.Lock()
 					fmt.Printf("✗ %s  no clean checkout: %v\n", t.ID, err)
@@ -194,7 +223,7 @@ func runPool(ctx context.Context, r *repo, rev string, todo []*task.Task, j int)
 					mu.Unlock()
 					continue
 				}
-				bad, fatal := runOne(ctx, cr, t, &mu, slot)
+				bad, fatal, _ := runOne(ctx, cr, t, &mu, slot)
 				mu.Lock()
 				if bad {
 					failed++
@@ -206,8 +235,15 @@ func runPool(ctx context.Context, r *repo, rev string, todo []*task.Task, j int)
 			}
 		})
 	}
-	for _, t := range todo {
+	for i, t := range todo {
 		if ctx.Err() != nil {
+			break
+		}
+		mu.Lock()
+		stop := failfast && failed > 0
+		mu.Unlock()
+		if stop {
+			notStarted(todo[i:])
 			break
 		}
 		queue <- t
@@ -220,7 +256,8 @@ func runPool(ctx context.Context, r *repo, rev string, todo []*task.Task, j int)
 // runOne runs a single task in w. printMu non-nil means parallel mode: output is
 // captured only, and lines are printed under the lock. fatal: w can't be reused.
 // slot is the worker's index, so parallel tasks with cpus: get different CPUs.
-func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slot int) (bad, fatal bool) {
+// tests is the run's parsed per-test results (nil: none found, or it never ran).
+func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slot int) (bad, fatal bool, tests *testreport.Summary) {
 	say := func(f string, a ...any) {
 		if printMu != nil {
 			printMu.Lock()
@@ -233,7 +270,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 	network, stopServices, err := t.StartServices()
 	if err != nil {
 		say("✗ %s  %v\n", t.ID, err)
-		return true, false
+		return true, false, nil
 	}
 	defer stopServices()
 	pl, _ := place(t)
@@ -242,7 +279,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 		// bind-mounted tree must be exactly the commit.
 		if w.capture != "clean" {
 			say("✗ %s  runs in a container only from a clean checkout: use --commit\n", t.ID)
-			return true, false
+			return true, false, nil
 		}
 		// ponytail: services are reachable by name from the sandbox, not on
 		// localhost as on a runner host; tasks that use localhost ports fail
@@ -250,7 +287,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 		bins, vars, caches, err := t.RuntimeSandbox(w.dataDir, "linux", strings.TrimPrefix(pl.platform, "linux/"))
 		if err != nil {
 			say("✗ %s  runtime: %v\n", t.ID, err)
-			return true, false
+			return true, false, nil
 		}
 		art, _ := artifactsRoot()
 		cpus, mem := t.RunnerSize()
@@ -260,7 +297,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 			CPUs:    cpus, MemoryMB: mem * 1024, Network: network})
 		if err != nil {
 			say("✗ %s  %v\n", t.ID, err)
-			return true, false
+			return true, false, nil
 		}
 		defer sb.Stop()
 		// Allowlisted env inputs keep their host values, as fingerprinted. Names
@@ -281,7 +318,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 		img, err := task.PinnedImage(t.Container) // the same digest the fingerprint records
 		if err != nil {
 			say("✗ %s  container: %v\n", t.ID, err)
-			return true, false
+			return true, false, nil
 		}
 		var stop func()
 		opts.Argv, stop = t.ContainerRun(w.root, img, network, opts.CPUs, pl.platform)
@@ -300,7 +337,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 		renv, err := t.RuntimeEnv(w.dataDir)
 		if err != nil {
 			say("✗ %s  runtime: %v\n", t.ID, err)
-			return true, false
+			return true, false, nil
 		}
 		opts.Env = renv // provisioned runtime (nil: inherit)
 		if opts.Env == nil {
@@ -328,7 +365,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 	} else {
 		say("▶ %s\n", t.ID)
 	}
-	res, _, state, src, match := execRecorded(ctx, opts, w.at(t.Cwd), nil, t)
+	res, _, state, src, match, tr := execRecorded(ctx, opts, w.at(t.Cwd), nil, t)
 	mark, note := "✓", ""
 	switch {
 	case res.Start.IsZero():
@@ -353,7 +390,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 	}
 	bad = mark == "✗"
 	if bad {
-		note += missingNote(append(res.Stdout.Bytes(), res.Stderr.Bytes()...))
+		note += failedTests(tr.Summary, "\n    ", 10) + missingNote(append(res.Stdout.Bytes(), res.Stderr.Bytes()...))
 	}
 	tail := ""
 	if bad && printMu != nil {
@@ -367,10 +404,10 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 		// ignored files let a task pass on another task's build (lab: eslint).
 		if err := restoreTree(w.root); err != nil {
 			fmt.Fprintf(os.Stderr, "cinema run: restoring the clean checkout: %v\n", err)
-			return bad, true // can't trust anything after this
+			return bad, true, tr.Summary // can't trust anything after this
 		}
 	}
-	return bad, false
+	return bad, false, tr.Summary
 }
 
 // lastLines returns the final n lines of b, indented, for a failure summary.

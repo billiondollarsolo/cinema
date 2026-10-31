@@ -19,6 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/billiondollarsolo/cinema/internal/record"
+	"github.com/billiondollarsolo/cinema/internal/testreport"
 )
 
 // Run states. Only StatePassed can ever be signed (plan §7.2).
@@ -160,6 +161,14 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+	if v < 6 { // per-test results (plan §9.7): advisory, never evidence
+		if _, err := db.Exec(`
+			ALTER TABLE runs ADD COLUMN tests TEXT;       -- JSON testreport.Summary; NULL = no tests found
+			ALTER TABLE runs ADD COLUMN tests_blob TEXT;  -- every test's result (JSON); expires with the logs
+			PRAGMA user_version = 6;`); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -209,7 +218,7 @@ func (s *Store) BeginRun(argv []string, cwd string) (string, error) {
 
 // FinishRun makes output durable first, then flips the state in one statement,
 // so a crash at any point leaves either StateRecording (→ incomplete) or a complete row.
-func (s *Store) FinishRun(id string, r record.Result, src Source, m Match) (string, error) {
+func (s *Store) FinishRun(id string, r record.Result, src Source, m Match, tr testreport.Report) (string, error) {
 	outBlob, err := s.putBlob(r.Stdout.Bytes())
 	if err != nil {
 		return "", err
@@ -217,6 +226,15 @@ func (s *Store) FinishRun(id string, r record.Result, src Source, m Match) (stri
 	errBlob, err := s.putBlob(r.Stderr.Bytes())
 	if err != nil {
 		return "", err
+	}
+	var testsBlob, summary any
+	if tr.Summary != nil {
+		b, _ := json.Marshal(tr.Tests)
+		if testsBlob, err = s.putBlob(b); err != nil {
+			return "", err
+		}
+		b, _ = json.Marshal(tr.Summary)
+		summary = string(b)
 	}
 	state := StateFailed
 	switch {
@@ -229,12 +247,12 @@ func (s *Store) FinishRun(id string, r record.Result, src Source, m Match) (stri
 		canceled=?, leftovers=?, stdout_blob=?, stdout_total=?, stdout_truncated=?,
 		stderr_blob=?, stderr_total=?, stderr_truncated=?,
 		repo_root=?, cwd_rel=?, source_before=?, source_after=?,
-		task_id=?, contract_digest=?, env_digest=?, vcs=?, env_inputs=?, capture=?, result_origin=? WHERE id=? AND state=?`,
+		task_id=?, contract_digest=?, env_digest=?, vcs=?, env_inputs=?, capture=?, result_origin=?, tests=?, tests_blob=? WHERE id=? AND state=?`,
 		state, r.Path, r.Start.UnixMilli(), r.Duration.Milliseconds(), r.ExitCode, nullStr(r.Signal),
 		r.Canceled, r.Leftovers, outBlob, r.Stdout.Total, r.Stdout.Truncated,
 		errBlob, r.Stderr.Total, r.Stderr.Truncated,
 		nullStr(src.RepoRoot), nullStr(src.CwdRel), nullStr(src.Before), nullStr(src.After),
-		nullStr(m.TaskID), nullStr(m.ContractDigest), nullStr(m.EnvDigest), nullStr(m.VCS), jsonOrNull(m.EnvInputs), nullStr(src.Capture), nullStr(m.Origin), id, StateRecording)
+		nullStr(m.TaskID), nullStr(m.ContractDigest), nullStr(m.EnvDigest), nullStr(m.VCS), jsonOrNull(m.EnvInputs), nullStr(src.Capture), nullStr(m.Origin), summary, testsBlob, id, StateRecording)
 	if err != nil {
 		return "", err
 	}
@@ -255,13 +273,14 @@ type TaskRun struct {
 	EnvInputs                 []string
 	Origin                    string
 	Capture                   string // workspace | clean
+	Tests                     *testreport.Summary
 }
 
 // TaskRuns returns the newest runs of taskID in repo root.
 func (s *Store) TaskRuns(root, taskID string, limit int) ([]TaskRun, error) {
 	rows, err := s.db.Query(`SELECT id, state, started_at, coalesce(duration_ms,0), coalesce(exit_code,-1),
 		coalesce(contract_digest,''), coalesce(env_digest,''), coalesce(vcs,''),
-		coalesce(source_before,''), coalesce(source_after,''), coalesce(env_inputs,''), coalesce(result_origin,''), coalesce(capture,'')
+		coalesce(source_before,''), coalesce(source_after,''), coalesce(env_inputs,''), coalesce(result_origin,''), coalesce(capture,''), coalesce(tests,'')
 		FROM runs WHERE repo_root=? AND task_id=? AND state != ? ORDER BY started_at DESC, id DESC LIMIT ?`,
 		root, taskID, StateRecording, limit)
 	if err != nil {
@@ -272,11 +291,12 @@ func (s *Store) TaskRuns(root, taskID string, limit int) ([]TaskRun, error) {
 	for rows.Next() {
 		var r TaskRun
 		var started int64
-		var inputs string
+		var inputs, tests string
 		if err := rows.Scan(&r.ID, &r.State, &started, &r.DurationMS, &r.ExitCode, &r.Contract, &r.Env,
-			&r.VCS, &r.SourceBefore, &r.SourceAfter, &inputs, &r.Origin, &r.Capture); err != nil {
+			&r.VCS, &r.SourceBefore, &r.SourceAfter, &inputs, &r.Origin, &r.Capture, &tests); err != nil {
 			return nil, err
 		}
+		r.Tests = summary(tests)
 		r.Started = time.UnixMilli(started)
 		if inputs != "" {
 			_ = json.Unmarshal([]byte(inputs), &r.EnvInputs)
@@ -288,40 +308,42 @@ func (s *Store) TaskRuns(root, taskID string, limit int) ([]TaskRun, error) {
 
 // RunRow is one run as the dashboard lists it (any run in the repo, task or not).
 type RunRow struct {
-	ID         string    `json:"id"`
-	State      string    `json:"state"`
-	TaskID     string    `json:"task_id,omitempty"`
-	Argv       []string  `json:"argv"`
-	CwdRel     string    `json:"cwd"`
-	Started    time.Time `json:"started_at"`
-	DurationMS int64     `json:"duration_ms"`
-	ExitCode   int       `json:"exit_code"`
-	Signal     string    `json:"signal,omitempty"`
-	Capture    string    `json:"capture,omitempty"`
-	Mutated    bool      `json:"changed_source"` // source_before != source_after
-	Source     string    `json:"source,omitempty"`
+	ID         string              `json:"id"`
+	State      string              `json:"state"`
+	TaskID     string              `json:"task_id,omitempty"`
+	Argv       []string            `json:"argv"`
+	CwdRel     string              `json:"cwd"`
+	Started    time.Time           `json:"started_at"`
+	DurationMS int64               `json:"duration_ms"`
+	ExitCode   int                 `json:"exit_code"`
+	Signal     string              `json:"signal,omitempty"`
+	Capture    string              `json:"capture,omitempty"`
+	Mutated    bool                `json:"changed_source"` // source_before != source_after
+	Source     string              `json:"source,omitempty"`
+	Tests      *testreport.Summary `json:"tests,omitempty"`
 
-	stdoutBlob, stderrBlob string
-	StdoutTotal            int64 `json:"stdout_total"`
-	StderrTotal            int64 `json:"stderr_total"`
-	StdoutTruncated        bool  `json:"stdout_truncated"`
-	StderrTruncated        bool  `json:"stderr_truncated"`
+	stdoutBlob, stderrBlob, testsBlob string
+	StdoutTotal                       int64 `json:"stdout_total"`
+	StderrTotal                       int64 `json:"stderr_total"`
+	StdoutTruncated                   bool  `json:"stdout_truncated"`
+	StderrTruncated                   bool  `json:"stderr_truncated"`
 }
 
 const runRowCols = `id, state, coalesce(task_id,''), argv, coalesce(cwd_rel,''), started_at,
 	coalesce(duration_ms,0), coalesce(exit_code,-1), coalesce(signal,''), coalesce(capture,''),
 	coalesce(source_before,'') != coalesce(source_after,''), coalesce(source_before,''),
 	coalesce(stdout_blob,''), coalesce(stderr_blob,''), coalesce(stdout_total,0), coalesce(stderr_total,0),
-	coalesce(stdout_truncated,0), coalesce(stderr_truncated,0)`
+	coalesce(stdout_truncated,0), coalesce(stderr_truncated,0), coalesce(tests,''), coalesce(tests_blob,'')`
 
 func scanRunRow(sc interface{ Scan(...any) error }) (RunRow, error) {
 	var r RunRow
-	var argv string
+	var argv, tests string
 	var started int64
 	err := sc.Scan(&r.ID, &r.State, &r.TaskID, &argv, &r.CwdRel, &started, &r.DurationMS, &r.ExitCode,
 		&r.Signal, &r.Capture, &r.Mutated, &r.Source, &r.stdoutBlob, &r.stderrBlob,
-		&r.StdoutTotal, &r.StderrTotal, &r.StdoutTruncated, &r.StderrTruncated)
+		&r.StdoutTotal, &r.StderrTotal, &r.StdoutTruncated, &r.StderrTruncated, &tests, &r.testsBlob)
 	r.Started = time.UnixMilli(started)
+	r.Tests = summary(tests)
 	_ = json.Unmarshal([]byte(argv), &r.Argv)
 	return r, err
 }
@@ -358,6 +380,31 @@ func (s *Store) Run(root, id string) (r RunRow, stdout, stderr []byte, err error
 		stderr, _ = s.Blob(r.stderrBlob)
 	}
 	return r, stdout, stderr, nil
+}
+
+// Tests is every test result of run r (nil when none were found, or they expired with its logs).
+func (s *Store) Tests(r RunRow) []testreport.Test {
+	if r.testsBlob == "" {
+		return nil
+	}
+	b, err := s.Blob(r.testsBlob)
+	if err != nil {
+		return nil
+	}
+	var ts []testreport.Test
+	_ = json.Unmarshal(b, &ts)
+	return ts
+}
+
+func summary(js string) *testreport.Summary {
+	if js == "" {
+		return nil
+	}
+	var s testreport.Summary
+	if json.Unmarshal([]byte(js), &s) != nil {
+		return nil
+	}
+	return &s
 }
 
 // Signature changes whenever a run in root starts, finishes, or is cleaned up.

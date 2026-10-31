@@ -275,8 +275,11 @@ func (d *dashSrv) runDetail(w http.ResponseWriter, req *http.Request, _ string) 
 	}
 	so, soCut := cleanLog(stdout)
 	se, seCut := cleanLog(stderr)
+	d.mu.Lock()
+	tests := d.r.st.Tests(run)
+	d.mu.Unlock()
 	writeJSONResponse(w, map[string]any{"run": run, "stdout": so, "stderr": se,
-		"stdout_clipped": soCut, "stderr_clipped": seCut})
+		"stdout_clipped": soCut, "stderr_clipped": seCut, "tests": tests})
 }
 
 // events tells the page when to re-fetch: a run started/finished/was cleaned

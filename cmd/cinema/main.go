@@ -18,10 +18,11 @@ commands:
   graduate [--commits N] <task>...                          backtest stand-ins on past commits against CI's results; agreeing ones may skip their jobs
   init                                                      write a .cinema/tasks.yaml skeleton
   exec [--record-json PATH] [--timeout D] -- CMD [ARGS...]   record an arbitrary command
-  run [--config FILE] [--commit REV] <task>... | --all     run tasks by name (clean checkout with --commit)
+  run [--config FILE] [--failfast] [--commit REV] <task>... | --all
+                                                            run tasks by name (clean checkout with --commit)
   status [--json]                                           per task: reusable / stale / missing + reason
   explain [--json] <task>                                   why a task is or isn't reusable
-  log [--failed] <task | run-id>                            a recorded run's captured output
+  log [--failed] <task | run-id>                            a recorded run's failed tests, then its captured output
   trust [--config FILE]                                     allow the toolchain commands in .cinema/tasks.yaml
   dashboard [--port N] [--allow-host H] [--no-open]         local web page: checks, runs, logs
   keys init | export                                        this machine's signing key

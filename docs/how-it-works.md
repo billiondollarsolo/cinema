@@ -55,7 +55,8 @@ It then outputs `skip_<job>=true` when every task of a job was reused, and for a
 ## Built since P4
 
 - **Runs in containers on your own machine** (macOS, Windows, Linux), shaped like the job's runner. See [Machines and engines](hosts.md).
-- **Shadow mode.** A covered job keeps running in CI until its task is graduated (`cinema graduate`): by backtesting on past merged commits, and by live pairs, your clean runs on PR trees compared with what CI's job said on the same PRs. New jobs with no history graduate after a few PRs.
+- **Shadow mode.** A covered job keeps running in CI until its task is graduated (`cinema graduate`): by backtesting on past merged commits, and by live pairs, your clean runs on PR trees compared with what CI's job said on the same PRs. New jobs with no history graduate after a few PRs. When both sides failed, the pair counts only if the same tests failed (CI's from the job's log): a stand-in failing for its own reason doesn't pass for agreement.
+- **Test results.** Each run records which tests passed, failed and were skipped, parsed from its output (go, pytest, jest, vitest, cargo) and the JUnit XML it wrote. `cinema log`, `explain`, `status --json` and the dashboard show them; they're never evidence ([Commands](commands.md#test-results)).
 - **Job summary.** The `cinema` job lists each covered job on the run page: skipped (and whose run proved it) or run (and why).
 - **Merge-result runs.** `cinema push --run` also tests the tree GitHub will build for the PR, so receipts match even after main has moved.
 - **Stricter matching:** floating versions re-resolved at check time; the event in the contract; failed runs published, so a failure from any trusted machine blocks a pass on the same work, and a pass after a failure counts only after three in a row; the runner's CPUs, memory and OS release in the environment; a run that used over half the job's timeout isn't reused.

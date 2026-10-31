@@ -14,6 +14,7 @@ import (
 	"github.com/billiondollarsolo/cinema/internal/plan"
 	"github.com/billiondollarsolo/cinema/internal/store"
 	"github.com/billiondollarsolo/cinema/internal/task"
+	"github.com/billiondollarsolo/cinema/internal/testreport"
 )
 
 const (
@@ -42,6 +43,8 @@ type runSummary struct {
 	Started    time.Time `json:"started_at"`
 	ExitCode   int       `json:"exit_code"`
 	DurationMS int64     `json:"duration_ms"`
+	// Parsed from its output: advisory, never evidence. Absent when none were found.
+	Tests *testreport.Summary `json:"tests,omitempty"`
 }
 
 // envelope is the one JSON object --json writes to stdout (plan §10.3).
@@ -84,7 +87,7 @@ func decide(r *repo, t *task.Task) (taskStatus, plan.Current, []store.TaskRun) {
 		return ts, plan.Current{}, nil
 	}
 	if len(runs) > 0 {
-		ts.LastRun = &runSummary{runs[0].ID, runs[0].State, runs[0].Started, runs[0].ExitCode, runs[0].DurationMS}
+		ts.LastRun = &runSummary{runs[0].ID, runs[0].State, runs[0].Started, runs[0].ExitCode, runs[0].DurationMS, runs[0].Tests}
 	}
 	cur, _, err := r.current(t)
 	switch {
@@ -215,6 +218,9 @@ func cmdExplain(args []string) int {
 	}
 	if ref != nil {
 		fmt.Printf("\nrun %s, %s ago, exit %d, %s\n", ref.ID, ago(ref.Started), ref.ExitCode, time.Duration(ref.DurationMS)*time.Millisecond)
+		if s := ref.Tests; s != nil {
+			fmt.Printf("  tests: %d passed, %d failed, %d skipped%s\n", s.Passed, s.Failed, s.Skipped, failedTests(s, "\n  ", 10))
+		}
 		check := func(name, was, now string) {
 			mark := "✓"
 			if was != now {

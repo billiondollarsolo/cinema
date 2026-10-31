@@ -367,7 +367,7 @@ func runMissingClean(r *repo, jobs int, sha string) int {
 	}
 	var failed int
 	if jobs > 1 {
-		failed = runParallel(ctx, r, sha, todo, jobs)
+		failed = runParallel(ctx, r, sha, todo, jobs, false)
 	} else {
 		sweepRunDirs()
 		cr, cleanup, err := cleanCheckout(r, sha)
@@ -376,7 +376,7 @@ func runMissingClean(r *repo, jobs int, sha string) int {
 			fmt.Fprintf(os.Stderr, "cinema push: %v\n", err)
 			return exitInternal
 		}
-		failed = runTasks(ctx, cr, todo)
+		failed = runTasks(ctx, cr, todo, false)
 	}
 	if ctx.Err() != nil {
 		fmt.Fprintln(os.Stderr, "cinema push: interrupted; nothing pushed")

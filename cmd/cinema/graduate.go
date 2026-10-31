@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/billiondollarsolo/cinema/internal/snapshot"
 	"github.com/billiondollarsolo/cinema/internal/store"
 	"github.com/billiondollarsolo/cinema/internal/task"
+	"github.com/billiondollarsolo/cinema/internal/testreport"
 )
 
 // cmdGraduate backtests stand-ins against CI's own history (plan §11.5): each
@@ -138,13 +140,14 @@ func backtest(ctx context.Context, r *repo, t *task.Task, shas []string) (task.G
 			fmt.Printf("  %s  %s: the job was defined differently then; skipped\n", t.ID, short(sha))
 			continue
 		}
-		ci, err := ciConclusion(sha, wf, analyzedKey(*leg))
+		job, err := ciConclusion(sha, wf, analyzedKey(*leg))
+		ci := job.Conclusion
 		if err != nil || (ci != "success" && ci != "failure") {
 			cleanup()
 			fmt.Printf("  %s  %s: no CI result to compare (%s%v); skipped\n", t.ID, short(sha), ci, errOrEmpty(err))
 			continue
 		}
-		bad, _ := runOne(ctx, cr, t, nil, 0)
+		bad, _, tests := runOne(ctx, cr, t, nil, 0)
 		cleanup()
 		local := map[bool]string{true: "failure", false: "success"}[bad]
 		if local != ci {
@@ -153,10 +156,14 @@ func backtest(ctx context.Context, r *repo, t *task.Task, shas []string) (task.G
 			}
 			return g, fmt.Sprintf("on %s CI passed and the stand-in failed: it doesn't do what the job does here", short(sha))
 		}
-		g.Backtested++
 		if ci == "failure" {
+			if why := sameFailures(tests, job.ID); why != "" {
+				fmt.Printf("  %s  %s: both failed, not counted: %s\n", t.ID, short(sha), why)
+				continue
+			}
 			g.CIFailures++
 		}
+		g.Backtested++
 		fmt.Printf("  %s  %s: agrees (%s)\n", t.ID, short(sha), ci)
 	}
 	return g, ""
@@ -176,13 +183,13 @@ func livePairs(r *repo, t *task.Task, limit int) (agreed int, why string) {
 	if err != nil {
 		return 0, ""
 	}
-	local := map[string]bool{} // source digest: passed (newest clean run)
+	local := map[string]store.TaskRun{} // source digest: newest clean run
 	for _, run := range runs {
 		if _, seen := local[run.SourceBefore]; seen || run.Capture != "clean" || run.Contract != contract ||
 			(run.State != store.StatePassed && run.State != store.StateFailed) {
 			continue
 		}
-		local[run.SourceBefore] = run.State == store.StatePassed
+		local[run.SourceBefore] = run
 	}
 	if len(local) == 0 {
 		return 0, ""
@@ -219,10 +226,11 @@ func livePairs(r *repo, t *task.Task, limit int) (agreed int, why string) {
 		if err != nil || counted[snap.Digest] {
 			continue
 		}
-		passed, ok := local[snap.Digest]
+		run, ok := local[snap.Digest]
 		if !ok {
 			continue
 		}
+		passed := run.State == store.StatePassed
 		cr, cleanup, err := cleanCheckout(r, c)
 		if err != nil {
 			cleanup()
@@ -238,7 +246,8 @@ func livePairs(r *repo, t *task.Task, limit int) (agreed int, why string) {
 		if key == "" {
 			continue // the job was defined differently on that PR
 		}
-		ci, err := jobConclusion(wr.ID, key)
+		job, err := ciJobOf(wr.ID, key)
+		ci := job.Conclusion
 		if err != nil || (ci != "success" && ci != "failure") {
 			continue // skipped (it was reused), cancelled, or unknown
 		}
@@ -247,6 +256,12 @@ func livePairs(r *repo, t *task.Task, limit int) (agreed int, why string) {
 				return agreed, fmt.Sprintf("on PR head %s CI failed and the stand-in passed on the same tree: it would have skipped a failing job", short(wr.HeadSHA))
 			}
 			return agreed, fmt.Sprintf("on PR head %s CI passed and the stand-in failed on the same tree", short(wr.HeadSHA))
+		}
+		if !passed {
+			if why := sameFailures(run.Tests, job.ID); why != "" {
+				fmt.Printf("  %s  PR head %s: both failed, not counted: %s\n", t.ID, short(wr.HeadSHA), why)
+				continue
+			}
 		}
 		counted[snap.Digest] = true
 		agreed++
@@ -267,13 +282,65 @@ func errOrEmpty(err error) string {
 	return " " + err.Error()
 }
 
-// ciConclusion is the conclusion of the job named like key in workflow wf's
-// newest push run at sha. By workflow run, not check-run name: two workflows
-// can have a job of the same name (cli: lint.yml and govulncheck.yml).
-func ciConclusion(sha, wf, key string) (string, error) {
+// sameFailures is why a pair where both sides failed doesn't count as
+// agreement ("" = the same tests failed). Exit status alone agrees too easily:
+// a stand-in failing for its own reason (a missing file, a tool it lacks)
+// looks like CI failing in its tests (plan §11.5 item 6). Both sides are
+// parsed the same way, CI's from the job's log.
+func sameFailures(local *testreport.Summary, job int64) string {
+	mine, why := testreport.FailedNames(local)
+	if why != "" {
+		return "the stand-in's failure: " + why
+	}
+	log, err := ciJobLog(job)
+	if err != nil {
+		return fmt.Sprintf("CI's job log: %v", err)
+	}
+	theirs, why := testreport.FailedNames(testreport.Read(log, false, nil).Summary)
+	if why != "" {
+		return "CI's failure: " + why
+	}
+	if slices.Equal(mine, theirs) {
+		return ""
+	}
+	only := func(a, b []string) string {
+		var d []string
+		for _, x := range a {
+			if !slices.Contains(b, x) {
+				d = append(d, x)
+			}
+		}
+		if len(d) > 5 {
+			d = append(d[:5], fmt.Sprintf("… %d more", len(d)-5))
+		}
+		return dash(strings.Join(d, ", "))
+	}
+	return fmt.Sprintf("different tests failed (only in CI: %s; only in the stand-in: %s)", only(theirs, mine), only(mine, theirs))
+}
+
+// ciJobLog is a CI job's log, read through the API (gh follows the redirect
+// to the log file).
+func ciJobLog(job int64) ([]byte, error) {
+	out, err := ghAPI(fmt.Sprintf("repos/{owner}/{repo}/actions/jobs/%d/logs", job))
+	if err != nil {
+		return nil, fmt.Errorf("gh api: %v", err)
+	}
+	return out, nil
+}
+
+// ciJob is a job of a CI workflow run. Conclusion "none": no such job or run.
+type ciJob struct {
+	ID         int64
+	Conclusion string
+}
+
+// ciConclusion is the job named like key in workflow wf's newest push run at
+// sha. By workflow run, not check-run name: two workflows can have a job of
+// the same name (cli: lint.yml and govulncheck.yml).
+func ciConclusion(sha, wf, key string) (ciJob, error) {
 	out, err := ghAPI(fmt.Sprintf("repos/{owner}/{repo}/actions/runs?head_sha=%s&event=push&per_page=100", sha))
 	if err != nil {
-		return "", fmt.Errorf("gh api: %v", err)
+		return ciJob{}, fmt.Errorf("gh api: %v", err)
 	}
 	var runs struct {
 		WorkflowRuns []struct {
@@ -282,7 +349,7 @@ func ciConclusion(sha, wf, key string) (string, error) {
 		} `json:"workflow_runs"`
 	}
 	if err := json.Unmarshal(out, &runs); err != nil {
-		return "", err
+		return ciJob{}, err
 	}
 	run := int64(0)
 	for _, r := range runs.WorkflowRuns { // newest first
@@ -292,33 +359,34 @@ func ciConclusion(sha, wf, key string) (string, error) {
 		}
 	}
 	if run == 0 {
-		return "none", nil
+		return ciJob{Conclusion: "none"}, nil
 	}
-	return jobConclusion(run, key)
+	return ciJobOf(run, key)
 }
 
-// jobConclusion is the conclusion of the job named like key in workflow run id.
-func jobConclusion(run int64, key string) (string, error) {
+// ciJobOf is the job named like key in workflow run id.
+func ciJobOf(run int64, key string) (ciJob, error) {
 	out, err := ghAPI(fmt.Sprintf("repos/{owner}/{repo}/actions/runs/%d/jobs?per_page=100", run))
 	if err != nil {
-		return "", fmt.Errorf("gh api: %v", err)
+		return ciJob{}, fmt.Errorf("gh api: %v", err)
 	}
 	var v struct {
 		Jobs []struct {
+			ID         int64  `json:"id"`
 			Name       string `json:"name"`
 			Conclusion string `json:"conclusion"`
 		} `json:"jobs"`
 	}
 	if err := json.Unmarshal(out, &v); err != nil {
-		return "", err
+		return ciJob{}, err
 	}
 	_, want, _ := strings.Cut(key, "\x00")
 	for _, c := range v.Jobs {
 		if _, got, _ := strings.Cut(jobKey("", c.Name), "\x00"); got == want {
-			return c.Conclusion, nil
+			return ciJob{c.ID, c.Conclusion}, nil
 		}
 	}
-	return "none", nil
+	return ciJob{Conclusion: "none"}, nil
 }
 
 // writeGraduations sets each task's graduated: line in tasks.yaml, textually,

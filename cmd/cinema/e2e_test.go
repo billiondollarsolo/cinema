@@ -551,6 +551,31 @@ tasks:
 	}
 }
 
+// --failfast starts nothing after a failure; tasks already running finish and
+// are recorded.
+func TestRunFailfast(t *testing.T) {
+	e := newEnv(t)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  a: {argv: [sh, -c, "exit 1"], platform: any, reuse: {allowed: true, max_age: 1h}}
+  b: {argv: [sh, -c, "sleep 1"], platform: any, reuse: {allowed: true, max_age: 1h}}
+  c: {argv: [sh, -c, "true"], platform: any, reuse: {allowed: true, max_age: 1h}}
+  d: {argv: [sh, -c, "true"], platform: any, reuse: {allowed: true, max_age: 1h}}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	out, code := e.cinema("run", "--failfast", "a", "c")
+	if code != 1 || !strings.Contains(out, "✗ a") || !strings.Contains(out, "- c  not started") {
+		t.Fatalf("sequential: %d\n%s", code, out)
+	}
+	out, code = e.cinema("run", "--failfast", "--commit", "HEAD", "-j", "2", "a", "b", "c", "d")
+	if code != 1 || !strings.Contains(out, "✗ a") || !strings.Contains(out, "✓ b") ||
+		!strings.Contains(out, "- c  not started") || !strings.Contains(out, "- d  not started") {
+		t.Fatalf("parallel: %d\n%s", code, out)
+	}
+}
+
 // A reused clean-checkout slot must not carry ignored files from an earlier run
 // into the next one: that's the stale node_modules / dist/ false green (ADR 0002).
 func TestCleanCheckoutSlotResetBetweenRuns(t *testing.T) {
@@ -852,6 +877,33 @@ tasks:
 	}
 	if _, code := e.cinema("log", "nope"); code != exitBadArgs {
 		t.Fatal("unknown task accepted")
+	}
+}
+
+// Failed tests are parsed from a run's output and shown first: in the run's
+// result line, log, explain and status --json.
+func TestFailedTestsShown(t *testing.T) {
+	e := newEnv(t)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  test: {argv: [sh, -c, "printf -- '--- PASS: TestA (0.00s)\\n--- FAIL: TestX (0.25s)\\nFAIL\\tex/p\\t0.3s\\n'; exit 1"], platform: any, reuse: {allowed: true, max_age: 1h}}
+`)
+	e.cinema("trust")
+	if out, _ := e.cinema("run", "test"); !strings.Contains(out, "failed tests:\n      ex/p.TestX (250ms)") {
+		t.Fatalf("run:\n%s", out)
+	}
+	cmd := exec.Command(bin, "log", "--failed", "test")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data)
+	both, _ := cmd.CombinedOutput()
+	if i := strings.Index(string(both), "tests: 1 passed, 1 failed, 0 skipped\nfailed tests:\n  ex/p.TestX"); i < 0 || i > strings.Index(string(both), "\n--- PASS") {
+		t.Fatalf("log --failed: summary first\n%s", both)
+	}
+	if out, _ := e.cinema("explain", "test"); !strings.Contains(out, "tests: 1 passed, 1 failed") {
+		t.Fatalf("explain:\n%s", out)
+	}
+	out, _ := e.cinema("status", "--json")
+	if !strings.Contains(out, `"failed": 1`) || !strings.Contains(out, `"name": "ex/p.TestX"`) {
+		t.Fatalf("status --json:\n%s", out)
 	}
 }
 
