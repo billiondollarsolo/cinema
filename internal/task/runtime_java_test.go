@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -174,5 +175,87 @@ func TestGradleRuntime(t *testing.T) {
 	fakeGradle(t, "8.14.1", javaZipOf(t, map[string]string{"gradle-8.14.1/../../evil": "x"}), "")
 	if _, err := k.Provision(data, "8.14.1", "linux", "amd64"); err == nil || !strings.Contains(err.Error(), "escapes") {
 		t.Fatalf("want traversal refused, got %v", err)
+	}
+}
+
+// fakeMaven serves Apache's archive layout for ver (bin zip and .sha512);
+// sum overrides the published checksum.
+func fakeMaven(t *testing.T, ver string, archive []byte, sum string) {
+	if sum == "" {
+		h := sha512.Sum512(archive)
+		sum = hex.EncodeToString(h[:])
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bin := "/maven-3/" + ver + "/binaries/apache-maven-" + ver + "-bin.zip"
+		switch r.URL.Path {
+		case bin + ".sha512":
+			fmt.Fprint(w, sum+"  apache-maven-"+ver+"-bin.zip\n") // older releases name the file too
+		case bin:
+			w.Write(archive)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	old := mavenDist
+	mavenDist = srv.URL
+	t.Cleanup(func() { mavenDist = old })
+}
+
+func TestMavenRuntime(t *testing.T) {
+	k := LookupRuntime("maven")
+	if k == nil || !k.Version.MatchString("3.9.15") || k.Version.MatchString("3.9") || k.Version.MatchString("4.0.0-rc-4") ||
+		strings.Join(k.Probe, " ") != "mvn --version" {
+		t.Fatal("maven version format or probe")
+	}
+	fakeMaven(t, "3.10.0", javaZipOf(t, map[string]string{"apache-maven-3.10.0/bin/mvn": "#!/bin/sh\n", "apache-maven-3.10.0/lib/x.jar": "x"}), "")
+	data := t.TempDir()
+	root, err := k.Provision(data, "3.10.0", "linux", "amd64")
+	if err != nil || root != filepath.Join(data, "runtimes", "maven", "apache-maven-3.10.0") {
+		t.Fatalf("%q %v", root, err)
+	}
+	if fi, err := os.Stat(filepath.Join(root, "bin", "mvn")); err != nil || fi.Mode().Perm()&0o100 == 0 {
+		t.Fatalf("bin/mvn: %v %v", fi, err)
+	}
+	mavenDist = "http://127.0.0.1:1" // installed: found again without the network
+	if again, err := k.Provision(data, "3.10.0", "darwin", "arm64"); err != nil || again != root {
+		t.Fatalf("reuse: %q %v", again, err)
+	}
+
+	fakeMaven(t, "3.9.15", javaZipOf(t, map[string]string{"apache-maven-3.9.15/bin/mvn": "x"}), strings.Repeat("0", 128))
+	if _, err := k.Provision(data, "3.9.15", "linux", "amd64"); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("want checksum mismatch, got %v", err)
+	}
+	// A SHA-256 where Apache publishes SHA-512 isn't the checksum.
+	fakeMaven(t, "3.9.14", javaZipOf(t, map[string]string{"apache-maven-3.9.14/bin/mvn": "x"}), strings.Repeat("0", 64))
+	if _, err := k.Provision(data, "3.9.14", "linux", "amd64"); err == nil || !strings.Contains(err.Error(), "isn't a checksum") {
+		t.Fatalf("want a short checksum refused, got %v", err)
+	}
+	fakeMaven(t, "3.9.13", javaZipOf(t, map[string]string{"apache-maven-3.9.13/lib/x.jar": "x"}), "")
+	if _, err := k.Provision(data, "3.9.13", "linux", "amd64"); err == nil || !strings.Contains(err.Error(), "no bin/mvn") {
+		t.Fatalf("want a zip without bin/mvn refused, got %v", err)
+	}
+	if left, _ := os.ReadDir(filepath.Join(data, "runtimes", "maven")); len(left) != 1 {
+		t.Fatalf("left behind: %v", left)
+	}
+}
+
+// mvn --version prints the JVM, the kernel and (JDK 24+) native-access
+// warnings: only the release line is fingerprinted, on both sides.
+func TestProbeReleaseLine(t *testing.T) {
+	gh := "WARNING: A restricted method in java.lang.System has been called\n\x1b[1mApache Maven 3.10.0 (abc123)\x1b[m\nMaven home: /usr/share/apache-maven-3.10.0\nJava version: 21.0.5, vendor: Eclipse Adoptium\nOS name: \"linux\", version: \"6.8.0-1017-azure\""
+	local := "Apache Maven 3.10.0 (abc123)\r\nMaven home: /usr/share/apache-maven-3.10.0\r\nOS name: \"linux\", version: \"6.10.14-linuxkit\""
+	if a, b := probeLine([]string{"mvn", "--version"}, gh), probeLine([]string{"mvn", "--version"}, local); a != "Apache Maven 3.10.0 (abc123)" || a != b {
+		t.Fatalf("%q %q", a, b)
+	}
+	gradle := "\n------------------------------------------------------------\nGradle 9.8.2\n------------------------------------------------------------\n\nOS: Linux 6.8.0 amd64"
+	if got := probeLine([]string{"gradle", "--version"}, gradle); got != "Gradle 9.8.2" {
+		t.Fatalf("gradle: %q", got)
+	}
+	// Other tools, and output without the line, are fingerprinted whole.
+	for _, c := range [][2]string{{"java", "openjdk 21.0.5\nOpenJDK Runtime"}, {"mvn", "Error: JAVA_HOME is not defined correctly."}} {
+		if got := probeLine([]string{c[0], "--version"}, c[1]); got != c[1] {
+			t.Errorf("%s: %q", c[0], got)
+		}
 	}
 }

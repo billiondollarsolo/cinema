@@ -2,7 +2,8 @@
 # slim, with the base tools tests call without any workflow naming them (and
 # what pinned runtimes need from the OS: ICU for .NET, fonts for Java's AWT), and a
 # non-root "runner" user with passwordless sudo. No language runtimes: cinema
-# mounts the pinned ones (plan §6.5). Published multi-arch; never built on a
+# mounts the pinned ones (plan §6.5). Tools a job runs from the image without
+# setting them up (python3, mvn) are GitHub's versions, probed on both sides. Published multi-arch; never built on a
 # developer's machine for another arch (P4-1). One image per GitHub runner
 # release: --build-arg UBUNTU=22.04 | 24.04 | 26.04.
 ARG UBUNTU=24.04
@@ -27,6 +28,20 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     && useradd -m -u 1001 -s /bin/bash runner \
     && echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner && chmod 0440 /etc/sudoers.d/runner \
     && mkdir -p /home/runner/work && chown runner:runner /home/runner/work
+# Maven as GitHub's install-java-tools.sh: Apache's bin zip unpacked in
+# /usr/share, mvn linked into /usr/bin, no MAVEN_HOME. Their toolset-2204/2404
+# say "3" (the newest 3.x when the image is built: 3.10.0 in images of
+# 2026-10-26), toolset-2604 3.9.15. Jobs calling mvn probe mvn --version on
+# both sides: when GitHub's moves, bump it here (SHA-512 from Apache's .sha512).
+RUN case "$UBUNTU" in \
+      22.04|24.04) v=3.10.0 sum=22d31676d5b92ed53308c19ecded3245d0efd0cddfec51ec7bab62f4f13ad70ddddceff8e62940e0e8e2421f3cde8106737f4becec0aa034ffeff2a754e88337 ;; \
+      26.04) v=3.9.15 sum=251c676eb88684d6dd86c666817979d256a335c31ad34ab0e1df17eeca1cd504a6c890e906a46d04e51cc7a4fb02f33a75971ef750558034e0a81c257be02267 ;; \
+      *) echo "no Maven version for ubuntu $UBUNTU" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL -o /tmp/maven.zip "https://archive.apache.org/dist/maven/maven-3/$v/binaries/apache-maven-$v-bin.zip" \
+    && echo "$sum  /tmp/maven.zip" | sha512sum -c - \
+    && unzip -qq -d /usr/share /tmp/maven.zip && rm /tmp/maven.zip \
+    && ln -s /usr/share/apache-maven-$v/bin/mvn /usr/bin/mvn
 LABEL org.opencontainers.image.source=https://github.com/billiondollarsolo/cinema \
       org.opencontainers.image.description="cinema runner image: runs GitHub Actions Linux jobs locally, like GitHub's ubuntu runners"
 USER runner

@@ -77,10 +77,10 @@ func readiness(j analyze.Job, m machine) (category, detail string) {
 }
 
 // runnerImageTools are the runnerTools cinema's runner image has (runner/Dockerfile).
-var runnerImageTools = []string{"jq", "unzip", "zip", "make", "gcc", "g++", "python3"}
+var runnerImageTools = []string{"jq", "unzip", "zip", "make", "gcc", "g++", "python3", "mvn"}
 
 // runtimeTools are runnerTools a pinned runtime puts on the task's PATH.
-var runtimeTools = map[string]string{"java": "java", "gradle": "gradle", "cargo": "rust", "python3": "python", "pip3": "python"}
+var runtimeTools = map[string]string{"java": "java", "gradle": "gradle", "mvn": "maven", "cargo": "rust", "python3": "python", "pip3": "python"}
 
 // missingRunnerTools: the runner tools script calls that the task won't find.
 // A task in a sandbox finds what the runner image has, not this machine's

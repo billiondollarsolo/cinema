@@ -4,14 +4,17 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -19,7 +22,8 @@ import (
 )
 
 // Java: Eclipse Temurin JDKs (setup-java's distribution: temurin) from the
-// Adoptium API, and Gradle distributions (setup-gradle's gradle-version).
+// Adoptium API, Gradle distributions (setup-gradle's gradle-version) and
+// Apache Maven releases.
 //
 // A java version names its vendor: temurin-21.0.5+11 is Adoptium's semver
 // for the build (a rebuild like 17.0.20.1+1 is 17.0.20+101), without the
@@ -42,6 +46,10 @@ func init() {
 	// No probe: gradle --version prints the kernel release, which differs
 	// between any two machines. The exact pin is in the contract.
 	RegisterRuntime(&RuntimeKind{Name: "gradle", Example: "8.14.3", Version: gradleVersionRE, Provision: provisionGradle, Bins: []string{"bin"}})
+	// Maven (stCarolas/setup-maven). mvn --version prints the JVM and the
+	// kernel too: the fingerprint keeps the release's line (probeLine).
+	RegisterRuntime(&RuntimeKind{Name: "maven", Example: "3.9.15", Version: mavenVersionRE, Provision: provisionMaven,
+		Bins: []string{"bin"}, Probe: []string{"mvn", "--version"}})
 }
 
 // mavenRC goes in every sandbox's /etc/mavenrc, which mvn and mvnw source.
@@ -58,6 +66,7 @@ var (
 	javaVersionRE   = regexp.MustCompile(`^temurin-([0-9]+)\.[0-9]+\.[0-9]+\+[0-9]+$`)
 	javaInstallRE   = regexp.MustCompile(`^temurin-([0-9]+)\..*-(linux|darwin)-(amd64|arm64)$`)
 	gradleVersionRE = regexp.MustCompile(`^[0-9]+\.[0-9]+(\.[0-9]+)?$`)
+	mavenVersionRE  = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`) // releases: no 4.0.0-rc-4
 )
 
 // TemurinVersion is the java version of an Adoptium semver
@@ -227,44 +236,75 @@ func adoptiumGet(c *http.Client, u string) (b []byte, found bool, err error) {
 	return b, err == nil, err
 }
 
-// gradleDist is Gradle's distribution host (a variable so tests use a fake).
-var gradleDist = "https://services.gradle.org/distributions"
+// gradleDist is Gradle's distribution host, mavenDist Apache's archive of
+// every Maven release (variables so tests use a fake).
+var (
+	gradleDist = "https://services.gradle.org/distributions"
+	mavenDist  = "https://archive.apache.org/dist/maven"
+)
 
 // provisionGradle installs the official Gradle ver (bin zip, checked against
-// the SHA-256 Gradle publishes beside it) under <data>/runtimes/gradle. It's
-// JVM bytecode and scripts: one install for every OS and arch.
+// the SHA-256 Gradle publishes beside it) under <data>/runtimes/gradle.
 func provisionGradle(dataDir, ver, osName, arch string) (string, error) {
 	if !gradleVersionRE.MatchString(ver) {
 		return "", fmt.Errorf("not a Gradle release: %q", ver)
 	}
-	if osName != "linux" && osName != "darwin" {
-		return "", fmt.Errorf("no Gradle provisioning for %s", osName)
+	dist := gradleDist + "/gradle-" + ver + "-bin.zip"
+	return provisionJVMZip(dataDir, osName, "gradle", "gradle-"+ver, "gradle", dist, dist+".sha256", sha256.New)
+}
+
+// provisionMaven installs Apache Maven ver (the bin zip GitHub's images
+// install, checked against the SHA-512 Apache publishes beside it) under
+// <data>/runtimes/maven. stCarolas/setup-maven fetches the same release from
+// Maven Central as a tarball: the version is the identity.
+func provisionMaven(dataDir, ver, osName, arch string) (string, error) {
+	if !mavenVersionRE.MatchString(ver) {
+		return "", fmt.Errorf("not a Maven release: %q", ver)
 	}
-	name := "gradle-" + ver
-	root := filepath.Join(dataDir, "runtimes", "gradle")
+	major, _, _ := strings.Cut(ver, ".")
+	dist := mavenDist + "/maven-" + major + "/" + ver + "/binaries/apache-maven-" + ver + "-bin.zip"
+	return provisionJVMZip(dataDir, osName, "maven", "apache-maven-"+ver, "mvn", dist, dist+".sha512", sha512.New)
+}
+
+// provisionJVMZip installs a JVM tool's zip, whose top directory is name, as
+// <data>/runtimes/<kind>/<name>, verified against the hex digest sumURL holds
+// (its first field). Bytecode and scripts: one install for every OS and arch.
+func provisionJVMZip(dataDir, osName, kind, name, bin, zipURL, sumURL string, newHash func() hash.Hash) (string, error) {
+	if osName != "linux" && osName != "darwin" {
+		return "", fmt.Errorf("no %s provisioning for %s", kind, osName)
+	}
+	root := filepath.Join(dataDir, "runtimes", kind)
 	dest := filepath.Join(root, name)
-	if fi, err := os.Stat(filepath.Join(dest, "bin", "gradle")); err == nil && fi.Mode().IsRegular() {
+	installed := func() bool {
+		fi, err := os.Stat(filepath.Join(dest, "bin", bin))
+		return err == nil && fi.Mode().IsRegular()
+	}
+	if installed() {
 		now := time.Now()
-		_ = os.Chtimes(dest, now, now)
+		_ = os.Chtimes(dest, now, now) // last use, for the cleanup sweep
 		return dest, nil
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return "", err
 	}
 	client := &http.Client{Timeout: 10 * time.Minute}
-	sum, err := httpGet(client, gradleDist+"/"+name+"-bin.zip.sha256", 1<<10)
+	sum, err := httpGet(client, sumURL, 1<<10)
 	if err != nil {
 		return "", err
 	}
-	want := strings.ToLower(strings.TrimSpace(string(sum)))
-	if len(want) != 64 {
-		return "", fmt.Errorf("%s-bin.zip.sha256 isn't a SHA-256", name)
+	h, want := newHash(), ""
+	if f := strings.Fields(string(sum)); len(f) > 0 {
+		want = strings.ToLower(f[0])
 	}
-	archive, err := httpGet(client, gradleDist+"/"+name+"-bin.zip", 300<<20)
+	if len(want) != 2*h.Size() {
+		return "", fmt.Errorf("%s isn't a checksum", path.Base(sumURL))
+	}
+	archive, err := httpGet(client, zipURL, 300<<20)
 	if err != nil {
 		return "", err
 	}
-	if h := sha256.Sum256(archive); hex.EncodeToString(h[:]) != want {
+	h.Write(archive)
+	if hex.EncodeToString(h.Sum(nil)) != want {
 		return "", errors.New("checksum mismatch")
 	}
 	tmp, err := os.MkdirTemp(root, ".install-*")
@@ -275,9 +315,12 @@ func provisionGradle(dataDir, ver, osName, arch string) (string, error) {
 	if err := extractZip(archive, tmp, name+"/"); err != nil {
 		return "", err
 	}
+	if _, err := os.Stat(filepath.Join(tmp, "bin", bin)); err != nil {
+		return "", fmt.Errorf("%s: no bin/%s under %s/", zipURL, bin, name)
+	}
 	if err := os.Rename(tmp, dest); err != nil {
-		if _, serr := os.Stat(filepath.Join(dest, "bin", "gradle")); serr == nil {
-			return dest, nil
+		if installed() {
+			return dest, nil // another process installed it first
 		}
 		return "", err
 	}

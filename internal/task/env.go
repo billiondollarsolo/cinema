@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
@@ -130,6 +131,7 @@ func (t *Task) EnvFingerprintIn(root string, env []string, w *Where) (Env, error
 			if err != nil {
 				return Env{}, fmt.Errorf("toolchain %q: %w%s", strings.Join(tc.Cmd, " "), err, sigillHint(err))
 			}
+			out = probeLine(tc.Cmd, out)
 			e.str("cmd")
 			e.list(tc.Cmd)
 			e.str(out)
@@ -197,6 +199,29 @@ func toolOutput(dir string, argv []string, env []string) (string, error) {
 		return "", fmt.Errorf("%v: %s", err, firstLine(string(out)))
 	}
 	return string(bytes.TrimSpace(out)), nil
+}
+
+// releaseLine: tools whose version command also prints the machine (kernel,
+// install path, JVM, JDK warnings), which differs between any two hosts. Only
+// the line naming the release is fingerprinted; the JDK and OS are on their own.
+var releaseLine = map[string]*regexp.Regexp{
+	"mvn":    regexp.MustCompile(`(?m)^Apache Maven [0-9]\S*( \([0-9a-f]+\))?$`),
+	"gradle": regexp.MustCompile(`(?m)^Gradle [0-9]\S*$`),
+}
+
+var ansiSGR = regexp.MustCompile("\x1b\\[[0-9;]*m") // Maven bolds its banner on a terminal
+
+// probeLine is what a probe's output fingerprints: all of it, or the release
+// line for the tools above. No such line: all of it (a mismatch runs the job).
+func probeLine(argv []string, out string) string {
+	re := releaseLine[argv[0]]
+	if re == nil || len(argv) != 2 || argv[1] != "--version" {
+		return out
+	}
+	if l := re.FindString(strings.ReplaceAll(ansiSGR.ReplaceAllString(out, ""), "\r", "")); l != "" {
+		return l
+	}
+	return out
 }
 
 func firstLine(s string) string {

@@ -43,8 +43,8 @@ func TestReadiness(t *testing.T) {
 func TestMissingRunnerToolsSandbox(t *testing.T) {
 	defer func(f func(string) (string, error)) { lookPath = f }(lookPath)
 	lookPath = func(name string) (string, error) {
-		if name == "mvn" || name == "shellcheck" {
-			return "/opt/homebrew/bin/" + name, nil // the Mac has them; the runner image doesn't
+		if name == "shellcheck" {
+			return "/opt/homebrew/bin/" + name, nil // the Mac has it; the runner image doesn't
 		}
 		return "", errors.New("missing")
 	}
@@ -55,8 +55,9 @@ func TestMissingRunnerToolsSandbox(t *testing.T) {
 		sandbox  bool
 		want     []string
 	}{
-		{"mvn verify", java, true, []string{"mvn"}},
-		{"mvn verify", java, false, nil},
+		{"mvn verify", java, true, nil}, // the runner image has GitHub's Maven
+		{"mvn verify", java, false, []string{"mvn"}},
+		{"mvn verify", map[string]string{"maven": "3.9.9"}, false, nil},
 		{"gradle dU && java -version && make", java, true, nil},
 		{"gradle dU", nil, false, []string{"gradle"}},
 		{"shellcheck x.sh && jq . f", nil, true, []string{"shellcheck"}},
