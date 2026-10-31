@@ -22,7 +22,7 @@ cinema push                                          → checks signature, sourc
 
 - **Tasks** live in `.cinema/tasks.yaml`: an exact argv, a platform, optional pinned runtimes (`runtime: {go: 1.26.10, node: 22.23.4}`, provisioned identically on both sides), toolchain probes, declared outputs and a reuse window. See [plan §6](plan.md).
 - **Evidence comes from clean checkouts** of a commit ([ADR 0002](docs/adr/0002-ci-evidence-from-clean-checkouts.md)), never from your working tree with its ignored, stale files.
-- **Trust is explicit:** `cinema trust` approves the exact tasks.yaml that may run toolchain probes, and the gate trusts only the keys in `CINEMA_TRUSTED_KEYS`.
+- **Trust is explicit:** `cinema trust` approves the exact tasks.yaml that may run toolchain probes, and the gate trusts only the keys in `CINEMA_TRUSTED_KEYS` (GitHub: a repo variable; GitLab: `.cinema/trusted-keys` on the default branch, reviewed like code, see [GitLab](docs/gitlab.md)).
 - **No junk:** every file CInema writes has a cleanup rule ([plan §13.1](plan.md)).
 
 ## Quick start
