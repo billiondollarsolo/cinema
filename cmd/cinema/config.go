@@ -32,8 +32,32 @@ type userConfig struct {
 	Emulate []string `yaml:"emulate"`
 }
 
-// defaultRunnerImage is pinned: a new image is a new environment, by choice.
-const defaultRunnerImage = "ghcr.io/billiondollarsolo/cinema-runner:ubuntu-24.04@sha256:cd35a8fa5327bcd7ddc2f968a27a070aa1c8538c57d1632d648b326b607772f5"
+// runnerImages is cinema's runner image for each GitHub Ubuntu runner
+// release, pinned: a new image is a new environment, by choice.
+var runnerImages = map[string]string{
+	"ubuntu-22.04": "ghcr.io/billiondollarsolo/cinema-runner:ubuntu-22.04@sha256:9de688091fb6c8542ea0234af80f2b12d4dac34a210da24234d4572fca07e341",
+	"ubuntu-24.04": "ghcr.io/billiondollarsolo/cinema-runner:ubuntu-24.04@sha256:cd35a8fa5327bcd7ddc2f968a27a070aa1c8538c57d1632d648b326b607772f5",
+	"ubuntu-26.04": "ghcr.io/billiondollarsolo/cinema-runner:ubuntu-26.04@sha256:facc9d984cee46a9e70042b2f186fb39fc83e1834cc65fdd922e8d1b580f0226",
+}
+
+// ubuntuLatest is the release GitHub's ubuntu-latest runs (seen 2026-10-31).
+// ponytail: a constant, not a lookup. When GitHub moves it, CI measures the new
+// OS (os= in the environment) and receipts from here stop matching until this
+// follows: a miss, never a false skip.
+const ubuntuLatest = "ubuntu-26.04"
+
+// runnerImage is the image a task's sandbox runs in: the user's image if set,
+// else the one for the job's runs-on (ubuntu-latest, ubuntu-24.04, …-arm).
+func runnerImage(runsOn string) string {
+	if img := loadUserConfig().Image; img != "" {
+		return img
+	}
+	l := strings.TrimSuffix(strings.ToLower(runsOn), "-arm")
+	if img, ok := runnerImages[l]; ok {
+		return img
+	}
+	return runnerImages[ubuntuLatest] // ubuntu-latest, unset, or a label cinema has no image for (the OS check decides)
+}
 
 var (
 	userCfgOnce sync.Once
@@ -55,9 +79,6 @@ func loadUserConfig() userConfig {
 		}
 		if v, ok := os.LookupEnv("CINEMA_EMULATE"); ok {
 			userCfg.Emulate = strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == ' ' })
-		}
-		if userCfg.Image == "" {
-			userCfg.Image = defaultRunnerImage
 		}
 	})
 	return userCfg
@@ -137,13 +158,14 @@ func probeWhere(r *repo, t *task.Task, pl placement) (*task.Where, error) {
 		return nil, err
 	}
 	cpus, mem := t.RunnerSize()
-	key := fmt.Sprintf("%s|%s|%d|%d|%s", pl.platform, r.id, cpus, mem, strings.Join(bins, ":"))
+	img := runnerImage(t.RunsOn)
+	key := fmt.Sprintf("%s|%s|%d|%d|%s|%s", pl.platform, r.id, cpus, mem, strings.Join(bins, ":"), img)
 	probeMu.Lock()
 	defer probeMu.Unlock()
 	if sb := probeBoxes[key]; sb != nil {
 		return sb.Where(), nil
 	}
-	sb, err := task.StartSandbox(context.Background(), task.SandboxSpec{Image: loadUserConfig().Image, Platform: pl.platform,
+	sb, err := task.StartSandbox(context.Background(), task.SandboxSpec{Image: img, Platform: pl.platform,
 		Emulated: pl.emulated, Root: r.root, RepoName: filepath.Base(r.id), RepoID: r.id, DataDir: r.dataDir, Bins: bins,
 		CPUs: cpus, MemoryMB: mem * 1024,
 		ProbeOnly: true, Lifetime: 30 * time.Minute})

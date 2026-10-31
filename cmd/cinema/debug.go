@@ -52,7 +52,7 @@ func cmdDebug(args []string) int {
 	}
 	cpus, mem := t.RunnerSize()
 	art, _ := artifactsRoot()
-	sb, err := task.StartSandbox(context.Background(), task.SandboxSpec{Image: loadUserConfig().Image, Platform: pl.platform, Emulated: pl.emulated,
+	sb, err := task.StartSandbox(context.Background(), task.SandboxSpec{Image: runnerImage(t.RunsOn), Platform: pl.platform, Emulated: pl.emulated,
 		Root: cr.root, RepoName: filepath.Base(cr.id), RepoID: cr.id, DataDir: r.dataDir, Bins: bins, Artifacts: art,
 		Objects: filepath.Join(cr.id, ".git", "objects"), CPUs: cpus, MemoryMB: mem * 1024})
 	if err != nil {

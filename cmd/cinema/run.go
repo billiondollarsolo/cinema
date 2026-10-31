@@ -254,7 +254,7 @@ func runOne(ctx context.Context, w *repo, t *task.Task, printMu *sync.Mutex, slo
 		}
 		art, _ := artifactsRoot()
 		cpus, mem := t.RunnerSize()
-		sb, err := task.StartSandbox(ctx, task.SandboxSpec{Image: loadUserConfig().Image, Platform: pl.platform, Emulated: pl.emulated,
+		sb, err := task.StartSandbox(ctx, task.SandboxSpec{Image: runnerImage(t.RunsOn), Platform: pl.platform, Emulated: pl.emulated,
 			Root: w.root, RepoName: filepath.Base(w.id), RepoID: w.id, DataDir: w.dataDir, Bins: bins, Artifacts: art,
 			Objects: filepath.Join(w.id, ".git", "objects"),
 			CPUs:    cpus, MemoryMB: mem * 1024, Network: network})

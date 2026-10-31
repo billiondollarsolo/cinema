@@ -45,6 +45,7 @@ Changing any of these changes the task's contract digest: older receipts stop ma
 | `cpus` | Linux: the task sees only this many CPUs (affinity, `--cpuset-cpus` in a container), like the runner it replaces. Drafts use 4. |
 | `exclusive` | Never run alongside other tasks under `-j`: fixed ports, a fixed docker network, `sudo`. Tasks with services are always exclusive. |
 | `timeout` | Stop a run that takes longer; a timeout is a failure. Drafts use the job's `timeout-minutes`. In CI, a receipt whose run used over half of it isn't reused (`TOO_CLOSE_TO_TIMEOUT`). |
+| `runs_on` | The covered job's runner label. Picks the runner image, so the OS release matches CI's. Drafted. |
 | `memory` | The runner's memory (`16g`), with `cpus:` the runner size a container run imitates and reports. Part of a Linux task's environment: a 4-CPU receipt doesn't count on a 2-CPU private runner. |
 
 ## How it maps to CI (metadata, not part of the contract)

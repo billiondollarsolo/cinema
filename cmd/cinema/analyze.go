@@ -193,6 +193,9 @@ func draftFor(jobs []analyze.Job, cpus, memGB int) ([]byte, error) {
 			t.Content = append(t.Content, s("event"), s(p.Event))
 			j.Notes = append(j.Notes, "the job reads the triggering event or ref: this task is evidence for "+p.Event+" runs only")
 		}
+		if strings.HasPrefix(strings.ToLower(j.RunsOn), "ubuntu-") {
+			t.Content = append(t.Content, s("runs_on"), s(j.RunsOn))
+		}
 		t.Content = append(t.Content, s("cpus"), s(fmt.Sprint(cpus)), s("memory"), s(fmt.Sprintf("%dg", memGB)), s("timeout"), s(fmt.Sprintf("%dm", cmp.Or(p.TimeoutMinutes, 60))),
 			s("reuse"), m(s("allowed"), s("true"), s("max_age"), s("24h")))
 		key := s(p.ID)

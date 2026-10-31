@@ -173,3 +173,22 @@ jobs:
 		t.Fatalf("job_digest differs when re-analyzed from the checkout: %+v", legs)
 	}
 }
+
+// Each job's sandbox runs the runner image of its own runs-on, so the OS
+// release in its environment is CI's (ubuntu-latest moved to 26.04).
+func TestRunnerImageFollowsRunsOn(t *testing.T) {
+	t.Setenv("CINEMA_RUNNER_IMAGE", "")
+	for label, want := range map[string]string{
+		"ubuntu-latest": "ubuntu-26.04@", "": "ubuntu-26.04@", "ubuntu-22.04": "ubuntu-22.04@",
+		"ubuntu-24.04-arm": "ubuntu-24.04@", "Ubuntu-24.04": "ubuntu-24.04@", "ubuntu-20.04": "ubuntu-26.04@",
+	} {
+		if got := runnerImage(label); !strings.Contains(got, want) {
+			t.Errorf("%q: %s", label, got)
+		}
+	}
+	e := newEnv(t)
+	e.write(".github/workflows/ci.yml", "on: [pull_request]\njobs:\n  a: {runs-on: ubuntu-22.04, steps: [{run: make}]}\n")
+	if draft, _ := e.cinema("analyze", "--yaml"); !strings.Contains(draft, "runs_on: ubuntu-22.04") {
+		t.Fatalf("draft lacks runs_on:\n%s", draft)
+	}
+}

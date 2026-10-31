@@ -92,6 +92,9 @@ type Task struct {
 	// measures on its side (plan §11.2). Default 16g, cpus 4: ubuntu-latest on
 	// public repos.
 	Memory string `yaml:"memory"`
+	// RunsOn is the covered job's runner label (ubuntu-latest, ubuntu-24.04):
+	// which runner image a sandboxed run uses, so the OS release matches CI's.
+	RunsOn string `yaml:"runs_on"`
 	// Container runs the task inside this image, as a GitHub container job does
 	// (root inside it; files are handed back afterwards). The image's resolved
 	// digest is part of the environment fingerprint, and the run uses exactly
