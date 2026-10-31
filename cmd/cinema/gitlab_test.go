@@ -385,9 +385,19 @@ other:
 	if _, log = child("merge_request_event", "CI_MERGE_REQUEST_TARGET_BRANCH_SHA="+side); !regexp.MustCompile(`REUSE +unit`).MatchString(log) {
 		t.Errorf("tasks.yaml from the trust branch, whatever the variables say:\n%s", log)
 	}
-	// Variables that redirect git could point it at other keys: every task runs.
-	if v, log = child("push", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.abbrev", "GIT_CONFIG_VALUE_0=12"); v["unit"] == nil || !strings.Contains(log, "GIT_CONFIG_COUNT is set") {
-		t.Errorf("git redirected by a variable:\n%s", log)
+	// Variables that would redirect git (another global config through HOME or
+	// XDG_CONFIG_HOME, config from the environment) don't reach the trust
+	// root's git: the keys are still main's, from the real remote.
+	ci := filepath.Join(t.TempDir(), "ci")
+	mustRun(t, "", "git", "clone", "-q", g.bare, ci)
+	bogus := t.TempDir()
+	os.WriteFile(filepath.Join(bogus, ".gitconfig"), []byte("[url \"/nonexistent/\"]\n\tinsteadOf = "+g.bare+"\n"), 0o644)
+	for k, v := range map[string]string{"HOME": bogus, "XDG_CONFIG_HOME": bogus, "GIT_CONFIG_COUNT": "1",
+		"GIT_CONFIG_KEY_0": "remote.origin.url", "GIT_CONFIG_VALUE_0": "/nonexistent", "GIT_SSH_COMMAND": "false"} {
+		t.Setenv(k, v)
+	}
+	if keys, _, err := gitlabTrust(ci, "origin", "main"); err != nil || !strings.Contains(keys, strings.Fields(g.keys)[1]) {
+		t.Errorf("the trust root followed the job's git variables: %v %q", err, keys)
 	}
 }
 

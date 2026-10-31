@@ -13,8 +13,10 @@ package main
 import (
 	"cmp"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"regexp"
 	"slices"
 	"strings"
@@ -106,38 +108,66 @@ func gitlabTrust(root, remote, branch string) (keys, tip string, err error) {
 	if !gitBranch.MatchString(branch) || strings.Contains(branch, "..") {
 		return "", "", fmt.Errorf("--trust-branch %q isn't a plain branch name", branch)
 	}
-	// Variables that redirect git (its config, repository, objects or ssh)
-	// would let a pipeline variable choose where the keys come from. GitLab's
-	// runner sets none of them.
-	for _, kv := range os.Environ() {
-		k, _, _ := strings.Cut(kv, "=")
-		if slices.Contains(gitRedirects, k) || strings.HasPrefix(k, "GIT_CONFIG_KEY_") || strings.HasPrefix(k, "GIT_CONFIG_VALUE_") {
-			return "", "", fmt.Errorf("%s is set in the job: it could redirect git away from the reviewed keys", k)
-		}
-	}
 	// The branch is named in the candidate's own .gitlab-ci.yml: it must be the
 	// project's default branch, as the server says (not an env variable).
-	head, err := gitOut(root, "ls-remote", "--symref", remote, "HEAD")
+	head, err := trustGit(root, "ls-remote", "--symref", remote, "HEAD")
 	if err != nil {
 		return "", "", fmt.Errorf("the remote's default branch: %v", err)
 	}
 	if def, _, _ := strings.Cut(strings.TrimPrefix(head, "ref: refs/heads/"), "\t"); def != branch {
 		return "", "", fmt.Errorf("--trust-branch %s isn't the project's default branch (%s)", branch, def)
 	}
-	if _, err := gitOut(root, "fetch", "--quiet", "--no-tags", remote, "refs/heads/"+branch); err != nil {
+	if _, err := trustGit(root, "fetch", "--quiet", "--no-tags", remote, "refs/heads/"+branch); err != nil {
 		return "", "", err
 	}
-	if tip, err = gitOut(root, "rev-parse", "--verify", "--quiet", "FETCH_HEAD^{commit}"); err != nil {
+	if tip, err = trustGit(root, "rev-parse", "--verify", "--quiet", "FETCH_HEAD^{commit}"); err != nil {
 		return "", "", err
 	}
-	if keys, err = gitOut(root, "show", tip+":"+GitLabTrustFile); err != nil {
+	if keys, err = trustGit(root, "show", tip+":"+GitLabTrustFile); err != nil {
 		return "", "", fmt.Errorf("no %s on %s", GitLabTrustFile, branch)
 	}
 	return keys, tip, nil
 }
 
-var gitRedirects = []string{"GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM",
-	"GIT_DIR", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXEC_PATH", "GIT_NAMESPACE", "GIT_REPLACE_REF_BASE"}
+// trustGit runs git for the trust root with an environment built from
+// nothing: the job's variables (pipeline variables included) could otherwise
+// redirect it (GIT_CONFIG_*, GIT_DIR, HOME or XDG_CONFIG_HOME to another
+// global config, GIT_SSH_COMMAND, ...). Only proxies pass through: they can't
+// forge HTTPS content. The checkout's own .git/config is the runner's, written
+// before the job ran, and stays in effect (it holds the fetch credentials).
+func trustGit(root string, args ...string) (string, error) {
+	home, err := os.MkdirTemp("", "cinema-trust-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(home)
+	env := []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + home, "LANG=C", "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_TERMINAL_PROMPT=0"}
+	for _, k := range []string{"http_proxy", "https_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"} {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	git := ""
+	for _, d := range []string{"/usr/bin", "/usr/local/bin", "/bin"} {
+		if fi, err := os.Stat(d + "/git"); err == nil && fi.Mode().IsRegular() {
+			git = d + "/git"
+			break
+		}
+	}
+	if git == "" {
+		return "", errors.New("no git in /usr/bin, /usr/local/bin or /bin")
+	}
+	cmd := exec.Command(git, append([]string{"-C", root}, args...)...)
+	cmd.Env = env
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %v: %s", args[0], err, strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
 
 // writeGitLabChild decides which covered jobs still run and writes the child
 // pipeline to path. Every job setup hid runs unless every one of its legs was

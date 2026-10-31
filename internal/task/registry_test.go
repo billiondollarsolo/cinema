@@ -71,9 +71,16 @@ func TestRegistryDigest(t *testing.T) {
 // Image names and the auth realm come from the config under test: nothing may
 // reach the runner's own network, and the realm must be the registry's scheme.
 func TestRegistryRefusesPrivateAndBadRealm(t *testing.T) {
-	for _, a := range []string{"127.0.0.1:443", "10.0.0.5:443", "169.254.169.254:80", "[::1]:443", "0.0.0.0:443"} {
+	for _, a := range []string{"127.0.0.1:443", "10.0.0.5:443", "169.254.169.254:80", "[::1]:443", "0.0.0.0:443",
+		"100.64.1.1:443", "198.18.0.1:443", "240.0.0.1:443", "[::ffff:169.254.169.254]:80", "[64:ff9b::a9fe:a9fe]:80",
+		"[2002:a9fe:a9fe::1]:80", "[2002:0a00:0001::1]:443", "[fd00::1]:443", "[fe80::1]:443"} {
 		if refusePrivate("tcp", a, nil) == nil {
 			t.Errorf("%s allowed", a)
+		}
+	}
+	for _, a := range []string{"140.82.112.3:443", "[2606:4700::6810:84e5]:443", "[64:ff9b::8c52:7003]:443"} {
+		if err := refusePrivate("tcp", a, nil); err != nil {
+			t.Errorf("public address %s refused: %v", a, err)
 		}
 	}
 	if err := refusePrivate("tcp", "140.82.112.3:443", nil); err != nil {

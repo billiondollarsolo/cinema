@@ -16,6 +16,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os/exec"
 	"regexp"
@@ -161,20 +162,48 @@ func registryToken(challenge, repo string) (string, error) {
 }
 
 // refusePrivate refuses connections to addresses a public registry never has:
-// loopback, private, link-local (cloud metadata), unspecified.
+// loopback, private, link-local (cloud metadata), CGNAT, special-use, and IPv4
+// of those kinds embedded in IPv6 (mapped, NAT64, 6to4).
 func refusePrivate(network, address string, _ syscall.RawConn) error {
-	host, _, err := net.SplitHostPort(address)
+	ap, err := netip.ParseAddrPort(address)
 	if err != nil {
-		return err
+		return fmt.Errorf("registry address %s: %v", address, err)
 	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return fmt.Errorf("registry address %s: not an IP", host)
-	}
-	if !allowPrivateRegistry && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()) {
+	if ip := ap.Addr(); !allowPrivateRegistry && !publicAddr(ip) {
 		return fmt.Errorf("registry address %s refused: not a public address", ip)
 	}
 	return nil
+}
+
+var specialUse = func() (ps []netip.Prefix) {
+	for _, s := range []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24",
+		"203.0.113.0/24", "240.0.0.0/4", "64:ff9b:1::/48", "2001:db8::/32", "2001::/23"} {
+		ps = append(ps, netip.MustParsePrefix(s))
+	}
+	return
+}()
+
+func publicAddr(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() ||
+		ip.IsMulticast() || ip.IsInterfaceLocalMulticast() || !ip.IsValid() {
+		return false
+	}
+	for _, p := range specialUse {
+		if p.Contains(ip) {
+			return false
+		}
+	}
+	if ip.Is6() {
+		b := ip.As16()
+		switch {
+		case netip.MustParsePrefix("64:ff9b::/96").Contains(ip): // NAT64: the IPv4 is the last 4 bytes
+			return publicAddr(netip.AddrFrom4([4]byte(b[12:16])))
+		case netip.MustParsePrefix("2002::/16").Contains(ip): // 6to4: the IPv4 is bytes 2..5
+			return publicAddr(netip.AddrFrom4([4]byte(b[2:6])))
+		}
+	}
+	return true
 }
 
 func cmpOrStr(a, b string) string {
