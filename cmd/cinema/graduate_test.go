@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,12 +40,19 @@ jobs:
 	old := ghAPI
 	defer func() { ghAPI = old }()
 	ghAPI = func(p string) ([]byte, error) {
-		for sha, c := range ci {
-			if strings.Contains(p, sha) {
-				return json.Marshal(map[string]any{"check_runs": []map[string]string{{"name": "Check", "conclusion": c}}})
+		for i, sha := range shas {
+			if strings.Contains(p, "head_sha="+sha) { // newest first: another workflow's run with a same-named job
+				return json.Marshal(map[string]any{"workflow_runs": []map[string]any{
+					{"id": 100 + i, "path": ".github/workflows/other.yml"}, {"id": i + 1, "path": ".github/workflows/ci.yml"}}})
+			}
+			if strings.Contains(p, fmt.Sprintf("runs/%d/jobs", i+1)) {
+				return json.Marshal(map[string]any{"jobs": []map[string]string{{"name": "Check", "conclusion": ci[sha]}}})
+			}
+			if strings.Contains(p, fmt.Sprintf("runs/%d/jobs", 100+i)) {
+				return json.Marshal(map[string]any{"jobs": []map[string]string{{"name": "Check", "conclusion": "cancelled"}}})
 			}
 		}
-		return []byte(`{"check_runs":[]}`), nil
+		return []byte(`{"workflow_runs":[]}`), nil
 	}
 	r, err := openRepoAt(e.repo)
 	if err != nil {
@@ -85,5 +93,30 @@ jobs:
 	again, _ := os.ReadFile(path)
 	if strings.Count(string(again), "graduated:") != 1 || !strings.Contains(string(again), "backtested: 7") {
 		t.Fatalf("rerun must replace:\n%s", again)
+	}
+}
+
+// A job pinned through go-version-file keeps its job_digest when re-analyzed
+// from a checkout (verify, graduate): the version file is read there too.
+func TestCandidateLegsReadVersionFiles(t *testing.T) {
+	e := newEnv(t)
+	e.write("go.mod", "module x\n\ngo 1.26.1\n")
+	e.write(".github/workflows/ci.yml", `on: [pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: go test ./...
+`)
+	draft, _ := e.cinema("analyze", "--yaml")
+	cfg, err := task.Parse([]byte(draft))
+	if err != nil || cfg.Tasks["test"] == nil || cfg.Tasks["test"].Runtime.Go != "1.26.1" {
+		t.Fatalf("draft: %v\n%s", err, draft)
+	}
+	legs := candidateLegs(e.repo, "ci.yml")["test"]
+	if len(legs) != 1 || legs[0].LegDigest() != cfg.Tasks["test"].JobDigest {
+		t.Fatalf("job_digest differs when re-analyzed from the checkout: %+v", legs)
 	}
 }

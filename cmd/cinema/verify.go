@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
@@ -526,10 +527,16 @@ func writeSkipOutputs(cfg *task.Config, rep gateReport, root, wf string) {
 		spot = true
 		fmt.Println("  spot check: this run skips nothing, so CI's results can be compared with cinema's")
 	}
+	why := map[string][]string{} // job: why its tasks weren't reused, or who proved them
 	for _, tr := range rep.Tasks {
 		t := cfg.Tasks[tr.Task]
 		_, job, _ := strings.Cut(t.Covers, "#")
 		jobsCovered[job] = true
+		if tr.Decision == plan.GateReuse {
+			why[job] = append(why[job], fmt.Sprintf("%s: passed on %s", tr.Task, cmp.Or(tr.Signer, "a trusted machine")))
+		} else {
+			why[job] = append(why[job], fmt.Sprintf("%s: %s", tr.Task, cmp.Or(tr.Reason, tr.Decision)))
+		}
 		if tr.Decision == plan.GateReuse && t.JobDigest != "" {
 			if t.Graduates() && !spot {
 				reused[t.JobDigest] = true
@@ -539,7 +546,7 @@ func writeSkipOutputs(cfg *task.Config, rep gateReport, root, wf string) {
 		}
 	}
 	legs := candidateLegs(root, wf)
-	var lines strings.Builder
+	var lines, summary strings.Builder
 	for _, job := range sortedSet(jobsCovered) {
 		all := len(legs[job]) > 0
 		var excl []map[string]string
@@ -563,6 +570,7 @@ func writeSkipOutputs(cfg *task.Config, rep gateReport, root, wf string) {
 			state += " (shadow: reused, but not graduated; run cinema graduate)"
 		}
 		fmt.Printf("  %-6s %s\n", state, job)
+		fmt.Fprintf(&summary, "| `%s` | %s | %s |\n", job, state, strings.Join(why[job], "<br>"))
 		fmt.Fprintf(&lines, "skip_%s=%t\n", job, all)
 		if isMatrix {
 			if excl == nil {
@@ -572,29 +580,40 @@ func writeSkipOutputs(cfg *task.Config, rep gateReport, root, wf string) {
 			fmt.Fprintf(&lines, "exclude_%s=%s\n", job, b)
 		}
 	}
-	if path := os.Getenv("GITHUB_OUTPUT"); path != "" {
-		if f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644); err == nil {
-			f.WriteString(lines.String())
-			f.Close()
-		}
+	head := "## cinema: " + wf + "\n\nSKIP: proven by a signed local run, so this job didn't use a runner. RUN: it ran as usual.\n"
+	if spot {
+		head += "\nSpot check: this run skips nothing, so CI's results can be compared with cinema's.\n"
+	}
+	appendTo(os.Getenv("GITHUB_OUTPUT"), lines.String())
+	appendTo(os.Getenv("GITHUB_STEP_SUMMARY"), head+"\n| Job | In CI | Why |\n|---|---|---|\n"+summary.String())
+}
+
+// appendTo appends s to the file at path (GitHub's step files); "" does nothing.
+func appendTo(path, s string) {
+	if path == "" {
+		return
+	}
+	if f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644); err == nil {
+		f.WriteString(s)
+		f.Close()
 	}
 }
 
 // candidateLegs is every leg (matrix combination) of each job of workflow wf
 // as checked out. A job whose matrix can't be expanded yields a leg without a
-// proposal, which no task matches: it never skips.
+// proposal, which no task matches: it never skips. Analyzed exactly as setup
+// drafts (the whole repo: version files, repo-wide task ids), so an unchanged
+// job has the job_digest setup wrote.
 func candidateLegs(root, wf string) map[string][]analyze.Job {
 	out := map[string][]analyze.Job{}
-	src, err := os.ReadFile(filepath.Join(root, ".github", "workflows", filepath.Base(wf)))
-	if err != nil {
-		return out
-	}
-	jobs, err := analyze.Workflow(filepath.Base(wf), src)
+	jobs, err := analyze.Repo(root)
 	if err != nil {
 		return out
 	}
 	for _, j := range jobs {
-		out[j.ID] = append(out[j.ID], j)
+		if j.Workflow == filepath.Base(wf) {
+			out[j.ID] = append(out[j.ID], j)
+		}
 	}
 	return out
 }

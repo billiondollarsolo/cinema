@@ -129,7 +129,7 @@ func backtest(ctx context.Context, r *repo, t *task.Task, shas []string) (task.G
 			fmt.Printf("  %s  %s: the job was defined differently then; skipped\n", t.ID, short(sha))
 			continue
 		}
-		ci, err := ciConclusion(sha, analyzedKey(*leg))
+		ci, err := ciConclusion(sha, wf, analyzedKey(*leg))
 		if err != nil || (ci != "success" && ci != "failure") {
 			cleanup()
 			fmt.Printf("  %s  %s: no CI result to compare (%s%v); skipped\n", t.ID, short(sha), ci, errOrEmpty(err))
@@ -160,23 +160,47 @@ func errOrEmpty(err error) string {
 	return " " + err.Error()
 }
 
-// ciConclusion is the conclusion of the check run named like the job at sha.
-func ciConclusion(sha, key string) (string, error) {
-	out, err := ghAPI(fmt.Sprintf("repos/{owner}/{repo}/commits/%s/check-runs?per_page=100", sha))
+// ciConclusion is the conclusion of the job named like key in workflow wf's
+// newest push run at sha. By workflow run, not check-run name: two workflows
+// can have a job of the same name (cli: lint.yml and govulncheck.yml).
+func ciConclusion(sha, wf, key string) (string, error) {
+	out, err := ghAPI(fmt.Sprintf("repos/{owner}/{repo}/actions/runs?head_sha=%s&event=push&per_page=100", sha))
 	if err != nil {
 		return "", fmt.Errorf("gh api: %v", err)
 	}
+	var runs struct {
+		WorkflowRuns []struct {
+			ID   int64  `json:"id"`
+			Path string `json:"path"`
+		} `json:"workflow_runs"`
+	}
+	if err := json.Unmarshal(out, &runs); err != nil {
+		return "", err
+	}
+	run := int64(0)
+	for _, r := range runs.WorkflowRuns { // newest first
+		if p, _, _ := strings.Cut(r.Path, "@"); p == ".github/workflows/"+wf {
+			run = r.ID
+			break
+		}
+	}
+	if run == 0 {
+		return "none", nil
+	}
+	if out, err = ghAPI(fmt.Sprintf("repos/{owner}/{repo}/actions/runs/%d/jobs?per_page=100", run)); err != nil {
+		return "", fmt.Errorf("gh api: %v", err)
+	}
 	var v struct {
-		CheckRuns []struct {
+		Jobs []struct {
 			Name       string `json:"name"`
 			Conclusion string `json:"conclusion"`
-		} `json:"check_runs"`
+		} `json:"jobs"`
 	}
 	if err := json.Unmarshal(out, &v); err != nil {
 		return "", err
 	}
 	_, want, _ := strings.Cut(key, "\x00")
-	for _, c := range v.CheckRuns {
+	for _, c := range v.Jobs {
 		if _, got, _ := strings.Cut(jobKey("", c.Name), "\x00"); got == want {
 			return c.Conclusion, nil
 		}

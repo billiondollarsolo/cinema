@@ -342,6 +342,7 @@ jobs:
 	g.cinema("trust")
 	g.cinema("run", "--commit", "HEAD", "lint", "build-ubuntu-latest", "test-20.x-ubuntu-latest")
 	g.cinema("push")
+	var summary string
 	verify := func() string {
 		ci := filepath.Join(t.TempDir(), "ci")
 		mustRun(t, "", "git", "clone", "-q", g.bare, ci)
@@ -351,10 +352,12 @@ jobs:
 		cmd := exec.Command(bin, "verify", "--event", ev, "--skip-outputs", "ci.yml")
 		cmd.Dir = ci
 		cmd.Env = append(os.Environ(), "GITHUB_REPOSITORY=Example/Repo", "CINEMA_TRUSTED_KEYS="+g.keys,
-			"GITHUB_OUTPUT="+out, "CINEMA_DATA_DIR="+t.TempDir())
+			"GITHUB_OUTPUT="+out, "GITHUB_STEP_SUMMARY="+out+".md", "CINEMA_DATA_DIR="+t.TempDir())
 		if b, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%v\n%s", err, b)
 		}
+		md, _ := os.ReadFile(out + ".md")
+		summary = string(md)
 		b, _ := os.ReadFile(out)
 		return string(b)
 	}
@@ -374,6 +377,9 @@ jobs:
 	want := "skip_build=false\nexclude_build=[{\"os\":\"ubuntu-latest\"}]\nskip_lint=true\nskip_test=false\nexclude_test=[{\"node\":\"20.x\",\"os\":\"ubuntu-latest\"}]\nskip_unit=false\n"
 	if got := verify(); got != want {
 		t.Fatalf("outputs:\n%s\nwant:\n%s", got, want)
+	}
+	if !regexp.MustCompile("\\| `lint` \\| SKIP \\| lint: passed on \\S+ \\|").MatchString(summary) || !strings.Contains(summary, "| `unit` | RUN |") {
+		t.Fatalf("job summary:\n%s", summary)
 	}
 	// A change adds a step to lint. Its task (from the base tasks.yaml) is
 	// unchanged and freshly reused, but it no longer stands for the job: run it.
