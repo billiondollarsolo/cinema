@@ -113,6 +113,12 @@ func StartSandbox(ctx context.Context, sp SandboxSpec) (*Sandbox, error) {
 			s.inVolume = true
 		} else {
 			args = append(args, "-v", sp.Root+":"+s.Workdir)
+			// .git read-only: it's the host's, and cinema runs git there next
+			// (checkout for the following task). A task that wrote hooks, a filter
+			// driver or core.fsmonitor into it would run code on the host.
+			if fi, err := os.Lstat(filepath.Join(sp.Root, ".git")); err == nil && fi.IsDir() {
+				args = append(args, "-v", filepath.Join(sp.Root, ".git")+":"+path.Join(s.Workdir, ".git")+":ro")
+			}
 		}
 		// A clean checkout borrows the real repo's objects (git alternates, by
 		// host path): mount them read-only at that path, or git inside the

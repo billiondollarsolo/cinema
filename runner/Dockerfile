@@ -44,5 +44,16 @@ RUN case "$UBUNTU" in \
     && ln -s /usr/share/apache-maven-$v/bin/mvn /usr/bin/mvn
 LABEL org.opencontainers.image.source=https://github.com/billiondollarsolo/cinema \
       org.opencontainers.image.description="cinema runner image: runs GitHub Actions Linux jobs locally, like GitHub's ubuntu runners"
+# The docker CLI with buildx and compose, as GitHub's images have (from Docker's
+# signed apt repository; 26.04 falls back to 24.04's repository until Docker
+# publishes one). Used by docker: host tasks, which get the engine's socket.
+RUN set -e; . /etc/os-release; \
+    install -m 0755 -d /etc/apt/keyrings; \
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc; \
+    gpg --show-keys --with-colons /etc/apt/keyrings/docker.asc | grep -q '^fpr:::::::::9DC858229FC7DD38854AE2D88D81803C0EBFCD88:'; \
+    code=$VERSION_CODENAME; curl -fsSL -o /dev/null "https://download.docker.com/linux/ubuntu/dists/$code/Release" || code=noble; \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $code stable" > /etc/apt/sources.list.d/docker.list; \
+    apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends docker-ce-cli docker-buildx-plugin docker-compose-plugin; \
+    rm -rf /var/lib/apt/lists/*
 USER runner
 WORKDIR /home/runner/work

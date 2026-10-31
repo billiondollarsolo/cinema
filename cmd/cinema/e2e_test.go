@@ -1153,6 +1153,32 @@ tasks:
 	}
 }
 
+// Bind-mounted checkouts: .git is the host's and cinema runs git there next,
+// so a task can't plant hooks (or filters, fsmonitor) in it.
+func TestSandboxGitReadOnly(t *testing.T) {
+	e, img := sandboxEnv(t)
+	e.write(".cinema/tasks.yaml", `schema_version: 1
+tasks:
+  plant:
+    argv: [bash, -c, 'printf "#!/bin/sh\ntouch /tmp/pwned\n" > .git/hooks/post-checkout && chmod +x .git/hooks/post-checkout']
+    platform: linux/`+runtime.GOARCH+`
+    reuse: {allowed: true, max_age: 1h}
+`)
+	e.git("add", "-A")
+	e.git("commit", "-qm", "tasks")
+	e.cinema("trust")
+	cmd := exec.Command(bin, "run", "--commit", "HEAD", "plant")
+	cmd.Dir, cmd.Env = e.repo, append(os.Environ(), "CINEMA_DATA_DIR="+e.data, "CINEMA_ENGINE=docker", "CINEMA_RUNNER_IMAGE="+img, "CINEMA_CHECKOUT=bind")
+	out, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(out), "✗ plant") {
+		t.Fatalf("a task wrote into the host checkout's .git:\n%s", out)
+	}
+	hooks, _ := filepath.Glob(filepath.Join(e.data, "*", "*", "*", ".git", "hooks", "post-checkout"))
+	if len(hooks) > 0 {
+		t.Fatalf("hook planted: %v", hooks)
+	}
+}
+
 // sandboxEnv is a repo for sandbox tests, and the runner image built from
 // runner/. Skips without docker.
 func sandboxEnv(t *testing.T) (*env, string) {
