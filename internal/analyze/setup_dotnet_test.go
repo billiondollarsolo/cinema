@@ -63,21 +63,34 @@ func TestSetupDotnet(t *testing.T) {
 		t.Fatalf("root global.json: %s %v", j.Verdict, j.Reasons)
 	}
 
+	// Floating specs pin today's SDK and are resolved again in CI (floating:).
+	for name, c := range map[string]struct{ with, file, spec string }{
+		"floating":      {"dotnet-version: 8.0.x, skip-lts-prepass: true", "", "8.0.x"},
+		"latestFeature": {"global-json-file: sub/global.json, skip-lts-prepass: true", `{"sdk":{"version":"8.0.100","rollForward":"latestFeature"}}`, "8.0"},
+	} {
+		d := t.TempDir()
+		if c.file != "" {
+			os.MkdirAll(filepath.Join(d, "sub"), 0o755)
+			os.WriteFile(filepath.Join(d, "sub", "global.json"), []byte(c.file), 0o644)
+		}
+		if j := dotnetJob(t, d, ownDir, c.with); j.Verdict != Task || j.Proposal.Runtimes["dotnet"] == "" || j.Proposal.Floating["dotnet"] != c.spec {
+			t.Errorf("%s: %s %v %+v", name, j.Verdict, j.Reasons, j.Proposal)
+		}
+	}
+
 	for name, c := range map[string]struct{ env, with, file, want string }{
-		"preinstalled":  {"", "dotnet-version: 8.0.404", "", "/usr/share/dotnet"},
-		"system dir":    {"    env: {DOTNET_INSTALL_DIR: /usr/share/dotnet}\n", "dotnet-version: 8.0.404, skip-lts-prepass: true", "", "/usr/share/dotnet"},
-		"lts prepass":   {ownDir, "dotnet-version: 8.0.404", "", "skip-lts-prepass"},
-		"floating":      {ownDir, "dotnet-version: 8.0.x, skip-lts-prepass: true", "", `floating: {dotnet: "8.0.x"}`},
-		"band":          {ownDir, "dotnet-version: 8.0.4xx, skip-lts-prepass: true", "", "can't check again"},
-		"several":       {ownDir, "dotnet-version: \"8.0.404\\n9.0.320\", skip-lts-prepass: true", "", "several SDKs (8.0.404, 9.0.320)"},
-		"preview":       {ownDir, "dotnet-version: 10.0.x, dotnet-quality: preview, skip-lts-prepass: true", "", "preview build"},
-		"workloads":     {ownDir, "dotnet-version: 8.0.404, workloads: wasm-tools, skip-lts-prepass: true", "", "read-only"},
-		"feed":          {ownDir, "dotnet-version: 8.0.404, source-url: 'https://nuget.pkg.github.com/o/index.json', skip-lts-prepass: true", "", "credentials"},
-		"latestFeature": {ownDir, "global-json-file: sub/global.json, skip-lts-prepass: true", `{"sdk":{"version":"8.0.100","rollForward":"latestFeature"}}`, `floating: {dotnet: "8.0"}`},
-		"latestPatch":   {ownDir, "global-json-file: sub/global.json, skip-lts-prepass: true", `{"sdk":{"version":"8.0.400","rollForward":"latestPatch"}}`, `"8.0.4xx"`},
-		"latestMajor":   {ownDir, "global-json-file: sub/global.json, skip-lts-prepass: true", `{"sdk":{"version":"8.0.400","rollForward":"latestMajor"}}`, "newest SDK on the runner"},
-		"comments":      {ownDir, "global-json-file: sub/global.json, skip-lts-prepass: true", "{// pinned\n\"sdk\":{\"version\":\"8.0.400\"}}", "plain JSON"},
-		"escapes":       {ownDir, "global-json-file: ../global.json, skip-lts-prepass: true", "", "can't be read"},
+		"preinstalled": {"", "dotnet-version: 8.0.404", "", "/usr/share/dotnet"},
+		"system dir":   {"    env: {DOTNET_INSTALL_DIR: /usr/share/dotnet}\n", "dotnet-version: 8.0.404, skip-lts-prepass: true", "", "/usr/share/dotnet"},
+		"lts prepass":  {ownDir, "dotnet-version: 8.0.404", "", "skip-lts-prepass"},
+		"band":         {ownDir, "dotnet-version: 8.0.4xx, skip-lts-prepass: true", "", "can't check again"},
+		"several":      {ownDir, "dotnet-version: \"8.0.404\\n9.0.320\", skip-lts-prepass: true", "", "several SDKs (8.0.404, 9.0.320)"},
+		"preview":      {ownDir, "dotnet-version: 10.0.x, dotnet-quality: preview, skip-lts-prepass: true", "", "preview build"},
+		"workloads":    {ownDir, "dotnet-version: 8.0.404, workloads: wasm-tools, skip-lts-prepass: true", "", "read-only"},
+		"feed":         {ownDir, "dotnet-version: 8.0.404, source-url: 'https://nuget.pkg.github.com/o/index.json', skip-lts-prepass: true", "", "credentials"},
+		"latestPatch":  {ownDir, "global-json-file: sub/global.json, skip-lts-prepass: true", `{"sdk":{"version":"8.0.400","rollForward":"latestPatch"}}`, `"8.0.4xx"`},
+		"latestMajor":  {ownDir, "global-json-file: sub/global.json, skip-lts-prepass: true", `{"sdk":{"version":"8.0.400","rollForward":"latestMajor"}}`, "newest SDK on the runner"},
+		"comments":     {ownDir, "global-json-file: sub/global.json, skip-lts-prepass: true", "{// pinned\n\"sdk\":{\"version\":\"8.0.400\"}}", "plain JSON"},
+		"escapes":      {ownDir, "global-json-file: ../global.json, skip-lts-prepass: true", "", "can't be read"},
 	} {
 		d := t.TempDir()
 		if c.file != "" {

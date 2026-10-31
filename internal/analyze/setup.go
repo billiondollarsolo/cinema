@@ -3,6 +3,7 @@ package analyze
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // SetupCtx is one setup action step (actions/setup-python, …) being
@@ -11,7 +12,9 @@ import (
 // for (setup-go puts GOPATH/bin on PATH).
 type SetupCtx struct {
 	Root string                    // the repo, for version files ("" when unknown)
+	Ref  string                    // the action's ref (dtolnay/rust-toolchain@stable: "stable")
 	With func(key string) string   // the step's with: value, matrix-substituted
+	has  func(key string) bool     // the input is given (even empty)
 	Env  map[string]string         // the job's resolved env (workflow, job), for ${{ env.X }}
 	pin  func(runtime, ver string) // sets the proposal's runtime pin (one version per task)
 	step func(run, dir string)     // adds a step right after this one
@@ -19,6 +22,9 @@ type SetupCtx struct {
 	// version, an option cinema doesn't reproduce). Note: informational.
 	Review, Note func(string)
 }
+
+// Has reports whether the step gives input key at all (an empty value counts).
+func (c *SetupCtx) Has(key string) bool { return c.has != nil && c.has(key) }
 
 // Pin pins runtime (a task.RuntimeKind name) at an exact version.
 func (c *SetupCtx) Pin(runtime, ver string) { c.pin(runtime, ver) }
@@ -40,9 +46,11 @@ type SetupAction func(c *SetupCtx)
 
 var setupActions = map[string]SetupAction{}
 
-// RegisterSetupAction maps an action ("actions/setup-python", owner/repo,
-// lowercase) to its translation (from an init function).
+// RegisterSetupAction maps an action ("actions/setup-python", owner/repo) to
+// its translation (from an init function). Matched case-insensitively, as
+// GitHub resolves owner/repo.
 func RegisterSetupAction(action string, f SetupAction) {
+	action = strings.ToLower(action)
 	if setupActions[action] != nil {
 		panic("setup action " + action + " registered twice")
 	}

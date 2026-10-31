@@ -136,22 +136,7 @@ func pythonVersionFile(root, file string) string {
 	return strings.Join(out, "\n")
 }
 
-// exactPinned is c.Exact, plus a review when the pin was resolved from a
-// floating spec: drafts write floating: for go and node only so far
-// (analyze.go and cmd/cinema/analyze.go), and a pin without it would let CI
-// skip the job after the release moved on.
+// exactPinned is c.Exact with python's or uv's exact-version pattern.
 func exactPinned(c *SetupCtx, runtime, spec, file string) string {
-	moved, note := "", c.Note
-	c.Note = func(n string) {
-		if kv, ok := strings.CutPrefix(n, floatingNote); ok {
-			_, moved, _ = strings.Cut(kv, "=")
-		}
-		note(n)
-	}
-	v := c.Exact(runtime, spec, file, task.LookupRuntime(runtime).Version)
-	c.Note = note
-	if v != "" && moved != "" {
-		c.Review(fmt.Sprintf("%s %q is a floating version, pinned at %s today: add floating: {%s: %q} to the task so CI checks it against the release it would use", runtime, moved, v, runtime, moved))
-	}
-	return v
+	return c.Exact(runtime, spec, file, task.LookupRuntime(runtime).Version)
 }

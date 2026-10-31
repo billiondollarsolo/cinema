@@ -107,7 +107,8 @@ func Resolve(tool, spec string) (string, error) {
 			return r.Stable
 		}
 		p := strings.TrimSuffix(strings.TrimSuffix(spec, ".x"), ".*")
-		return r.Stable && (r.Version == p || strings.HasPrefix(r.Version, p+"."))
+		// "+": a build or variant after the version (temurin-21.0.5+11, 1.83.0+clippy)
+		return r.Stable && (r.Version == p || strings.HasPrefix(r.Version, p+".") || strings.HasPrefix(r.Version, p+"+"))
 	}
 	for _, r := range rs { // newest first
 		if match(r) {

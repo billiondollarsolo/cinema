@@ -77,13 +77,13 @@ func TestSetupBunDeno(t *testing.T) {
 		"bun-input-wins": {"oven-sh/setup-bun@v2\n        with: {bun-version: 1.3.0, bun-version-file: .bun-version}", want{Task, "bun=1.3.0", ""}},
 		"bun-pkg":        {"oven-sh/setup-bun@v2", want{Task, "bun=1.2.9", ""}}, // package.json's packageManager
 		"bun-missing":    {"oven-sh/setup-bun@v2\n        with: {bun-version-file: .nope}", want{Task, "bun=1.2.9", ""}},
-		"bun-latest":     {"oven-sh/setup-bun@v2\n        with: {bun-version: latest}", want{Review, "bun=1.3.0", "floating: {bun: \"latest\"}"}},
+		"bun-latest":     {"oven-sh/setup-bun@v2\n        with: {bun-version: latest}", want{Task, "bun=1.3.0", ""}},
 		"bun-range":      {"oven-sh/setup-bun@v2\n        with: {bun-version: ^1.2.0}", want{Review, "", "isn't exact"}},
 		"bun-canary":     {"oven-sh/setup-bun@v2\n        with: {bun-version: canary}", want{Review, "", "canary"}},
 		"bun-url":        {"oven-sh/setup-bun@v2\n        with: {bun-download-url: 'https://example.com/bun.zip'}", want{Review, "", "bun-download-url"}},
 		"bun-registries": {"oven-sh/setup-bun@v2\n        with: {bun-version: 1.2.23, registries: 'https://registry.npmjs.org/'}", want{Review, "bun=1.2.23", "bunfig.toml"}},
 		"bun-nocache":    {"oven-sh/setup-bun@v2\n        with: {bun-version: 1.2.23, no-cache: true}", want{Task, "bun=1.2.23", ""}},
-		"deno-default":   {"denoland/setup-deno@v2", want{Review, "deno=2.5.10", "floating: {deno: \"2.x\"}"}},
+		"deno-default":   {"denoland/setup-deno@v2", want{Task, "deno=2.5.10", ""}},
 		"deno-exact":     {"denoland/setup-deno@v2\n        with: {deno-version: v2.4.5, cache: true}", want{Task, "deno=2.4.5", ""}},
 		"deno-dvmrc":     {"denoland/setup-deno@v2\n        with: {deno-version-file: .dvmrc}", want{Task, "deno=2.5.6", ""}},
 		"deno-file-wins": {"denoland/setup-deno@v2\n        with: {deno-version: 2.5.6, deno-version-file: .tool-versions}", want{Task, "deno=2.4.5", ""}},
@@ -109,6 +109,12 @@ func TestSetupBunDeno(t *testing.T) {
 		reasons := strings.Join(j.Reasons, "; ")
 		if j.Verdict != tc.want.verdict || pin != tc.want.pin || (tc.want.why != "" && !strings.Contains(reasons, tc.want.why)) {
 			t.Errorf("%s: %v %q %q, want %+v", name, j.Verdict, pin, reasons, tc.want)
+		}
+		if fl := map[string]string{"bun-latest": "bun=latest", "deno-default": "deno=2.x"}[name]; fl != "" { // CI resolves it again
+			rt, spec, _ := strings.Cut(fl, "=")
+			if j.Proposal.Floating[rt] != spec {
+				t.Errorf("%s: floating %v, want %s", name, j.Proposal.Floating, fl)
+			}
 		}
 		if pin != "" {
 			path := `"$HOME/.bun/bin" >> "$GITHUB_PATH"`

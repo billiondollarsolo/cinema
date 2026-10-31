@@ -462,6 +462,16 @@ func TestFloatingMoved(t *testing.T) {
 	if why := floatingMoved(tk); why == "" {
 		t.Fatal("unresolvable must run")
 	}
+	// A registered runtime; the pin carries components after "+" (rust).
+	rs := &task.Task{Runtime: task.Runtime{Other: map[string]string{"rust": "1.83.0+clippy"}}, Floating: map[string]string{"rust": "stable"}}
+	floatingResolve = func(tool, spec string) (string, error) { return "1.83.0", nil }
+	if why := floatingMoved(rs); why != "" {
+		t.Fatalf("1.83.0+clippy is 1.83.0: %s", why)
+	}
+	floatingResolve = func(tool, spec string) (string, error) { return "1.84.0", nil }
+	if why := floatingMoved(rs); why == "" {
+		t.Fatal("rust moved to 1.84.0: must run")
+	}
 }
 
 // The base moved after the branch: a head receipt no longer matches the merge

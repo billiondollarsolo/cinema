@@ -94,7 +94,7 @@ jobs:
 		verdict, python, reason string
 	}{
 		"exact":         {Task, "3.12.7", ""},
-		"float":         {Review, "3.12.8", `floating: {python: "3.12"}`},
+		"float":         {Task, "3.12.8", ""},
 		"default-file":  {Task, "3.11.10", ""},
 		"tool-versions": {Task, "3.12.7", ""},
 		"input-wins":    {Task, "3.12.8", ""},
@@ -115,6 +115,9 @@ jobs:
 		if j.Verdict != want.verdict || python != want.python || !strings.Contains(strings.Join(j.Reasons, "\n"), want.reason) {
 			t.Errorf("%s: %s python=%q %q", id, j.Verdict, python, j.Reasons)
 		}
+	}
+	if got := jobs["float"].Proposal.Floating["python"]; got != "3.12" {
+		t.Errorf("floating python %q, want 3.12 (CI resolves it again)", got)
 	}
 	body := jobs["exact"].Proposal.Body
 	if !strings.Contains(body, `cp -a "${pythonLocation:?}/." "$d"`) || strings.Index(body, "cinema-python") > strings.Index(body, "pip install -r") {

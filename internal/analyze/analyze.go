@@ -56,7 +56,7 @@ type Proposal struct {
 	Node string `json:"node,omitempty"` // exact versions only (runtime:)
 	// Runtimes: other pinned runtimes (python, java, …), by task.RuntimeKind name.
 	Runtimes map[string]string `json:"runtimes,omitempty"`
-	Body string `json:"script"`         // bash script; each step in its own subshell
+	Body     string            `json:"script"` // bash script; each step in its own subshell
 	// Outputs: paths the job uploads as artifacts, so it writes them (outputs:).
 	Outputs []string `json:"outputs,omitempty"`
 	// Container: the job's container image; cinema runs the steps inside it.
@@ -392,8 +392,10 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 				break
 			}
 			steps = slices.Insert(slices.Clone(steps), i+1, step{Run: run, Dir: str(s.With["working-directory"])})
-		case setupActions[action] != nil:
-			c := &SetupCtx{Root: root, With: func(k string) string { return sub(str(s.With[k])) }, Env: envVals, Review: review, Note: note,
+		case setupActions[strings.ToLower(action)] != nil:
+			_, ref, _ := strings.Cut(uses, "@")
+			c := &SetupCtx{Root: root, Ref: ref, With: func(k string) string { return sub(str(s.With[k])) }, Env: envVals, Review: review, Note: note,
+				has: func(k string) bool { _, ok := s.With[k]; return ok },
 				pin: func(rt, ver string) {
 					if p.Runtimes == nil {
 						p.Runtimes = map[string]string{}
@@ -402,9 +404,11 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 						p.Runtimes[rt] = v
 					}
 				},
-				step: func(run, dir string) { steps = slices.Insert(slices.Clone(steps), i+1, step{Run: run, Dir: cmp.Or(dir, ".")}) },
+				step: func(run, dir string) {
+					steps = slices.Insert(slices.Clone(steps), i+1, step{Run: run, Dir: cmp.Or(dir, ".")})
+				},
 			}
-			setupActions[action](c)
+			setupActions[strings.ToLower(action)](c)
 		case strings.HasPrefix(action, "github/codeql-action"):
 			skip("CodeQL analysis uploads results; not a pass/fail check")
 		default:
@@ -514,7 +518,7 @@ func analyzeJob(root, wf, id string, j *job, w *workflow, combo map[string]strin
 		for _, n := range r.Notes {
 			if kv, ok := strings.CutPrefix(n, floatingNote); ok {
 				tool, spec, _ := strings.Cut(kv, "=")
-				if (tool == "Go" && p.Go != "") || (tool == "Node" && p.Node != "") {
+				if (tool == "Go" && p.Go != "") || (tool == "Node" && p.Node != "") || p.Runtimes[tool] != "" {
 					if p.Floating == nil {
 						p.Floating = map[string]string{}
 					}

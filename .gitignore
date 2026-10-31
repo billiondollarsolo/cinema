@@ -1,3 +1,4 @@
 /cinema
 /dist/
 *.test
+/.claude/worktrees/

@@ -647,7 +647,7 @@ func floatingMoved(t *task.Task) string {
 		switch {
 		case err != nil:
 			return fmt.Sprintf("can't resolve %s %q today (%v): running it", tool, spec, err)
-		case got != pin:
+		case got != pin && !strings.HasPrefix(pin, got+"+"): // 1.83.0+clippy is 1.83.0 with components
 			return fmt.Sprintf("%s %q is %s today; the task pins %s: running it (rerun cinema setup to pin the new release)", tool, spec, got, pin)
 		}
 	}

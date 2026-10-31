@@ -35,11 +35,6 @@ var (
 	javaPatch = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)         // 21.0.5: the newest build of 21.0.5
 )
 
-// floatingUnrecorded: analyze records floating: specs for Go and Node only,
-// so a draft would pin today's release of a registered runtime as if the
-// workflow named it exactly, and the gate would never re-resolve it.
-const floatingUnrecorded = "%s %q floats (CI resolves it again on every run): add floating: {%s: %q} to the task, or the gate keeps the pin after CI has moved on"
-
 func setupJava(c *SetupCtx) {
 	with := func(k string) string { return strings.TrimSpace(withEnv(c.With(k), c.Env)) }
 	for _, k := range []string{"distribution", "java-version", "java-version-file", "java-package", "architecture", "check-latest", "set-default"} {
@@ -118,7 +113,6 @@ func setupJava(c *SetupCtx) {
 			// which lags Adoptium's newest by up to an image release.
 			c.Review(fmt.Sprintf("Java %q without check-latest: true: CI uses the runner image's preinstalled Temurin %s, not necessarily %s; set check-latest: true (or an exact build) so CI and the pin agree", spec, spec, got))
 		}
-		c.Review(fmt.Sprintf(floatingUnrecorded, "Java", spec, "java", "temurin-"+spec))
 	}
 	javaMavenInputs(c, with)
 	if !strings.EqualFold(with("show-download-progress"), "true") {
@@ -323,9 +317,6 @@ func setupGradle(c *SetupCtx) {
 		}
 		c.Pin("gradle", got)
 		gradle = "gradle"
-		if v == "current" {
-			c.Review(fmt.Sprintf(floatingUnrecorded, "Gradle", v, "gradle", v))
-		}
 	default:
 		c.Review("gradle-version " + v + ": cinema provisions an exact Gradle release or current; release candidates and nightlies stay with CI")
 		return

@@ -56,10 +56,10 @@ jobs:
 		verdict, uv, python, reason string
 	}{
 		"exact":        {Task, "0.9.5", "3.12.7", ""},
-		"latest":       {Review, "0.9.6", "", `floating: {uv: "latest"}`},
-		"range":        {Review, "0.9.6", "", `floating: {uv: "0.9.x"}`},
+		"latest":       {Task, "0.9.6", "", ""},
+		"range":        {Task, "0.9.6", "", ""},
 		"uv-toml":      {Task, "0.8.24", "3.11.10", ""},
-		"minimum":      {Review, "0.9.6", "", `floating: {uv: "latest"}`},
+		"minimum":      {Task, "0.9.6", "", ""},
 		"dependency":   {Review, "", "", "from dep/pyproject.toml"},
 		"version-file": {Task, "0.9.5", "", ""},
 		"pep440":       {Review, "", "", `">=0.5,<0.9" isn't exact`},
@@ -74,6 +74,11 @@ jobs:
 		}
 		if j.Verdict != want.verdict || rt["uv"] != want.uv || rt["python"] != want.python || !strings.Contains(strings.Join(j.Reasons, "\n"), want.reason) {
 			t.Errorf("%s: %s %v %q", id, j.Verdict, rt, j.Reasons)
+		}
+	}
+	for id, spec := range map[string]string{"latest": "latest", "range": "0.9.x", "minimum": "latest"} { // CI resolves them again
+		if got := jobs[id].Proposal.Floating["uv"]; got != spec {
+			t.Errorf("%s: floating uv %q, want %q", id, got, spec)
 		}
 	}
 	body := jobs["exact"].Proposal.Body

@@ -139,11 +139,7 @@ func setupDotnet(c *SetupCtx) {
 		case dotnetBand.MatchString(s), s == "*", strings.EqualFold(s, "x"), strings.EqualFold(s, "lts"), strings.EqualFold(s, "sts"):
 			c.Review(fmt.Sprintf(".NET version %q floats in a way cinema can't check again in CI yet: pin an exact SDK in runtime:", s))
 		default:
-			if v = c.Exact("dotnet", s, "", exact); v != "" {
-				// analyze records floating: specs for Go and Node only so far, so the
-				// gate wouldn't notice a newer SDK: a person adds it to the task.
-				c.Review(fmt.Sprintf(".NET %q floats: add floating: {dotnet: %q} to the task, so CI runs the job once a newer SDK than %s is out", s, s, v))
-			}
+			v = c.Exact("dotnet", s, "", exact) // recorded as floating: when resolved
 		}
 		if v != "" && !slices.Contains(pins, v) {
 			pins = append(pins, v)

@@ -194,10 +194,13 @@ func draftFor(jobs []analyze.Job, cpus, memGB int) ([]byte, error) {
 		}
 		if len(p.Floating) > 0 {
 			fl := m()
-			for _, k := range []string{"go", "node"} {
-				if v := p.Floating[k]; v != "" {
-					fl.Content = append(fl.Content, s(k), s(v))
-				}
+			keys := make([]string, 0, len(p.Floating))
+			for k := range p.Floating {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				fl.Content = append(fl.Content, s(k), s(p.Floating[k]))
 			}
 			t.Content = append(t.Content, s("floating"), fl)
 		}

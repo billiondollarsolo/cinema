@@ -147,9 +147,6 @@ func denoVersionFrom(root, file string) string {
 }
 
 // pinFloating pins rt from spec (exact, or resolved like Go and Node specs).
-// A resolved pin must be checked again on every CI run (floating:), but the
-// analyzer records floating: for Go and Node only so far: until it records
-// it for these, a resolved pin is left for a person to confirm.
 func pinFloating(c *SetupCtx, rt, spec, from string) string {
 	if s := strings.TrimPrefix(spec, "v"); exactBunDeno.MatchString(s) {
 		spec = s // both actions take v1.2.3 as 1.2.3
@@ -158,10 +155,7 @@ func pinFloating(c *SetupCtx, rt, spec, from string) string {
 	if v == "" {
 		return ""
 	}
-	c.Pin(rt, v)
-	if !exactBunDeno.MatchString(spec) {
-		c.Review(fmt.Sprintf("%s %q resolves to %s today and CI resolves it again on every run: pin %s in the workflow, or add floating: {%s: %q} to the task", rt, spec, v, v, rt, spec))
-	}
+	c.Pin(rt, v) // a resolved spec is recorded as floating: and checked again in CI
 	return v
 }
 

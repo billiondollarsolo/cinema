@@ -115,7 +115,7 @@ func TestJavaRuntimeChecksumMismatch(t *testing.T) {
 	}
 }
 
-func zipOf(t *testing.T, files map[string]string) []byte {
+func javaZipOf(t *testing.T, files map[string]string) []byte {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	for name, body := range files {
@@ -157,7 +157,7 @@ func TestGradleRuntime(t *testing.T) {
 	if k == nil || !k.Version.MatchString("8.14.3") || !k.Version.MatchString("9.0") || k.Version.MatchString("9.0-rc-1") {
 		t.Fatal("gradle version format")
 	}
-	fakeGradle(t, "8.14.3", zipOf(t, map[string]string{"gradle-8.14.3/bin/gradle": "#!/bin/sh\n", "gradle-8.14.3/lib/x.jar": "x"}), "")
+	fakeGradle(t, "8.14.3", javaZipOf(t, map[string]string{"gradle-8.14.3/bin/gradle": "#!/bin/sh\n", "gradle-8.14.3/lib/x.jar": "x"}), "")
 	data := t.TempDir()
 	root, err := k.Provision(data, "8.14.3", "linux", "amd64")
 	if err != nil || root != filepath.Join(data, "runtimes", "gradle", "gradle-8.14.3") {
@@ -167,11 +167,11 @@ func TestGradleRuntime(t *testing.T) {
 		t.Fatalf("bin/gradle: %v %v", fi, err)
 	}
 
-	fakeGradle(t, "8.14.2", zipOf(t, map[string]string{"gradle-8.14.2/bin/gradle": "x"}), strings.Repeat("0", 64))
+	fakeGradle(t, "8.14.2", javaZipOf(t, map[string]string{"gradle-8.14.2/bin/gradle": "x"}), strings.Repeat("0", 64))
 	if _, err := k.Provision(data, "8.14.2", "linux", "amd64"); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("want checksum mismatch, got %v", err)
 	}
-	fakeGradle(t, "8.14.1", zipOf(t, map[string]string{"gradle-8.14.1/../../evil": "x"}), "")
+	fakeGradle(t, "8.14.1", javaZipOf(t, map[string]string{"gradle-8.14.1/../../evil": "x"}), "")
 	if _, err := k.Provision(data, "8.14.1", "linux", "amd64"); err == nil || !strings.Contains(err.Error(), "escapes") {
 		t.Fatalf("want traversal refused, got %v", err)
 	}

@@ -50,8 +50,8 @@ func TestSetupJavaTranslated(t *testing.T) {
 		with, pin, review string
 	}{
 		{`{distribution: temurin, java-version: "21.0.5+11"}`, "temurin-21.0.5+11", ""},
-		{`{distribution: temurin, java-version: "21", check-latest: true}`, "temurin-21.0.6+7", "add floating: {java: \"temurin-21\"}"},
-		{`{distribution: temurin, java-version: "17.x", check-latest: true}`, "temurin-17.0.20+101", "floating"},
+		{`{distribution: temurin, java-version: "21", check-latest: true}`, "temurin-21.0.6+7", ""},
+		{`{distribution: temurin, java-version: "17.x", check-latest: true}`, "temurin-17.0.20+101", ""},
 		{`{distribution: temurin, java-version: "21"}`, "temurin-21.0.6+7", "without check-latest: true"},
 		{`{distribution: temurin, java-version: "21.0.5"}`, "", "newest build of 21.0.5"},
 		{`{distribution: zulu, java-version: "21"}`, "", "distribution zulu"},
@@ -69,6 +69,9 @@ func TestSetupJavaTranslated(t *testing.T) {
 		if j.Proposal == nil || j.Proposal.Runtimes["java"] != c.pin || (c.review == "") != (j.Verdict != Review) || !strings.Contains(reasons, c.review) {
 			t.Errorf("%s: pin %v, %s %q", c.with, j.Proposal.Runtimes, j.Verdict, reasons)
 		}
+	}
+	if j := javaJob(t, "", "      - uses: actions/setup-java@v5\n        with: {distribution: temurin, java-version: \"21\", check-latest: true}\n"); j.Proposal.Floating["java"] != "temurin-21" {
+		t.Errorf("floating java %v, want temurin-21 (CI resolves it again)", j.Proposal.Floating)
 	}
 	j := javaJob(t, "", "      - uses: actions/setup-java@v5\n        with: {distribution: temurin, java-version: \"21.0.5+11\"}\n")
 	if !strings.Contains(j.Proposal.Body, `MAVEN_ARGS=${MAVEN_ARGS:+$MAVEN_ARGS }-ntp`) || strings.Index(j.Proposal.Body, "-ntp") > strings.Index(j.Proposal.Body, "./mvnw") {
@@ -88,8 +91,8 @@ func TestSetupJavaVersionFile(t *testing.T) {
 		file, content, dist, pin, review string
 	}{
 		{".java-version", "21.0.5+11\n", "temurin", "temurin-21.0.5+11", ""},
-		{".java-version", "temurin-21\n", "temurin", "temurin-21.0.6+7", "floating"},
-		{".java-version", "1.8\n", "temurin", "temurin-8.0.504+1", "floating"},
+		{".java-version", "temurin-21\n", "temurin", "temurin-21.0.6+7", ""},
+		{".java-version", "1.8\n", "temurin", "temurin-8.0.504+1", ""},
 		{".tool-versions", "nodejs 22.1.0\njava temurin-21.0.5+11\n", "", "temurin-21.0.5+11", ""},
 		{".tool-versions", "java zulu-21.0.5\n", "temurin", "", "distribution zulu"},
 		{".tool-versions", "java openjdk-21.0.5+11\n", "temurin", "temurin-21.0.5+11", ""}, // unknown vendor: the input's
@@ -133,7 +136,7 @@ func TestSetupGradleTranslated(t *testing.T) {
 		{"gradle/actions/setup-gradle@v4", "", "", "", "gradle-wrapper.jar"},
 		{"gradle/actions/setup-gradle@v4", "{validate-wrappers: false}", "", "", ""},
 		{"gradle/actions/setup-gradle@v4", "{gradle-version: 8.14.3}", "8.14.3", "", "gradle-wrapper.jar"},
-		{"gradle/actions/setup-gradle@v4", "{gradle-version: current}", "9.8.2", "add floating: {gradle: \"current\"}", ""},
+		{"gradle/actions/setup-gradle@v4", "{gradle-version: current}", "9.8.2", "", "gradle-wrapper.jar"},
 		{"gradle/actions/setup-gradle@v4", "{gradle-version: release-candidate}", "", "release candidates", ""},
 		{"gradle/actions/setup-gradle@v4", "{develocity-injection-enabled: true}", "", "Develocity", ""},
 		{"gradle/gradle-build-action@v2", "{arguments: build --scan, build-root-directory: app}", "", "", "./gradlew build --scan"},

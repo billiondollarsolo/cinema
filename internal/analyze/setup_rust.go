@@ -19,14 +19,11 @@ var rustExactRE = regexp.MustCompile(`^(1\.[0-9]+\.[0-9]+|(nightly|beta)-[0-9]{4
 
 func init() {
 	RegisterReleases("rust", rustReleases)
-	// The ref (dtolnay/rust-toolchain@stable, setup-rust-toolchain@v1) isn't in
-	// SetupCtx yet: "" is "unknown", and what depends on it goes to review.
-	RegisterSetupAction("dtolnay/rust-toolchain", func(c *SetupCtx) { dtolnayToolchain(c, "") })
-	RegisterSetupAction("actions-rust-lang/setup-rust-toolchain", func(c *SetupCtx) { setupRustToolchain(c, "") })
+	// The toolchain (dtolnay@stable) and the defaults (setup-rust-toolchain@v1) depend on the ref.
+	RegisterSetupAction("dtolnay/rust-toolchain", func(c *SetupCtx) { dtolnayToolchain(c, c.Ref) })
+	RegisterSetupAction("actions-rust-lang/setup-rust-toolchain", func(c *SetupCtx) { setupRustToolchain(c, c.Ref) })
 	RegisterSetupAction("actions-rs/toolchain", actionsRSToolchain)
-	// Actions are looked up as written, and this one is usually capitalized.
 	RegisterSetupAction("Swatinem/rust-cache", rustCache)
-	RegisterSetupAction("swatinem/rust-cache", rustCache)
 }
 
 // rustReleases lists stable releases, newest first, from static.rust-lang.org's
