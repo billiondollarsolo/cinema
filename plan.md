@@ -866,6 +866,22 @@ The `cinema` job writes a job summary on every run: which jobs and legs skipped,
 
 ---
 
+### 11.7 GitLab CI
+
+The core (tasks, container runs, fingerprints, signed receipts in git notes, shadow mode) doesn't depend on the forge. The edges do, and each gets a GitLab implementation behind a small interface: **reading CI**, **skipping**, **the CI API** (results for graduate and live pairs) and **where trusted keys live**.
+
+| Edge | GitLab |
+|---|---|
+| Reading CI | `.gitlab-ci.yml`: `stages`, `script`/`before_script`/`after_script`, `variables`, `rules`/`only`/`except`, `needs`, `extends`, `!reference`, local `include`, `parallel:matrix`, `services`, `default:`. Each job names its `image:`: the environment is that image's digest (a container task), so there's no runner image to imitate and no actions to translate. `include: remote/project/template` and `trigger:` jobs → review. |
+| Skipping | `rules:` are fixed at pipeline creation, so they can't read receipts. A `cinema` job writes a **dynamic child pipeline** with only the jobs that still need to run (`trigger: include: artifact`); proven jobs never get a runner. Fallback where child pipelines don't fit: a first script line that exits early on a receipt (saves the run, not the runner start). |
+| Merge requests | Merge request pipelines test the head (Free) or the merged result (Premium "merged results"); merge trains are merge queues (§5.5). `CI_PIPELINE_SOURCE` is the event. |
+| Receipts | Git notes as on GitHub if GitLab accepts `refs/notes/*` pushes and the job token can fetch them (to verify); else CI artifacts or the generic package registry. |
+| Keys | A protected, masked CI/CD variable (`CINEMA_TRUSTED_KEYS`), so a merge request can't change it. |
+| CI API | `/projects/:id/pipelines`, `/jobs`, job traces (token or `glab`). |
+| Runner sizes | SaaS Linux runners by tag (small 2 vCPU/8 GB, medium, large…; cost factors), self-hosted by tag; size and arch from the tag, declared in the task. |
+
+P4 (run 2): the analyzer and the child-pipeline generator with tests, the forge interfaces, and answers to the open questions (notes refs, job token, Free vs Premium) from GitLab's docs and source or a local GitLab in a container. A live spike on gitlab.com needs an account here (none yet).
+
 ## 12. Reason codes (MVP set)
 
 ```text
@@ -1098,6 +1114,7 @@ Report hashing and wrapper overhead separately, always.
 - [ ] Repos that use Dagger: `dagger` steps translate as tasks (§9.7)
 - [ ] Per-test results parsed from task output (go test, pytest, jest/vitest, cargo, JUnit XML); failure pairs compare failed tests (§11.5.6); `cinema run --failfast` (§9.7, run 2)
 - [ ] Real projects per language, locally against upstream CI's results (run 2)
+- [ ] GitLab CI (§11.7): analyzer, child-pipeline skipping, forge interfaces (run 2); live spike once there's a GitLab account
 - [ ] Tests: ACC-101…122, CLEAN-009…011
 
 **Exit:** (Mac part met 2026-10-31: [cli#9](https://github.com/mjtechguy/cinema-lab-cli/pull/9); minutes saved in the summary still open) a developer on a Mac, with no other hardware, pushes a PR whose Linux jobs skip in CI, every skipped job graduated from shadow mode (backtest or live), and the PR summary shows what was saved. Then the same on Windows.
