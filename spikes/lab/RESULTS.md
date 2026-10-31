@@ -292,3 +292,43 @@ What it took (each now fixed in CInema):
 5. **Runner memory varies between VMs.** One round refused lint's receipts and accepted build's on the same commit. CI now accepts memory within 1 GB or 10% of the declared size; CPUs and OS stay exact.
 6. **Spot checks clustered**: two runs from one push had ids 160 apart, both ≡ 0 mod 20, so both skipped nothing. Now hashed.
 7. **Installing CInema in CI** needed the repo public (`go install` at a pinned commit); a private build on a public mirror's release was refused as exfiltration, rightly.
+
+## Real projects, Python and Rust (2026-10-31)
+
+First runs of the new Python, uv and Rust runtimes on real projects: an arm64 MacBook, Colima (vz, Rosetta), amd64 emulated, `-j 2`, clean upstream clones at a default-branch commit whose CI was green. `cinema analyze`, `analyze --yaml`, `trust`, `run --config .cinema/tasks.yaml --commit HEAD`, compared with upstream's push run for the same commit (`gh api …/check-runs`, job logs). Review drafts were run as well, to see whether what they'd do is right. Verdicts are after the fixes below. Local times are emulated with warm caches (rust: cold first run).
+
+| Project | Commit | Job | Verdict | Local | CI | Match |
+|---|---|---|---|---|---|---|
+| pallets/click | 2247b35 | tests (3.14) | review (no check-latest) | fail, 18 s: 1 failed, 2261 passed | pass, 19 s: 2262 passed | no: Mac filesystem (finding 5) |
+| | | tests (3.13, 3.12, 3.11, 3.10) | review (no check-latest) | fail, 17–20 s each: same 1 test | pass, 17–23 s | no: same |
+| | | tests (3.14t, PyPy) | review (free-threaded, PyPy) | – | pass | – |
+| | | tests (Windows, Mac) | stays in CI | – | pass | – |
+| | | typing, pre-commit main | review (version from pyproject.toml) | – | pass | – |
+| | | zizmor | review (`github.token`) | – | pass | – |
+| encode/httpx | b5addb6 | tests (3.9) | review (no check-latest) | pass, 57 s, 1418 tests, 100% coverage | pass, 71 s | yes |
+| | | tests (3.10–3.13) | review (no check-latest) | fail, 44–52 s: `twine check` rejects metadata 2.5 | pass (Feb 2026); fails the same way on every PR since Sept | yes with today's CI (finding 6) |
+| sharkdp/fd | 8b14e8d | ensure_cargo_fmt (ubuntu-22.04) | ready | pass, 0.8 s | pass, 8 s | yes |
+| | | lint_check (clippy, rustc 1.99.1 both) | ready | pass, 3 m 7 s (cold) | pass, 90 s | yes |
+| | | crate_metadata | ready | fail, 0.2 s: `cargo: command not found` | pass, 4 s | no: wrong verdict (finding 7); `setup` leaves it in CI (other jobs need it) |
+| | | min_version | review (toolchain from `needs` output) | – | pass | – |
+| | | build ×15, winget | stays in CI (`id-token: write`; other OS) | – | pass | – |
+| dtolnay/anyhow | bb1b0f9 | test (stable) | review (`if: needs.pre_ci.outputs.continue`) | pass, 72 s, 97 tests | pass, 26 s, 97 tests | yes |
+| | | test (1.88.0) | review (same) | pass, 74 s, 97 tests | pass, 23 s, 97 tests | yes |
+| | | build (1.68.0) | review (same) | pass, 9 s | pass, 13 s | yes |
+| | | test (nightly, beta), minimal, doc, miri | review (floating nightly/beta; miri from the action's ref) | – | pass | – |
+| | | clippy, outdated, windows, pre_ci | stays in CI (push only; Windows; reusable workflow) | – | pass | – |
+
+**Every Rust task that ran agreed with CI** (same rustc, same test counts). Python agreed where the machine allowed it: click's suite differs from CI by exactly one test, which fails because of where the checkout lives.
+
+**Findings and what changed:**
+
+1. **Matrix `include:` was expanded wrong** (fixed). An entry was merged into combinations other entries had added, so click's include-only matrix lost its `3.14` Linux leg into the Mac leg; and an entry sharing no key with the matrix became a leg of its own instead of extending every leg (GitHub's documented example). A wrong leg list means wrong drafts (a missing env value) and legs CI has that cinema never saw. Now as Actions does: entries extend the original combinations whose original values they keep, else add one; added combinations are never extended. `TestExpandIncludeLikeActions` (GitHub's example and click's matrix).
+2. **Matrix expressions with defaults weren't evaluated** (fixed): `runs-on: ${{ matrix.os || 'ubuntu-latest' }}`, `name: ${{ matrix.name || matrix.python }}`, `TOX_ENV: ${{ matrix.tox || format('py{0}', matrix.python) }}` sent all 11 click legs to review, Windows and Mac included. Expressions made only of matrix values, literals and pure functions (now including `format()`) are substituted; `github.*`, `runner.*`, `steps.*` and status functions still aren't. `TestMatrixValueExpressions`, `TestEvalIf`.
+3. **setup-python's floating versions don't mean the newest release** (fixed): without `check-latest`, setup-python takes the runner image's preinstalled Python. click's `3.14` legs ran 3.14.7 (Oct 4) and 3.14.9 (Oct 30, image 20261025) while cinema pinned 3.14.10, and CI's `floating:` check, which resolves against the manifest, would have agreed with the pin: a skip claiming a pass on a Python CI doesn't run. Now review, with the same rule as setup-java. `TestSetupPython` (`float`, `float-latest`). setup-go and setup-node have the same behaviour and aren't flagged yet.
+4. **`rust-toolchain.toml` without a channel** (fixed): dtolnay's crates ship `[toolchain] components = ["rust-src"]`, which rustup applies to the default toolchain the action set. Every anyhow job went to review ("no channel"); now the action's toolchain plus the file's components (`1.88.0+rust-src`). With no toolchain from an action, still review. `TestRustSetupActions` (two cases).
+5. **The runner image lacked `less`** (fixed in `runner/Dockerfile`, image not yet rebuilt or re-pinned): 24 of click's pager tests failed. Verified with a local image (published 26.04 + `less`): 24 → 0. **Not fixed, design:** on a Mac the clean checkout is a host directory bind-mounted over virtiofs, so APFS's rules apply: no non-UTF-8 names (`test_path_surrogates`: EPERM; pytest's `tmp_path` is under the checkout) and case-insensitive names (`Aa` and `aa` are one file). That's a false red here, and could be a false green elsewhere (an import or `#include` whose case is wrong passes on APFS, fails on ext4). The fix is checkouts in a Linux volume inside the VM (copy in, mutation check inside); left for a design decision.
+6. **Floating build backends**: httpx pins its requirements, but `python -m build` installs today's hatchling, whose metadata 2.5 the pinned twine 6.1.0 rejects (3.9 passes, presumably because the newest hatchling for 3.9 is older). Upstream CI passed at the commit in February and fails the same way on every PR since September. Not a CInema bug; `max_age` is what keeps such receipts honest.
+7. **A job using the runner's preinstalled cargo is drafted ready without Rust** (not fixed: no-setup-action pins are being reworked in parallel): fd's `crate_metadata` runs `cargo metadata` with no setup action, so the draft has no runtime and fails (`cargo: command not found`). It fails, so no false green, and `setup` leaves it in CI because other jobs need it; but the verdict should be review, or pin the runner image's stable.
+8. **Small things:** `cinema run --commit HEAD` with an uncommitted draft said only "HEAD has no .cinema/tasks.yaml"; it now suggests `--config` (as here). With `DOCKER_CONFIG` pointing at an empty config, cinema can't see Colima's context and `analyze` says `docker no`: everything "stays in CI", silently (a gotchas row). uv warns that it can't hardlink from its cache (the cache volume and the checkout are different filesystems): slower installs only.
+
+**Would change, didn't:** checkouts in a Linux volume on Mac and Windows hosts (finding 5); `floating:` for setup-python/setup-go/setup-node checked against the runner's tool cache (`/opt/hostedtoolcache/<tool>/`) in CI, so floating specs without `check-latest` can be ready instead of review; dated pins for floating `nightly`/`beta` (`nightly-2026-10-30`, with `floating: nightly`) so anyhow's nightly legs and miri could be ready; reading Cargo.toml's `rust-version` for MSRV jobs whose toolchain comes from a `needs` output (fd `min_version`).

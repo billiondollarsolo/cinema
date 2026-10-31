@@ -255,6 +255,14 @@ func rustToolchainFile(c *SetupCtx, spec string, extras []string, override bool)
 		return "", nil, false
 	case file == nil || override:
 		return spec, extras, true
+	case file.channel == "" && spec == "":
+		c.Review("Rust: " + name + " names no channel, so rustup uses the runner's default toolchain: pin the toolchain in runtime:")
+		return "", nil, false
+	case file.channel == "":
+		// Components and targets only (dtolnay's crates: rust-src): rustup
+		// installs them into the toolchain the action made the default.
+		c.Note("Rust components and targets from " + name)
+		return spec, append(extras, file.extras...), true
 	case spec != "" && spec != file.channel:
 		c.Review("Rust: " + name + " names " + file.channel + ", which rustup uses over the action's " + spec + ": cinema provisions one toolchain")
 		return "", nil, false
@@ -344,10 +352,7 @@ func readRustToolchain(root string) (f *rustFile, name, why string) {
 			return bad(k)
 		}
 	}
-	if f.channel == "" {
-		return bad("no channel")
-	}
-	return f, name, ""
+	return f, name, "" // channel "" (components or targets only): the default toolchain
 }
 
 var rustTOMLString = regexp.MustCompile(`"([^"\\]*)"|'([^']*)'`)

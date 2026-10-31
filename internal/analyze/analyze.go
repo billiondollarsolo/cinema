@@ -685,10 +685,19 @@ func expand(n *yaml.Node) ([]map[string]string, error) {
 	if len(combos) == 1 && len(combos[0]) == 0 {
 		combos = nil
 	}
+	// As in Actions, an include entry extends every original combination
+	// whose original values it doesn't overwrite (values earlier entries
+	// added may be overwritten), or else adds a combination of its own; the
+	// combinations entries add are never extended.
+	original := combos
+	var base map[string]string
+	if len(original) > 0 {
+		base = clone(original[0]) // its keys, before entries add any
+	}
 	for _, inc := range include {
 		matched := false
-		for _, c := range combos {
-			if agrees(inc, c) {
+		for _, c := range original {
+			if agrees(inc, c, base) {
 				for k, v := range inc {
 					c[k] = v
 				}
@@ -755,18 +764,14 @@ func subset(e, c map[string]string) bool {
 	return true
 }
 
-// agrees: inc's keys that c already has (original matrix keys) match.
-func agrees(inc, c map[string]string) bool {
-	any := false
+// agrees: inc's values for the original matrix keys (base's) match c's.
+func agrees(inc, c, base map[string]string) bool {
 	for k, v := range inc {
-		if cv, ok := c[k]; ok {
-			if cv != v {
-				return false
-			}
-			any = true
+		if _, orig := base[k]; orig && c[k] != v {
+			return false
 		}
 	}
-	return any
+	return true
 }
 
 var (
@@ -802,17 +807,45 @@ func versionFilePin(c *SetupCtx, rt, name, exact string, files ...string) {
 
 var cinemaGate = regexp.MustCompile(`(^|[\s/])cinema verify\b`)
 
-var matrixRef = regexp.MustCompile(`\$\{\{\s*matrix\.([A-Za-z0-9_.-]+)\s*\}\}`)
+var (
+	matrixRef = regexp.MustCompile(`\$\{\{\s*matrix\.([A-Za-z0-9_.-]+)\s*\}\}`)
+	anyExpr   = regexp.MustCompile(`\$\{\{(.*?)\}\}`)
+)
 
-// substitute replaces ${{ matrix.X }}. Like Actions, a key this combination
-// doesn't define (set only by some include entries) is the empty string.
+// substitute replaces ${{ matrix.X }}, and expressions made only of matrix
+// values, literals and pure functions (${{ matrix.os || 'ubuntu-latest' }},
+// ${{ format('py{0}', matrix.python) }}). Like Actions, a key this
+// combination doesn't define (set only by some include entries) is the empty
+// string. Anything else (github.*, steps.*, status functions) stays as is.
 func substitute(s string, combo map[string]string) string {
 	if combo == nil {
 		return s
 	}
-	return matrixRef.ReplaceAllStringFunc(s, func(m string) string {
+	s = matrixRef.ReplaceAllStringFunc(s, func(m string) string {
 		return combo[matrixRef.FindStringSubmatch(m)[1]]
 	})
+	return anyExpr.ReplaceAllStringFunc(s, func(m string) string {
+		if v, ok := evalValue(anyExpr.FindStringSubmatch(m)[1], combo); ok {
+			return v
+		}
+		return m
+	})
+}
+
+// evalValue evaluates an expression for its value from the matrix alone:
+// unlike in evalIf, the event, the runner and status functions are unknown.
+func evalValue(src string, combo map[string]string) (string, bool) {
+	s := strings.TrimSpace(src)
+	toks := ifTokens.FindAllString(s, -1)
+	if strings.Join(toks, "") != strings.Join(strings.Fields(s), "") {
+		return "", false
+	}
+	p := &ifParser{toks: toks, combo: combo, ok: true, valueOnly: true}
+	val := p.or()
+	if !p.ok || p.i != len(toks) {
+		return "", false
+	}
+	return val, true
 }
 
 func exactVersion(root, v, pattern, tool, file string, review, note func(string)) string {
@@ -1014,10 +1047,11 @@ func evalIf(src string, combo map[string]string) (v, ok bool) {
 var ifTokens = regexp.MustCompile(`'(?:[^']|'')*'|==|!=|&&|\|\||[!(),]|[A-Za-z_][A-Za-z0-9_.-]*\(\)|[A-Za-z_][A-Za-z0-9_.-]*|[0-9.]+`)
 
 type ifParser struct {
-	toks  []string
-	i     int
-	combo map[string]string
-	ok    bool
+	toks      []string
+	i         int
+	combo     map[string]string
+	ok        bool
+	valueOnly bool // evalValue: matrix, literals and pure functions only
 }
 
 func (p *ifParser) peek() string {
@@ -1093,6 +1127,10 @@ func (p *ifParser) unary() string {
 	case strings.HasPrefix(t, "matrix."):
 		p.i++
 		return p.combo[strings.TrimPrefix(t, "matrix.")]
+	case p.valueOnly && (strings.HasPrefix(t, "github.") || strings.HasPrefix(t, "runner.") || strings.HasSuffix(t, "()")):
+		p.ok = false
+		p.i++
+		return ""
 	case t == "github.event_name": // drafts are evidence for the pull request gate
 		p.i++
 		return "pull_request"
@@ -1134,6 +1172,9 @@ func (p *ifParser) call(name string) string {
 		}
 	}
 	p.i++ // )
+	if name == "format" && len(args) > 0 {
+		return formatExpr(args[0], args[1:], &p.ok)
+	}
 	if len(args) != 2 {
 		p.ok = false
 		return ""
@@ -1152,6 +1193,39 @@ func (p *ifParser) call(name string) string {
 		return ""
 	}
 	return strconv.FormatBool(v)
+}
+
+// formatExpr is Actions' format(): {N} is the Nth argument, {{ and }} are
+// literal braces. Anything else (an index out of range) is unknown.
+func formatExpr(f string, args []string, ok *bool) string {
+	var b strings.Builder
+	for i := 0; i < len(f); i++ {
+		c := f[i]
+		switch {
+		case (c == '{' || c == '}') && i+1 < len(f) && f[i+1] == c:
+			b.WriteByte(c)
+			i++
+		case c == '{':
+			j := strings.IndexByte(f[i:], '}')
+			if j < 0 {
+				*ok = false
+				return ""
+			}
+			n, err := strconv.Atoi(f[i+1 : i+j])
+			if err != nil || n < 0 || n >= len(args) {
+				*ok = false
+				return ""
+			}
+			b.WriteString(args[n])
+			i += j
+		case c == '}':
+			*ok = false
+			return ""
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 func truthy(v string) bool { return v != "" && v != "false" && v != "0" }

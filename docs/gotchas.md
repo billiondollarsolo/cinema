@@ -32,6 +32,7 @@ These are the ones CInema exists to prevent. Each is closed today unless marked 
 | **Missing runner tools.** Scripts call `shellcheck`, `yq`, `xvfb-run`, `unzip`, `ssh` that GitHub's image has and your machine may not. | `cinema doctor` reads failed runs' output and lists what was missing. A missing tool is a failed run, never a false green. |
 | **Tools a job `go install`s** aren't found by later steps: `actions/setup-go` puts `GOPATH/bin` on PATH. (P4-1: cli's `go-licenses`, eslint's `actionlint`) | Drafts now add `GOPATH/bin` to PATH where `setup-go` is used. |
 | **No lockfile** (eslint): dependencies float between runs. (9, 30) | Nothing to pin; reuse is honest only within `max_age`. Expect review verdicts. |
+| **Unpinned build backends.** httpx pins its requirements, but `python -m build` installs today's hatchling in an isolated env; at a February commit it now writes metadata 2.5, which the pinned twine rejects. CI at that commit passed; the same commit fails today, locally and in upstream's own CI. | A result is about the day it ran: `max_age` keeps receipts short-lived. Pin `build-system.requires` to make it about the commit. |
 | **Network- and time-dependent checks** (11) | Keep them in CI: `reuse.allowed: false`. |
 | **Workflow-level `defaults:`** apply to every job. (43) | Drafts apply them. |
 | **Tasks that read git metadata** (`git describe`, the commit SHA) | `vcs_context: exact`. |
@@ -70,6 +71,9 @@ Containers are **planned**; these are from the spike, for when they land.
 | **Emulation is slow.** Rosetta measured 1.6–3.8× (cold) slower than arm64 native (cold caches). | Emulated amd64 is an option, off by default. |
 | **`ubuntu-latest` moves.** On the first real PR from a Mac, CI's runner was Ubuntu 26.04 and the receipts came from a 24.04 image: every job ran (`ENVIRONMENT_MISMATCH`). Correct, and no saving. | The runner image follows each job's `runs-on`, and the OS release is in the environment, so a move is a miss, never a false skip. |
 | **Tests exec tools no workflow mentions** (cli's tests run `ssh-keygen`) | The runner image keeps GitHub's base tools, not just what workflows name. |
+| **`less` is on GitHub's runner, not in a bare Ubuntu image** (click's pager tests: 24 failures) | Added to the runner image (needs a rebuild and re-pin). |
+| **On a Mac, the clean checkout is on macOS's filesystem** (bind-mounted through Colima's virtiofs): names must be valid UTF-8 (click's `test_path_surrogates` fails with EPERM) and it is case-insensitive (`Aa` and `aa` are one file), unlike ext4 on the runner | Known; the run fails (a false red). Case-insensitivity can also pass what Linux fails (an import or `#include` with the wrong case): **planned:** checkouts in a Linux volume. |
+| **`DOCKER_CONFIG` pointing elsewhere hides Colima's docker context**: `analyze` reports `docker no` and every job "stays in CI" | Leave `DOCKER_CONFIG` unset for cinema (it uses its own empty client config anyway), or set `DOCKER_HOST`. |
 | **x86 CPU flags aren't visible under Rosetta** (`/proc/cpuinfo` comes from the arm64 kernel) | Receipts record emulation; `emulation: forbid` for tasks whose results depend on CPU features. |
 
 ## Language runtimes
@@ -98,3 +102,5 @@ Containers are **planned**; these are from the spike, for when they land.
 | **mise-action caches installed tools by the config's hash for up to 30 days**: `node = "22"` stays at the first 22.x installed | A floating mise version with `cache: true` goes to review; pin exact (or commit `mise.lock`), or set `cache: false`. |
 | **mise's `java = "21"` is OpenJDK's build**, not Temurin; **mise sets `RUSTUP_TOOLCHAIN`**, which beats `rust-toolchain.toml` | Only `temurin-…` is pinned; mise's rust version is the pin, whatever the file says. |
 | **ruby/setup-ruby's rubies only work at `/opt/hostedtoolcache/Ruby/<ver>/<arch>`** and publish no checksums | Ruby isn't provisioned; Ruby jobs stay in CI. |
+| **setup-python without `check-latest` uses the runner's preinstalled Python**, which lags the newest: click's `3.14` ran 3.14.7 (Oct 4) and 3.14.9 (Oct 30) while the newest was 3.14.10 | A floating `python-version` without `check-latest: true` goes to review, as for Java. (setup-go and setup-node behave the same way; not yet flagged.) |
+| **rust-toolchain.toml with only `components`** (dtolnay's crates: `rust-src`) | rustup adds them to the toolchain the action made the default; drafts pin that toolchain plus the components. |

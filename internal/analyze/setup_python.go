@@ -106,6 +106,12 @@ func setupPython(c *SetupCtx) {
 		return
 	}
 	c.Pin("python", ver)
+	if ver != v && !strings.EqualFold(c.With("check-latest"), "true") {
+		// Without check-latest, setup-python takes a matching Python from the
+		// runner's tool cache, which lags the newest release by up to an image
+		// release (click, 2026-10: CI ran 3.14.9 and 3.14.7, the newest was 3.14.10).
+		c.Review(fmt.Sprintf("Python %q without check-latest: true: CI uses the runner image's preinstalled Python %s, not necessarily %s; set check-latest: true (or an exact version) so CI and the pin agree", v, v, ver))
+	}
 	run := `d="${RUNNER_TEMP:-$HOME}/cinema-python"
 rm -rf "$d" && cp -a "${pythonLocation:?}/." "$d"
 printf '%s\n' "pythonLocation=$d" "Python_ROOT_DIR=$d" "Python2_ROOT_DIR=$d" "Python3_ROOT_DIR=$d" "PKG_CONFIG_PATH=$d/lib/pkgconfig" "LD_LIBRARY_PATH=$d/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >>"$GITHUB_ENV"

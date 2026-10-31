@@ -63,6 +63,11 @@ func TestRustSetupActions(t *testing.T) {
 		{name: "toolchain file adds components", steps: "      - uses: dtolnay/rust-toolchain@master\n        with: {toolchain: 1.81.0}\n",
 			files: map[string]string{"rust-toolchain.toml": "# pinned\n[toolchain]\nchannel = \"1.81.0\" # msrv\ncomponents = [\n  \"rust-src\",\n  'llvm-tools-preview',\n]\ntargets = [\"thumbv7em-none-eabihf\"]\nprofile = \"minimal\"\n"},
 			pin:   "1.81.0+llvm-tools+rust-src+thumbv7em-none-eabihf"},
+		// dtolnay's crates (anyhow): components only, for the action's default toolchain
+		{name: "toolchain file without channel", steps: "      - uses: dtolnay/rust-toolchain@master\n        with: {toolchain: 1.81.0, components: rust-src}\n",
+			files: map[string]string{"rust-toolchain.toml": "[toolchain]\ncomponents = [\"rust-src\", \"miri\"]\n"}, pin: "1.81.0+miri+rust-src"},
+		{name: "toolchain file without channel, no toolchain", steps: "      - uses: actions-rust-lang/setup-rust-toolchain@v1\n",
+			files: map[string]string{"rust-toolchain.toml": "[toolchain]\ncomponents = [\"rust-src\"]\n"}, review: "names no channel"},
 		{name: "toolchain file path", steps: "      - uses: dtolnay/rust-toolchain@master\n        with: {toolchain: 1.81.0}\n",
 			files: map[string]string{"rust-toolchain.toml": "[toolchain]\npath = \"/opt/rust\"\n"}, review: "rust-toolchain.toml: path"},
 		{name: "setup-rust-toolchain reads the file", steps: "      - uses: actions-rust-lang/setup-rust-toolchain@v1\n        with: {components: clippy}\n",

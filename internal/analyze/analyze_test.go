@@ -124,6 +124,7 @@ func TestEvalIf(t *testing.T) {
 		"runner.os != 'Windows'":                                        true,
 		"runner.os == 'Windows' || runner.arch == 'ARM64'":              false,
 		"github.event_name == 'push'":                                   false,
+		"format('{0}-{{x}}', matrix.os) == 'ubuntu-latest-{x}'":         true,
 		"contains(matrix.os, 'UBUNTU')":                                 true,
 		"startsWith(matrix.node, '1') && endsWith(matrix.os, 'latest')": true,
 		// prometheus's build: on a pull request every push clause is false, so
@@ -134,7 +135,7 @@ func TestEvalIf(t *testing.T) {
 			t.Errorf("%s: %v ok=%v, want %v", src, v, ok, want)
 		}
 	}
-	for _, src := range []string{"github.ref == 'refs/heads/main'", "steps.x.outputs.y", "startsWith(github.ref, 'refs/tags/')", "format('{0}', matrix.os) == 'x'", "matrix.node ="} {
+	for _, src := range []string{"github.ref == 'refs/heads/main'", "steps.x.outputs.y", "startsWith(github.ref, 'refs/tags/')", "format('{1}', matrix.os) == 'x'", "matrix.node ="} {
 		if _, ok := evalIf(src, combo); ok {
 			t.Errorf("%s: evaluated, want unsupported", src)
 		}
@@ -576,6 +577,54 @@ func TestPublishesJVMDotnet(t *testing.T) {
 	for _, run := range []string{"./mvnw -B verify", "./gradlew build", "dotnet test"} {
 		if publishes.MatchString(run) {
 			t.Errorf("%q seen as publishing", run)
+		}
+	}
+}
+
+// click's tests.yaml: runs-on, the name and an env value are matrix
+// expressions with defaults. Each leg's values are known; other expressions
+// (the event, steps) still aren't.
+func TestMatrixValueExpressions(t *testing.T) {
+	src := `on: pull_request
+jobs:
+  tests:
+    name: ${{ matrix.name || matrix.python }}
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    strategy:
+      matrix:
+        include:
+          - {python: '3.13'}
+          - {name: Mac, python: '3.13', os: macos-latest}
+          - {name: PyPy, python: pypy, tox: pypy3}
+    steps:
+      - run: tox run
+        env:
+          TOX_ENV: ${{ matrix.tox || format('py{0}', matrix.python) }}
+      - run: echo ${{ github.event_name || matrix.python }} ${{ success() || 'x' }}
+`
+	jobs, err := Workflow("tests.yaml", []byte(src))
+	if err != nil || len(jobs) != 3 {
+		t.Fatalf("%v %+v", err, jobs)
+	}
+	for _, j := range jobs {
+		switch j.Name {
+		case "3.13":
+			if j.RunsOn != "ubuntu-latest" || j.Proposal == nil || !strings.Contains(j.Proposal.Body, "TOX_ENV=py3.13") {
+				t.Errorf("leg 3.13: %+v %+v", j, j.Proposal)
+			}
+			if !strings.Contains(strings.Join(j.Reasons, ";"), "github.event_name") {
+				t.Errorf("github.event_name substituted: %v", j.Reasons)
+			}
+		case "Mac":
+			if j.Verdict != Skip {
+				t.Errorf("Mac leg not skipped: %+v", j)
+			}
+		case "PyPy":
+			if j.RunsOn != "ubuntu-latest" || !strings.Contains(j.Proposal.Body, "TOX_ENV=pypy3") {
+				t.Errorf("leg PyPy: %+v %+v", j, j.Proposal)
+			}
+		default:
+			t.Errorf("job name %q", j.Name)
 		}
 	}
 }

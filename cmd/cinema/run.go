@@ -71,7 +71,7 @@ func cmdRun(args []string) int {
 		w = cr
 		switch {
 		case errors.Is(w.cfgErr, task.ErrNoConfig):
-			fmt.Fprintf(os.Stderr, "cinema run: %s has no %s\n", *commit, task.ConfigPath)
+			fmt.Fprintf(os.Stderr, "cinema run: %s has no %s: commit it, or pass --config %s to use the working tree's\n", *commit, task.ConfigPath, task.ConfigPath)
 			return exitBadArgs
 		case w.cfgErr != nil:
 			fmt.Fprintf(os.Stderr, "cinema run: %s at %s: %v\n", task.ConfigPath, *commit, w.cfgErr)

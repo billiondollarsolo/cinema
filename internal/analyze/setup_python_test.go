@@ -56,6 +56,9 @@ jobs:
   float:
     runs-on: ubuntu-latest
     steps: [{uses: actions/setup-python@v5, with: {python-version: "3.12", allow-prereleases: true}}, {run: pytest}]
+  float-latest:
+    runs-on: ubuntu-latest
+    steps: [{uses: actions/setup-python@v5, with: {python-version: "3.12", check-latest: true}}, {run: pytest}]
   default-file:
     runs-on: ubuntu-latest
     steps: [{uses: actions/setup-python@v5}, {run: pytest}]
@@ -94,7 +97,8 @@ jobs:
 		verdict, python, reason string
 	}{
 		"exact":         {Task, "3.12.7", ""},
-		"float":         {Task, "3.12.8", ""},
+		"float":         {Review, "3.12.8", "without check-latest: true"},
+		"float-latest":  {Task, "3.12.8", ""},
 		"default-file":  {Task, "3.11.10", ""},
 		"tool-versions": {Task, "3.12.7", ""},
 		"input-wins":    {Task, "3.12.8", ""},

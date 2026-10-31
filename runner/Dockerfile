@@ -13,7 +13,7 @@ ARG UBUNTU
 # (break-system-packages, except on 22.04).
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       bash ca-certificates curl wget git git-lfs openssh-client gnupg sudo tzdata locales \
-      xz-utils zstd unzip zip bzip2 tar gzip file jq rsync \
+      xz-utils zstd unzip zip bzip2 tar gzip file jq rsync less \
       make gcc g++ libc6-dev pkg-config \
       python3 python3-dev python3-pip python3-venv python-is-python3 \
       procps psmisc lsof iproute2 netcat-openbsd \
