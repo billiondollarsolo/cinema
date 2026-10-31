@@ -21,6 +21,7 @@ type Expected struct {
 	Env          string // this runner's environment fingerprint for the task
 	VCS          string // candidate commit for vcs_context: exact, else ""
 	Now          time.Time
+	EnvInputs    []string // what Env was computed from, for a mismatch's explanation (never values)
 }
 
 type GateDecision struct {

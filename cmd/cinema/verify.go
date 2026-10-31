@@ -208,6 +208,9 @@ func cmdVerify(args []string) int {
 				fmt.Fprintf(os.Stderr, "cinema verify: %s: %v\n", id, err)
 			} else {
 				d = plan.GateTask(t, exp, stmts, rejected)
+				if d.Reason == plan.EnvironmentMismatch { // compare with `cinema explain <task>` where the receipt was made
+					fmt.Fprintf(os.Stderr, "cinema verify: %s: this runner's environment: %s\n", id, strings.Join(exp.EnvInputs, "; "))
+				}
 			}
 		}
 		rep.Tasks = append(rep.Tasks, gateTaskReport{GateDecision: d})
@@ -223,9 +226,8 @@ func cmdVerify(args []string) int {
 		return exitUnsatisfied
 	}
 	if *skipFor != "" {
-		writeSkipOutputs(cfg, rep, root, *skipFor)
+		writeSkipOutputs(cfg, rep, root, *skipFor) // writes its own per-job summary
 		writeGateReport(*reportPath, rep, start)
-		writeStepSummary(rep)
 		return 0
 	}
 	if !*execute {
@@ -440,7 +442,7 @@ func expectedFor(root string, t *task.Task, repoID, candidate string) (plan.Expe
 	if err != nil {
 		return exp, err
 	}
-	exp.Env = env.Digest
+	exp.Env, exp.EnvInputs = env.Digest, env.Inputs
 	s, err := snapshot.Take(root, t.ExtraInputs, t.Outputs, nil)
 	if err != nil {
 		return exp, err
