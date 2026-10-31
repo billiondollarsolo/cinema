@@ -32,7 +32,8 @@ type userConfig struct {
 	Emulate []string `yaml:"emulate"`
 }
 
-const defaultRunnerImage = "ghcr.io/billiondollarsolo/cinema-runner:ubuntu-24.04"
+// defaultRunnerImage is pinned: a new image is a new environment, by choice.
+const defaultRunnerImage = "ghcr.io/billiondollarsolo/cinema-runner:ubuntu-24.04@sha256:cd35a8fa5327bcd7ddc2f968a27a070aa1c8538c57d1632d648b326b607772f5"
 
 var (
 	userCfgOnce sync.Once

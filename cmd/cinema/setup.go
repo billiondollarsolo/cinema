@@ -47,9 +47,13 @@ func cmdSetup(args []string) int {
 	m := probeMachine()
 	var picked []analyze.Job
 	cm := make([]catMin, len(jobs))
+	placeWhy := "" // why Linux jobs can't run here (engine, arch): the likeliest fix
 	for i, j := range jobs {
-		cat, _ := readiness(j, m)
+		cat, why := readiness(j, m)
 		cm[i] = catMin{cat: cat}
+		if strings.HasPrefix(why, "the job is linux/") && placeWhy == "" {
+			placeWhy = why
+		}
 		if j.Proposal != nil && (cat == "ready" || (*withReview && cat == "review")) {
 			picked = append(picked, j)
 		}
@@ -57,6 +61,9 @@ func cmdSetup(args []string) int {
 	printCapability(m, cm, false)
 	if len(picked) == 0 {
 		fmt.Println("\nNothing for this machine to take over yet: see what each job needs above (`cinema analyze` has the details).")
+		if placeWhy != "" {
+			fmt.Println("Linux jobs can't run here as configured: " + placeWhy)
+		}
 		return exitUnsatisfied
 	}
 	required, reqErr := requiredChecks()

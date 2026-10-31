@@ -356,6 +356,12 @@ jobs:
 		t.Errorf("undo: %v %q\n%s", err, back.Jobs["colon"].If, unsetup(p.out))
 	}
 
+	// Older setups wrote the condition unquoted (the lab mirrors have it).
+	old := "on: [pull_request]\njobs:\n  cinema:\n    runs-on: ubuntu-latest\n    steps: [{run: cinema verify --event x --skip-outputs ci.yml}]\n\n  lint:\n    needs: cinema\n    if: ${{ !cancelled() && needs.cinema.outputs.skip_lint != 'true' }}\n    runs-on: ubuntu-latest\n    steps: [{run: make lint}]\n"
+	if got, want := string(unsetup([]byte(old))), "on: [pull_request]\njobs:\n  lint:\n    runs-on: ubuntu-latest\n    steps: [{run: make lint}]\n"; got != want {
+		t.Errorf("undo of an unquoted condition:\n%s", got)
+	}
+
 	// A project's own job named cinema is never touched.
 	own := "on: [pull_request]\njobs:\n  cinema:\n    runs-on: ubuntu-latest\n    steps: [{run: cinema verify --event x --execute}]\n  lint:\n    needs: cinema\n    runs-on: ubuntu-latest\n    steps: [{run: make lint}]\n"
 	if got := string(unsetup([]byte(own))); got != own {

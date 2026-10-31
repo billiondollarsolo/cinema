@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	setupIf      = regexp.MustCompile(`^(\s*)if: "\$\{\{ !cancelled\(\)(.*) \}\}"\s*$`)
+	setupIf      = regexp.MustCompile(`^(\s*)if: ("?)\$\{\{ !cancelled\(\)(.*) \}\}("?)\s*$`) // older setups wrote it unquoted
 	setupExclude = regexp.MustCompile(`^\s*exclude: \$\{\{ fromJSON\(needs\.cinema\.outputs\.exclude_[A-Za-z0-9_-]+ \|\| '\[\]'\) \}\}\s*$`)
 	setupNeedsIn = regexp.MustCompile(`^(\s*)needs: \[cinema, (.*)\]\s*$`)
 )
@@ -70,8 +70,11 @@ func unsetup(src []byte) []byte {
 			}
 		}
 		if k := mapKey(job, "if"); k != nil {
-			if m := setupIf.FindStringSubmatch(lines[k.Line-1]); m != nil {
-				tail := strings.NewReplacer(`\"`, `"`, `\\`, `\`).Replace(m[2])
+			if m := setupIf.FindStringSubmatch(lines[k.Line-1]); m != nil && m[2] == m[4] {
+				tail := m[3]
+				if m[2] != "" {
+					tail = strings.NewReplacer(`\"`, `"`, `\\`, `\`).Replace(tail)
+				}
 				if orig := originalIfText(tail); orig != "" {
 					lines[k.Line-1] = m[1] + "if: " + plainOrExpr(orig) + "\n"
 				} else {
