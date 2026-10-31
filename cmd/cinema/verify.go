@@ -110,8 +110,20 @@ func cmdVerify(args []string) int {
 	rep := gateReport{SchemaVersion: 1, Candidate: candidate, Result: "plan", Base: e.base, Repository: e.repo}
 	base, head, fork := e.base, e.head, e.fork
 
+	// GitLab: the keys come from a reviewed file on the default branch
+	// (gitlabTrust), and so does tasks.yaml: the base commit is named by the
+	// pipeline's variables, which a pusher may set.
+	var glKeys, glTip string
+	var trustErr error
+	cfgRev := base
+	if *glChild != "" {
+		if glKeys, glTip, trustErr = gitlabTrust(root, *remote, *trustBranch); trustErr == nil {
+			cfgRev = glTip
+		}
+	}
+
 	// Required tasks come from the BASE branch: a PR can't loosen its own requirements.
-	cfg, policyNote, err := baseConfig(root, base, candidate)
+	cfg, policyNote, err := baseConfig(root, cfgRev, candidate)
 	if err != nil {
 		rep.Result = "fail"
 		rep.Note = plan.PolicyInvalid + ": " + err.Error()
@@ -140,7 +152,6 @@ func cmdVerify(args []string) int {
 
 	allRun := ""
 	keyText, keySrc := os.Getenv("CINEMA_TRUSTED_KEYS"), "CINEMA_TRUSTED_KEYS"
-	var trustErr error
 	if *glChild != "" {
 		// GitLab: a pipeline variable outranks any CI/CD variable, so the keys
 		// come from a reviewed file instead (gitlabTrust); the variable is ignored.
@@ -148,15 +159,7 @@ func cmdVerify(args []string) int {
 			fmt.Fprintf(os.Stderr, "cinema verify: CINEMA_TRUSTED_KEYS is ignored on GitLab: the keys come from %s on %s\n", GitLabTrustFile, *trustBranch)
 		}
 		keySrc = GitLabTrustFile + " on " + cmp.Or(*trustBranch, "the trust branch")
-		var tip string
-		keyText, tip, trustErr = gitlabTrust(root, *remote, *trustBranch)
-		if trustErr == nil && e.change && e.allRun == "" {
-			// tasks.yaml comes from the base, which the pipeline's variables name:
-			// it counts only if it's on the branch that holds the keys.
-			if _, err := gitOut(root, "merge-base", "--is-ancestor", base, tip); err != nil {
-				e.allRun = "the merge request's target commit " + short(base) + " isn't on " + *trustBranch + ": every task runs"
-			}
-		}
+		keyText = glKeys
 	}
 	keys, kerr := evidence.ParseTrustedKeys(keyText)
 	if trustErr != nil {

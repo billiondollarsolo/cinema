@@ -148,12 +148,14 @@ Pipelines started from the web, the API, a trigger or a schedule run every task.
 On GitLab, a **pipeline variable** outranks every project CI/CD variable and can override predefined ones. A Developer can set one without touching any file: `git push -o ci.variable="CINEMA_TRUSTED_KEYS=<their key>"`, or Run pipeline and the API when their role is allowed to. If the keys came from a variable, they could sign their own receipts and skip covered jobs, and nothing in the reviewed diff would show it. So on GitLab:
 
 - **The keys are `.cinema/trusted-keys` at the tip of the trust branch**, fetched fresh by the cinema job. Adding a key means merging a change to that branch, reviewed like code: protect the branch and require review of `.cinema/` (CODEOWNERS or approval rules). Revoking a machine is deleting its line there.
-- **The trust branch is written into `.gitlab-ci.yml`** (`--trust-branch main`), not read from `$CI_DEFAULT_BRANCH`, which a pipeline variable can override. Moving it is an edit of the CI file, visible in review.
+- **The trust branch is written into `.gitlab-ci.yml`** (`--trust-branch main`), not read from `$CI_DEFAULT_BRANCH`, which a pipeline variable can override, and it must be the project's default branch as the server reports it (`git ls-remote --symref`): a merge request that names its own branch there runs everything.
 - **`CINEMA_TRUSTED_KEYS` is ignored** on GitLab. A missing file, an unreadable branch or a cinema job without `--trust-branch` (set up by an older cinema: `cinema setup --undo`, then `cinema setup`) means every task runs.
-- **tasks.yaml comes from the merge request's target commit**, which pipeline variables name. It counts only if that commit is on the trust branch. Otherwise every task runs.
+- **tasks.yaml comes from the trust branch's tip too**, never from a commit the pipeline's variables name (the merge request's target SHA, the pipeline source): no variable can roll the policy back to an older, looser tasks.yaml.
+- **Variables that redirect git** (`GIT_CONFIG_*`, `GIT_DIR`, `GIT_OBJECT_DIRECTORY`, `GIT_SSH_COMMAND`, …) in the job mean every task runs: the runner sets none of them.
+- **Image tags are resolved from the registry over HTTPS only, never to private, loopback or link-local addresses** (the image names and the registry's auth realm come from the config under test).
 - **The merge request's project IDs** must be set and agree with the job's project, or the pipeline counts as a fork. The commit IDs must look like commit IDs.
 
-The trust root can't be redirected by a pipeline variable. But whoever can set the cinema job's variables controls the job itself: `GOPROXY` with `GOSUMDB=off` installs another `cinema`, and `GIT_CONFIG_*` points `origin` elsewhere. No binary can defend against that from inside the job. That's why step 4 is required, not optional. A push with `-o ci.variable` can't be detected.
+The trust root can't be redirected by a pipeline variable. But whoever can set the cinema job's variables controls the job itself: `GOPROXY` with `GOSUMDB=off` installs another `cinema`, and other variables change what the job's tools do. No binary can defend against that from inside the job. That's why step 4 is required, not optional. A push with `-o ci.variable` can't be detected.
 
 GitHub is unchanged: `vars.CINEMA_TRUSTED_KEYS` is a repository variable, and a pusher can't override it.
 

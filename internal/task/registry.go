@@ -14,17 +14,32 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os/exec"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
 
 var (
-	registryClient = &http.Client{Timeout: 30 * time.Second}
-	registryScheme = "https" // a var for tests
+	// The image names come from the CI config under test (a merge request's),
+	// and so does the auth realm, from the registry's challenge: requests must
+	// not reach the runner's own network (cloud metadata, internal services).
+	registryClient = &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: &http.Transport{DialContext: (&net.Dialer{Timeout: 10 * time.Second, Control: refusePrivate}).DialContext},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if req.URL.Scheme != registryScheme || len(via) > 5 {
+				return fmt.Errorf("registry redirect to %s refused", req.URL.Redacted())
+			}
+			return nil
+		},
+	}
+	registryScheme       = "https" // a var for tests
+	allowPrivateRegistry = false   // tests: a registry on 127.0.0.1
 	// haveDocker: is there a docker CLI to ask (a var for tests).
 	haveDocker = func() bool { _, err := exec.LookPath("docker"); return err == nil }
 )
@@ -119,6 +134,9 @@ func registryToken(challenge, repo string) (string, error) {
 	if p["realm"] == "" {
 		return "", errors.New("registry auth challenge without a realm")
 	}
+	if u, err := url.Parse(p["realm"]); err != nil || u.Scheme != registryScheme || u.Host == "" || u.RawQuery != "" || u.User != nil {
+		return "", fmt.Errorf("registry auth realm %q refused: %s URLs only", p["realm"], registryScheme)
+	}
 	q := url.Values{}
 	if p["service"] != "" {
 		q.Set("service", p["service"])
@@ -140,6 +158,23 @@ func registryToken(challenge, repo string) (string, error) {
 		return "", err
 	}
 	return cmpOrStr(t.Token, t.AccessToken), nil
+}
+
+// refusePrivate refuses connections to addresses a public registry never has:
+// loopback, private, link-local (cloud metadata), unspecified.
+func refusePrivate(network, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("registry address %s: not an IP", host)
+	}
+	if !allowPrivateRegistry && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()) {
+		return fmt.Errorf("registry address %s refused: not a public address", ip)
+	}
+	return nil
 }
 
 func cmpOrStr(a, b string) string {

@@ -56,6 +56,8 @@ func TestRegistryDigest(t *testing.T) {
 	oldScheme := registryScheme
 	defer func() { registryScheme = oldScheme }()
 	registryScheme = "http"
+	allowPrivateRegistry = true
+	defer func() { allowPrivateRegistry = false }()
 	host := strings.TrimPrefix(srv.URL, "http://")
 	got, err := registryDigest(host + "/library/alpine:3.20")
 	if err != nil || got != digest {
@@ -63,5 +65,23 @@ func TestRegistryDigest(t *testing.T) {
 	}
 	if _, err := registryDigest(host + "/library/missing:1"); err == nil {
 		t.Error("a missing image resolved")
+	}
+}
+
+// Image names and the auth realm come from the config under test: nothing may
+// reach the runner's own network, and the realm must be the registry's scheme.
+func TestRegistryRefusesPrivateAndBadRealm(t *testing.T) {
+	for _, a := range []string{"127.0.0.1:443", "10.0.0.5:443", "169.254.169.254:80", "[::1]:443", "0.0.0.0:443"} {
+		if refusePrivate("tcp", a, nil) == nil {
+			t.Errorf("%s allowed", a)
+		}
+	}
+	if err := refusePrivate("tcp", "140.82.112.3:443", nil); err != nil {
+		t.Errorf("public address refused: %v", err)
+	}
+	for _, realm := range []string{"http://auth.example.com/token", "file:///etc/passwd", "https://u:p@auth.example.com/t", "https://auth.example.com/t?x=1"} {
+		if _, err := registryToken(`Bearer realm="`+realm+`",service="x"`, "lib/a"); err == nil || !strings.Contains(err.Error(), "refused") {
+			t.Errorf("realm %s: %v", realm, err)
+		}
 	}
 }

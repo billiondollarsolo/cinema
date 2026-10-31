@@ -372,19 +372,22 @@ other:
 	g.git("reset", "-q", "--hard", main)
 	trust = "nokeys"
 	v, log = child("push", "CINEMA_TRUSTED_KEYS="+g.keys)
-	if _, ok := v["unit"]; !ok || !strings.Contains(log, "CINEMA_TRUSTED_KEYS is ignored on GitLab") || !strings.Contains(log, "no "+GitLabTrustFile+" on nokeys") {
-		t.Errorf("keys from the environment:\n%s", log)
+	if _, ok := v["unit"]; !ok || !strings.Contains(log, "CINEMA_TRUSTED_KEYS is ignored on GitLab") || !strings.Contains(log, "nokeys isn't the project's default branch") {
+		t.Errorf("keys from the environment, trust branch not the default:\n%s", log)
 	}
 	trust = "" // a cinema job from before --trust-branch
 	if v, log = child("push", "CINEMA_TRUSTED_KEYS="+g.keys); v["unit"] == nil || !strings.Contains(log, "--trust-branch") {
 		t.Errorf("no trust branch:\n%s", log)
 	}
-	// A merge request whose base (tasks.yaml) a pipeline variable points at a
-	// commit that isn't on the trust branch: every task runs.
+	// tasks.yaml comes from the trust branch's tip, like the keys: a pipeline
+	// variable naming another target commit changes nothing.
 	trust = "main"
-	v, log = child("merge_request_event", "CI_MERGE_REQUEST_TARGET_BRANCH_SHA="+side)
-	if !strings.Contains(log, "isn't on main") || regexp.MustCompile(`REUSE +unit`).MatchString(log) {
-		t.Errorf("base off the trust branch:\n%s", log)
+	if _, log = child("merge_request_event", "CI_MERGE_REQUEST_TARGET_BRANCH_SHA="+side); !regexp.MustCompile(`REUSE +unit`).MatchString(log) {
+		t.Errorf("tasks.yaml from the trust branch, whatever the variables say:\n%s", log)
+	}
+	// Variables that redirect git could point it at other keys: every task runs.
+	if v, log = child("push", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.abbrev", "GIT_CONFIG_VALUE_0=12"); v["unit"] == nil || !strings.Contains(log, "GIT_CONFIG_COUNT is set") {
+		t.Errorf("git redirected by a variable:\n%s", log)
 	}
 }
 

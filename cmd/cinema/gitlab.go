@@ -106,6 +106,24 @@ func gitlabTrust(root, remote, branch string) (keys, tip string, err error) {
 	if !gitBranch.MatchString(branch) || strings.Contains(branch, "..") {
 		return "", "", fmt.Errorf("--trust-branch %q isn't a plain branch name", branch)
 	}
+	// Variables that redirect git (its config, repository, objects or ssh)
+	// would let a pipeline variable choose where the keys come from. GitLab's
+	// runner sets none of them.
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		if slices.Contains(gitRedirects, k) || strings.HasPrefix(k, "GIT_CONFIG_KEY_") || strings.HasPrefix(k, "GIT_CONFIG_VALUE_") {
+			return "", "", fmt.Errorf("%s is set in the job: it could redirect git away from the reviewed keys", k)
+		}
+	}
+	// The branch is named in the candidate's own .gitlab-ci.yml: it must be the
+	// project's default branch, as the server says (not an env variable).
+	head, err := gitOut(root, "ls-remote", "--symref", remote, "HEAD")
+	if err != nil {
+		return "", "", fmt.Errorf("the remote's default branch: %v", err)
+	}
+	if def, _, _ := strings.Cut(strings.TrimPrefix(head, "ref: refs/heads/"), "\t"); def != branch {
+		return "", "", fmt.Errorf("--trust-branch %s isn't the project's default branch (%s)", branch, def)
+	}
 	if _, err := gitOut(root, "fetch", "--quiet", "--no-tags", remote, "refs/heads/"+branch); err != nil {
 		return "", "", err
 	}
@@ -117,6 +135,9 @@ func gitlabTrust(root, remote, branch string) (keys, tip string, err error) {
 	}
 	return keys, tip, nil
 }
+
+var gitRedirects = []string{"GIT_CONFIG", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM",
+	"GIT_DIR", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXEC_PATH", "GIT_NAMESPACE", "GIT_REPLACE_REF_BASE"}
 
 // writeGitLabChild decides which covered jobs still run and writes the child
 // pipeline to path. Every job setup hid runs unless every one of its legs was
